@@ -88,6 +88,15 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["parallel_web_tools"]
+artifacts = [
+    "*.sql",
+    "*.txt",  # requirements.txt for cloud function
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/parallel_web_tools",
+]
 
 [tool.pyrefly]
 project-includes = [

@@ -344,11 +344,24 @@ def deploy_bigquery_integration(
     )
 
     # Execute each CREATE FUNCTION statement
-    for statement in sql.split(";"):
-        statement = statement.strip()
-        if statement.startswith("CREATE"):
-            print("  Creating function...")
-            _run_command(["bq", "query", "--use_legacy_sql=false", f"--project_id={project_id}", statement + ";"])
+    # Strip SQL comments (lines starting with --) before checking for CREATE
+    def strip_sql_comments(sql_text: str) -> str:
+        lines = [line for line in sql_text.split("\n") if not line.strip().startswith("--")]
+        return "\n".join(lines).strip()
+
+    statements = []
+    for chunk in sql.split(";"):
+        clean = strip_sql_comments(chunk)
+        if clean.startswith("CREATE"):
+            statements.append(clean)
+
+    if not statements:
+        print("  Warning: No CREATE statements found in SQL template")
+    for statement in statements:
+        # Extract function name for logging
+        func_name = statement.split("`")[1] if "`" in statement else "unknown"
+        print(f"  Creating {func_name}...")
+        _run_command(["bq", "query", "--use_legacy_sql=false", f"--project_id={project_id}", statement + ";"])
 
     print("\nDeployment complete!")
 
