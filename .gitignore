@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment files
+.env.local
+.env
+
+# Data files
+data/
+configs/
+*.db
+output_*.csv
+notebooks/debug_enrichment.ipynb

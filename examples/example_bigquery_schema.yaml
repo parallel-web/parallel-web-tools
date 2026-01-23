@@ -1,0 +1,13 @@
+source: enrichment_data.customer_example
+target: enrichment_data.customer_example_enriched
+source_type: bigquery
+source_columns:
+  - name: business_name
+    description: The name of a business
+  - name: domain
+    description: The business's web site
+enriched_columns:
+  - name: estimated_ad_spend_last_quarter
+    description: The estimated spend in the last quarter by this business in USD. Write as an int
+  - name: annual_revenue
+    description: The rolling last 12 month's revenue

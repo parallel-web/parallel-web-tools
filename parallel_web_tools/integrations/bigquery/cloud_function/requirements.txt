@@ -1,0 +1,5 @@
+# Cloud Function dependencies for BigQuery Remote Function
+functions-framework>=3.0.0
+flask>=3.0.0
+parallel-web-tools>=0.0.1
+google-cloud-secret-manager>=2.20.0

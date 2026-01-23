@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.12', '3.13']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run tests with coverage
+        run: uv run pytest tests/ -v --cov=parallel_web_tools --cov-report=xml --cov-report=term
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+        continue-on-error: true
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Lint with ruff
+        run: uv run ruff check parallel_web_tools/ tests/
+
+      - name: Check formatting with ruff
+        run: uv run ruff format --check parallel_web_tools/ tests/
+
+      - name: Type check with pyrefly
+        run: uv run pyrefly check parallel_web_tools/
+        continue-on-error: true
+
+  cli-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install package with CLI
+        run: uv sync --all-extras
+
+      - name: Test CLI help commands
+        run: |
+          uv run parallel-cli --help
+          uv run parallel-cli auth --help
+          uv run parallel-cli search --help
+          uv run parallel-cli extract --help
+          uv run parallel-cli enrich --help
+          uv run parallel-cli enrich run --help
+          uv run parallel-cli enrich plan --help
+          uv run parallel-cli enrich suggest --help
+          uv run parallel-cli enrich deploy --help
+
+      - name: Test CLI version
+        run: uv run parallel-cli --version
+
+      - name: Test Python imports
+        run: |
+          uv run python -c "from parallel_web_tools import run_enrichment, get_api_key, enrich_batch"
+          uv run python -c "from parallel_web_tools.core import auth, schema, batch"
+          uv run python -c "from parallel_web_tools.cli import main"
+          uv run python -c "from parallel_web_tools.integrations.polars import parallel_enrich"
+          uv run python -c "from parallel_web_tools.integrations.duckdb import enrich_table"
