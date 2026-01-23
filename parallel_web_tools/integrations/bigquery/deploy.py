@@ -386,10 +386,23 @@ def deploy_bigquery_integration(
         "dataset_id": dataset_id,
         "function_url": function_url,
         "example_query": f"""
+-- Basic usage
 SELECT `{project_id}.{dataset_id}.parallel_enrich`(
     JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
     JSON_ARRAY('CEO name', 'Founding year', 'Brief description')
 ) as enriched_data;
+
+-- Parsing the JSON result
+SELECT
+    JSON_VALUE(enriched_data, '$.ceo_name') as ceo_name,
+    JSON_VALUE(enriched_data, '$.founding_year') as founding_year,
+    JSON_VALUE(enriched_data, '$.brief_description') as description
+FROM (
+    SELECT `{project_id}.{dataset_id}.parallel_enrich`(
+        JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
+        JSON_ARRAY('CEO name', 'Founding year', 'Brief description')
+    ) as enriched_data
+);
 """.strip(),
     }
 
