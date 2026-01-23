@@ -6,9 +6,11 @@ Instructions for releasing and maintaining the parallel-web-tools package.
 
 ### 1. Update Version
 
-Update the version in two places:
+Update the version in these places:
 - `pyproject.toml`: `version = "X.Y.Z"`
 - `parallel_web_tools/__init__.py`: `__version__ = "X.Y.Z"`
+- `tests/test_cli.py`: version assertion in `test_version`
+- `parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt`: `parallel-web-tools>=X.Y.Z`
 
 ### 2. Create a GitHub Release
 
@@ -41,11 +43,12 @@ parallel-cli --version
 
 | Platform | Runner | Binary Name |
 |----------|--------|-------------|
-| macOS Apple Silicon | `macos-14` | `parallel-cli-darwin-arm64` |
-| macOS Intel | `macos-13` | `parallel-cli-darwin-x64` |
+| macOS Apple Silicon | `macos-15` | `parallel-cli-darwin-arm64` |
+| macOS Intel | `macos-15-large` | `parallel-cli-darwin-x64` |
 | Linux x64 | `ubuntu-latest` | `parallel-cli-linux-x64` |
-| Linux arm64 | `ubuntu-24.04-arm64` | `parallel-cli-linux-arm64` |
 | Windows x64 | `windows-latest` | `parallel-cli-windows-x64.exe` |
+
+Note: Linux arm64 is not supported (no GitHub-hosted ARM64 runners available).
 
 ### Local Build
 

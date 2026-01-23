@@ -12,6 +12,10 @@ Or use the build script:
 import sys
 from pathlib import Path
 
+# Get certifi certificate bundle path for SSL support
+import certifi
+certifi_path = Path(certifi.where())
+
 # Get the project root
 project_root = Path(SPECPATH)
 
@@ -19,7 +23,7 @@ a = Analysis(
     [str(project_root / 'parallel_web_tools' / 'cli' / 'commands.py')],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[],
+    datas=[(str(certifi_path), 'certifi')],
     hiddenimports=[
         # Core package
         'parallel_web_tools',
@@ -63,10 +67,11 @@ a = Analysis(
         'sqlalchemy',
         'polars',
         'pandas',
+        'certifi',
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(project_root / 'scripts' / 'runtime_hook_ssl.py')],
     excludes=[
         # Exclude unnecessary modules to reduce size
         'tkinter',
