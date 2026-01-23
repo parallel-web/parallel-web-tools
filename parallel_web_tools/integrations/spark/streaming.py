@@ -165,6 +165,7 @@ def enrich_streaming_batch(
         >>> query = stream_df.writeStream.foreachBatch(process_batch).start()
     """
     from parallel.types import JsonSchemaParam, TaskSpecParam
+    from parallel.types.beta import BetaRunInputParam
 
     # Collect batch data (this is safe in micro-batches, which are already small)
     rows = batch_df.collect()
@@ -193,16 +194,18 @@ def enrich_streaming_batch(
         taskgroup_id = task_group.task_group_id
 
         # Build inputs from batch rows
-        run_inputs = []
+        run_inputs: list[BetaRunInputParam] = []
         for row in rows:
-            input_data = {}
+            # Convert Row to dict for reliable field access
+            row_dict = row.asDict()
+            input_data: dict[str, object] = {}
             for parallel_name, col_name in input_columns.items():
                 # Get value from row, handle None gracefully
-                value = row[col_name]
+                value = row_dict.get(col_name)
                 if value is not None:
                     input_data[parallel_name] = str(value)
 
-            run_input = {
+            run_input: BetaRunInputParam = {
                 "input": input_data,
                 "processor": processor,
             }

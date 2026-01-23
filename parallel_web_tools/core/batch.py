@@ -99,6 +99,7 @@ def enrich_batch(
         List of result dictionaries in same order as inputs.
     """
     from parallel.types import JsonSchemaParam, TaskSpecParam
+    from parallel.types.beta import BetaRunInputParam
 
     if not inputs:
         return []
@@ -114,8 +115,8 @@ def enrich_batch(
         task_group = client.beta.task_group.create()
         taskgroup_id = task_group.task_group_id
 
-        # Add runs
-        run_inputs = [{"input": inp, "processor": processor} for inp in inputs]
+        # Add runs - use SDK type for proper typing
+        run_inputs: list[BetaRunInputParam] = [{"input": inp, "processor": processor} for inp in inputs]
         response = client.beta.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
@@ -149,6 +150,7 @@ def enrich_batch(
                 run_id = event.run.run_id
                 if event.output and hasattr(event.output, "content"):
                     content = event.output.content
+                    result: dict[str, Any]
                     if isinstance(content, dict):
                         result = dict(content)
                     elif isinstance(content, str):

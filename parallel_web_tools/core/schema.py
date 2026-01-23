@@ -153,17 +153,15 @@ def parse_input_and_output_models(
     schema: InputSchema,
 ) -> tuple[type[BaseModel], type[BaseModel]]:
     """Create Pydantic models from schema."""
-    InputModel = create_model(
-        "InputModel",
-        **{col.name: (str, Field(description=col.description)) for col in schema.source_columns},
-    )
+    # Build field definitions with proper typing for create_model
+    input_fields: dict[str, Any] = {
+        col.name: (str, Field(description=col.description)) for col in schema.source_columns
+    }
+    output_fields: dict[str, Any] = {
+        col.name: (TYPE_MAP.get(col.type, str), Field(description=col.description)) for col in schema.enriched_columns
+    }
 
-    OutputModel = create_model(
-        "OutputModel",
-        **{
-            col.name: (TYPE_MAP.get(col.type, str), Field(description=col.description))
-            for col in schema.enriched_columns
-        },
-    )
+    InputModel = create_model("InputModel", **input_fields)
+    OutputModel = create_model("OutputModel", **output_fields)
 
     return InputModel, OutputModel

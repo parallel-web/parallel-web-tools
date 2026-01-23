@@ -94,6 +94,13 @@ project-includes = [
     "**/*.py*",
     "**/*.ipynb",
 ]
+# Exclude files that have external dependencies not in the main project
+project-excludes = [
+    "**/integrations/bigquery/cloud_function/**",  # Separate deployment with flask, functions_framework
+    "scripts/runtime_hook_ssl.py",  # PyInstaller runtime hook with sys._MEIPASS
+    "notebooks/**",  # Jupyter notebooks with Databricks display()
+    "examples/**",  # Example scripts
+]
 
 [tool.ruff]
 line-length = 120
