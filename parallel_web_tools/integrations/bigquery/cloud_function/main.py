@@ -175,22 +175,22 @@ def parallel_enrich(request: Request):
                 logger.info(f"Using batch processing for {len(inputs)} inputs")
                 batch_results = _process_batch(inputs, common_output_cols, processor)
 
-                replies = [""] * len(calls)
+                replies: list[dict[str, Any] | None] = [None] * len(calls)
                 for error_call in error_calls:
-                    replies[error_call["index"]] = json.dumps({"error": error_call["error"]})
+                    replies[error_call["index"]] = {"error": error_call["error"]}
                 for j, valid_call in enumerate(valid_calls):
-                    replies[valid_call["index"]] = json.dumps(batch_results[j])
+                    replies[valid_call["index"]] = batch_results[j]
 
                 return jsonify({"replies": replies})
 
         # Fallback: process individually
-        replies = [""] * len(calls)
+        replies: list[dict[str, Any] | None] = [None] * len(calls)
         for error_call in error_calls:
-            replies[error_call["index"]] = json.dumps({"error": error_call["error"]})
+            replies[error_call["index"]] = {"error": error_call["error"]}
 
         for valid_call in valid_calls:
             result = _process_batch([valid_call["input_data"]], valid_call["output_columns"], processor)
-            replies[valid_call["index"]] = json.dumps(result[0] if result else {"error": "No result"})
+            replies[valid_call["index"]] = result[0] if result else {"error": "No result"}
 
         return jsonify({"replies": replies})
 
