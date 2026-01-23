@@ -15,11 +15,16 @@ from parallel_web_tools.cli.planner import create_config_interactive, save_confi
 from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     JSON_SCHEMA_TYPE_MAP,
+    RESEARCH_PROCESSORS,
+    create_research_task,
     get_api_key,
     get_auth_status,
+    get_research_status,
     logout,
+    poll_research,
     run_enrichment,
     run_enrichment_from_dict,
+    run_research,
 )
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -27,6 +32,28 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 load_dotenv(".env.local")
+
+
+# =============================================================================
+# Output Helpers
+# =============================================================================
+
+
+def write_json_output(data: dict[str, Any], output_file: str | None, output_json: bool) -> None:
+    """Write output data to file and/or stdout as JSON.
+
+    Args:
+        data: The data dictionary to output.
+        output_file: Optional file path to save JSON to.
+        output_json: If True, print JSON to stdout.
+    """
+    if output_file:
+        with open(output_file, "w") as f:
+            json.dump(data, f, indent=2)
+        console.print(f"[dim]Results saved to {output_file}[/dim]\n")
+
+    if output_json:
+        print(json.dumps(data, indent=2))
 
 
 def parse_columns(columns_json: str | None) -> list[dict[str, str]] | None:
@@ -286,14 +313,9 @@ def search(
             "warnings": result.warnings if hasattr(result, "warnings") else [],
         }
 
-        if output_file:
-            with open(output_file, "w") as f:
-                json.dump(output_data, f, indent=2)
-            console.print(f"[dim]Results saved to {output_file}[/dim]\n")
+        write_json_output(output_data, output_file, output_json)
 
-        if output_json:
-            print(json.dumps(output_data, indent=2))
-        else:
+        if not output_json:
             console.print(f"[bold green]Found {len(result.results)} results[/bold green]\n")
             for i, r in enumerate(result.results, 1):
                 console.print(f"[bold cyan]{i}. {r.title}[/bold cyan]")
@@ -378,14 +400,9 @@ def extract(
 
         output_data = {"extract_id": result.extract_id, "results": results_list, "errors": errors_list}
 
-        if output_file:
-            with open(output_file, "w") as f:
-                json.dump(output_data, f, indent=2)
-            console.print(f"[dim]Results saved to {output_file}[/dim]\n")
+        write_json_output(output_data, output_file, output_json)
 
-        if output_json:
-            print(json.dumps(output_data, indent=2))
-        else:
+        if not output_json:
             if result.errors:
                 console.print(f"[yellow]Warning: {len(result.errors)} URL(s) failed[/yellow]\n")
 
@@ -636,6 +653,262 @@ def enrich_deploy(system: str, project: str | None, region: str, api_key: str | 
         except Exception as e:
             console.print(f"[bold red]Deployment failed: {e}[/bold red]")
             raise click.Abort() from None
+
+
+# =============================================================================
+# Research Command Group
+# =============================================================================
+
+
+@main.group()
+def research():
+    """Deep research commands for open-ended questions."""
+    pass
+
+
+@research.command(name="run")
+@click.argument("query", required=False)
+@click.option("--input-file", "-f", type=click.Path(exists=True), help="Read query from file")
+@click.option(
+    "--processor",
+    "-p",
+    type=click.Choice(list(RESEARCH_PROCESSORS.keys())),
+    default="pro-fast",
+    show_default=True,
+    help="Processor tier (higher = more thorough but slower)",
+)
+@click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
+@click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
+@click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (markdown)")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--no-basis", is_flag=True, help="Exclude citations/sources from output")
+def research_run(
+    query: str | None,
+    input_file: str | None,
+    processor: str,
+    timeout: int,
+    poll_interval: int,
+    no_wait: bool,
+    output_file: str | None,
+    output_json: bool,
+    no_basis: bool,
+):
+    """Run deep research on a question or topic.
+
+    QUERY is the research question (max 15,000 chars). Alternatively, use --input-file.
+
+    Examples:
+
+        parallel-cli research run "What are the latest developments in quantum computing?"
+
+        parallel-cli research run -f question.txt --processor ultra -o report.md
+    """
+    # Get query from argument or file
+    if input_file:
+        with open(input_file) as f:
+            query = f.read().strip()
+    elif not query:
+        console.print("[bold red]Error: Provide a query or use --input-file[/bold red]")
+        raise click.Abort()
+
+    if len(query) > 15000:
+        console.print(f"[yellow]Warning: Query truncated from {len(query)} to 15,000 characters[/yellow]")
+        query = query[:15000]
+
+    try:
+        if no_wait:
+            # Create task and return immediately
+            console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
+            result = create_research_task(query, processor=processor)
+
+            console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
+            console.print(f"Track progress: {result['result_url']}")
+            console.print("\n[dim]Use 'parallel-cli research status <run_id>' to check status[/dim]")
+            console.print("[dim]Use 'parallel-cli research poll <run_id>' to wait for results[/dim]")
+
+            if output_json:
+                print(json.dumps(result, indent=2))
+        else:
+            # Run and wait for results
+            console.print(f"[bold cyan]Starting deep research with processor: {processor}[/bold cyan]")
+            console.print(f"[dim]This may take {RESEARCH_PROCESSORS[processor]}[/dim]\n")
+
+            def on_status(status: str, run_id: str):
+                if status == "created":
+                    console.print(f"[green]Task created: {run_id}[/green]")
+                    console.print(f"[dim]Track progress: https://platform.parallel.ai/tasks/{run_id}[/dim]\n")
+                else:
+                    console.print(f"[dim]Status: {status}[/dim]")
+
+            result = run_research(
+                query,
+                processor=processor,
+                timeout=timeout,
+                poll_interval=poll_interval,
+                include_basis=not no_basis,
+                on_status=on_status,
+            )
+
+            _output_research_result(result, output_file, output_json, no_basis)
+
+    except TimeoutError as e:
+        console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+        console.print("[dim]The task is still running. Use 'parallel-cli research poll <run_id>' to resume.[/dim]")
+        raise click.Abort() from None
+    except RuntimeError as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise click.Abort() from None
+    except Exception as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise click.Abort() from None
+
+
+@research.command(name="status")
+@click.argument("run_id")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def research_status(run_id: str, output_json: bool):
+    """Check the status of a research task.
+
+    RUN_ID is the task identifier (e.g., trun_xxx).
+    """
+    try:
+        result = get_research_status(run_id)
+
+        if output_json:
+            print(json.dumps(result, indent=2))
+        else:
+            status = result["status"]
+            status_color = {
+                "completed": "green",
+                "running": "cyan",
+                "pending": "yellow",
+                "failed": "red",
+                "cancelled": "red",
+            }.get(status, "white")
+
+            console.print(f"[bold]Task:[/bold] {run_id}")
+            console.print(f"[bold]Status:[/bold] [{status_color}]{status}[/{status_color}]")
+            console.print(f"[bold]URL:[/bold] {result['result_url']}")
+
+            if status == "completed":
+                console.print("\n[dim]Use 'parallel-cli research poll <run_id>' to retrieve results[/dim]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise click.Abort() from None
+
+
+@research.command(name="poll")
+@click.argument("run_id")
+@click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
+@click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (markdown)")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--no-basis", is_flag=True, help="Exclude citations/sources from output")
+def research_poll(
+    run_id: str,
+    timeout: int,
+    poll_interval: int,
+    output_file: str | None,
+    output_json: bool,
+    no_basis: bool,
+):
+    """Poll an existing research task until completion.
+
+    RUN_ID is the task identifier (e.g., trun_xxx).
+    """
+    try:
+        console.print(f"[bold cyan]Polling task: {run_id}[/bold cyan]")
+        console.print(f"[dim]Track progress: https://platform.parallel.ai/tasks/{run_id}[/dim]\n")
+
+        def on_status(status: str, run_id: str):
+            console.print(f"[dim]Status: {status}[/dim]")
+
+        result = poll_research(
+            run_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            include_basis=not no_basis,
+            on_status=on_status,
+        )
+
+        _output_research_result(result, output_file, output_json, no_basis)
+
+    except TimeoutError as e:
+        console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+        raise click.Abort() from None
+    except RuntimeError as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise click.Abort() from None
+    except Exception as e:
+        console.print(f"[bold red]Error: {e}[/bold red]")
+        raise click.Abort() from None
+
+
+@research.command(name="processors")
+def research_processors():
+    """List available research processors and their characteristics."""
+    console.print("[bold]Available Research Processors:[/bold]\n")
+    for proc, desc in RESEARCH_PROCESSORS.items():
+        console.print(f"  [cyan]{proc:15}[/cyan] {desc}")
+    console.print("\n[dim]Use --processor/-p to select a processor[/dim]")
+
+
+def _output_research_result(
+    result: dict,
+    output_file: str | None,
+    output_json: bool,
+    no_basis: bool,
+):
+    """Output research result to console and/or file."""
+    content = result.get("content", "")
+    basis = result.get("basis", [])
+
+    # Build JSON output
+    output_data = {
+        "run_id": result.get("run_id"),
+        "result_url": result.get("result_url"),
+        "status": result.get("status"),
+        "content": content,
+    }
+    if not no_basis and basis:
+        output_data["basis"] = basis
+
+    # Save to file if requested
+    if output_file:
+        # Write markdown content
+        with open(output_file, "w") as f:
+            f.write(content)
+
+        # Write JSON metadata
+        json_file = output_file.rsplit(".", 1)[0] + ".json" if "." in output_file else output_file + ".json"
+        with open(json_file, "w") as f:
+            json.dump(output_data, f, indent=2)
+
+        console.print("\n[dim]Results saved to:[/dim]")
+        console.print(f"  [green]Markdown:[/green] {output_file}")
+        console.print(f"  [green]JSON:[/green] {json_file}")
+
+    # Output to console
+    if output_json:
+        print(json.dumps(output_data, indent=2))
+    else:
+        console.print("\n[bold green]Research Complete![/bold green]")
+        console.print(f"[dim]Task: {result.get('run_id')}[/dim]\n")
+
+        # Print content (truncate for console if very long)
+        if len(content) > 5000 and not output_file:
+            console.print(content[:5000])
+            console.print(f"\n[yellow]... truncated ({len(content)} chars total)[/yellow]")
+            console.print("[dim]Use --output to save full content to a file[/dim]")
+        else:
+            console.print(content)
+
+        # Show citation summary
+        if basis and not no_basis:
+            total_citations = sum(len(b.get("citations", [])) for b in basis if isinstance(b, dict))
+            console.print(f"\n[dim]Sources: {total_citations} citations from {len(basis)} fields[/dim]")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,14 @@ from parallel_web_tools.core.batch import (
     extract_basis,
     run_tasks,
 )
+from parallel_web_tools.core.research import (
+    RESEARCH_PROCESSORS,
+    create_research_task,
+    get_research_result,
+    get_research_status,
+    poll_research,
+    run_research,
+)
 from parallel_web_tools.core.result import EnrichmentResult
 from parallel_web_tools.core.runner import (
     run_enrichment,
@@ -65,6 +73,13 @@ __all__ = [
     # Runner
     "run_enrichment",
     "run_enrichment_from_dict",
+    # Research
+    "RESEARCH_PROCESSORS",
+    "create_research_task",
+    "get_research_result",
+    "get_research_status",
+    "poll_research",
+    "run_research",
     # Result
     "EnrichmentResult",
 ]
