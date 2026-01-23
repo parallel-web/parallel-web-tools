@@ -285,8 +285,8 @@ def deploy_bigquery_integration(
             "bq",
             "show",
             "--connection",
-            f"{project_id}.{region}.{connection_id}",
             "--format=json",
+            f"{project_id}.{region}.{connection_id}",
         ]
     )
     connection_info = json.loads(result.stdout)
