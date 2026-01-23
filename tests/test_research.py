@@ -531,7 +531,7 @@ class TestResearchOutputFile:
                 "result_url": "https://platform.parallel.ai/tasks/trun_123",
                 "status": "completed",
                 "content": "# Research Report\n\nFindings here.",
-                "basis": [],
+                "basis": [{"field": "summary", "citations": []}],
             }
 
             result = runner.invoke(
@@ -541,13 +541,19 @@ class TestResearchOutputFile:
 
             assert result.exit_code == 0
 
-            # Check markdown file
+            # Check markdown file has content
             assert output_file.exists()
             content = output_file.read_text()
             assert "Research Report" in content
 
-            # Check JSON file
+            # Check JSON file has metadata (not content)
             json_file = tmp_path / "report.json"
             assert json_file.exists()
             data = json.loads(json_file.read_text())
             assert data["run_id"] == "trun_123"
+            assert data["status"] == "completed"
+            assert "downloaded_at" in data
+            assert "files" in data
+            assert data["files"]["markdown"] == str(output_file)
+            assert "basis" in data  # Should have basis metadata
+            assert "content" not in data  # Content should NOT be in JSON (it's in markdown)

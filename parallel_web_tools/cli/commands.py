@@ -862,10 +862,40 @@ def _output_research_result(
     no_basis: bool,
 ):
     """Output research result to console and/or file."""
+    from datetime import datetime
+
     content = result.get("content", "")
     basis = result.get("basis", [])
 
-    # Build JSON output
+    # Save to file if requested
+    if output_file:
+        # Write markdown content
+        with open(output_file, "w") as f:
+            f.write(content)
+
+        # Write JSON metadata (without content - that's in the markdown file)
+        json_file = output_file.rsplit(".", 1)[0] + ".json" if "." in output_file else output_file + ".json"
+        metadata = {
+            "run_id": result.get("run_id"),
+            "result_url": result.get("result_url"),
+            "status": result.get("status"),
+            "downloaded_at": datetime.now().isoformat(),
+            "files": {
+                "markdown": output_file,
+                "json": json_file,
+            },
+        }
+        if not no_basis and basis:
+            metadata["basis"] = basis
+
+        with open(json_file, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        console.print("\n[dim]Results saved to:[/dim]")
+        console.print(f"  [green]Markdown:[/green] {output_file}")
+        console.print(f"  [green]JSON:[/green] {json_file}")
+
+    # Build console/stdout JSON output (includes content for piping)
     output_data = {
         "run_id": result.get("run_id"),
         "result_url": result.get("result_url"),
@@ -874,21 +904,6 @@ def _output_research_result(
     }
     if not no_basis and basis:
         output_data["basis"] = basis
-
-    # Save to file if requested
-    if output_file:
-        # Write markdown content
-        with open(output_file, "w") as f:
-            f.write(content)
-
-        # Write JSON metadata
-        json_file = output_file.rsplit(".", 1)[0] + ".json" if "." in output_file else output_file + ".json"
-        with open(json_file, "w") as f:
-            json.dump(output_data, f, indent=2)
-
-        console.print("\n[dim]Results saved to:[/dim]")
-        console.print(f"  [green]Markdown:[/green] {output_file}")
-        console.print(f"  [green]JSON:[/green] {json_file}")
 
     # Output to console
     if output_json:
