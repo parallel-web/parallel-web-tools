@@ -36,24 +36,18 @@ a = Analysis(
         'parallel_web_tools.cli',
         'parallel_web_tools.cli.commands',
         'parallel_web_tools.cli.planner',
-        # Processors
+        # Processors (for local file/db enrichment)
         'parallel_web_tools.processors',
         'parallel_web_tools.processors.csv',
         'parallel_web_tools.processors.duckdb',
         'parallel_web_tools.processors.bigquery',
-        # Integrations
-        'parallel_web_tools.polars',
-        'parallel_web_tools.polars.enrich',
-        'parallel_web_tools.duckdb',
-        'parallel_web_tools.duckdb.batch',
-        'parallel_web_tools.duckdb.udf',
-        'parallel_web_tools.bigquery',
-        'parallel_web_tools.bigquery.deploy',
-        'parallel_web_tools.snowflake',
-        'parallel_web_tools.snowflake.deploy',
-        'parallel_web_tools.spark',
-        'parallel_web_tools.spark.udf',
-        'parallel_web_tools.spark.streaming',
+        # Integrations with deploy capability (bundled in CLI)
+        'parallel_web_tools.integrations',
+        'parallel_web_tools.integrations.bigquery',
+        'parallel_web_tools.integrations.bigquery.deploy',
+        'parallel_web_tools.integrations.snowflake',
+        'parallel_web_tools.integrations.snowflake.deploy',
+        # Note: polars, duckdb, spark integrations are library-only (no deploy step)
         # Dependencies that might not be auto-detected
         'click',
         'questionary',
@@ -65,7 +59,6 @@ a = Analysis(
         'parallel',
         'duckdb',
         'sqlalchemy',
-        'polars',
         'pandas',
         'certifi',
     ],
