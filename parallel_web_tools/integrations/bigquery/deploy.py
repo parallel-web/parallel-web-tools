@@ -196,7 +196,7 @@ def deploy_bigquery_integration(
             "deploy",
             function_name,
             "--gen2",
-            "--runtime=python311",
+            "--runtime=python312",
             "--region",
             region,
             "--source",
