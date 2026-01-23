@@ -19,7 +19,9 @@ def _run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProc
     """Run a shell command and return the result."""
     result = subprocess.run(cmd, capture_output=True, text=True)
     if check and result.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stderr}")
+        # Include both stdout and stderr as some tools output errors to stdout
+        error_output = result.stderr or result.stdout or "(no output)"
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{error_output}")
     return result
 
 
