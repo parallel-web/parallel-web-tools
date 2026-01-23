@@ -232,6 +232,7 @@ def logout_cmd():
 @click.option("--include-domains", multiple=True, help="Only search these domains")
 @click.option("--exclude-domains", multiple=True, help="Exclude these domains")
 @click.option("--after-date", help="Only results after this date (YYYY-MM-DD)")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def search(
     objective: str | None,
@@ -241,6 +242,7 @@ def search(
     include_domains: tuple[str, ...],
     exclude_domains: tuple[str, ...],
     after_date: str | None,
+    output_file: str | None,
     output_json: bool,
 ):
     """Search the web using Parallel's AI-powered search."""
@@ -275,16 +277,22 @@ def search(
 
         result = client.beta.search(**search_kwargs)
 
+        output_data = {
+            "search_id": result.search_id,
+            "results": [
+                {"url": r.url, "title": r.title, "publish_date": r.publish_date, "excerpts": r.excerpts}
+                for r in result.results
+            ],
+            "warnings": result.warnings if hasattr(result, "warnings") else [],
+        }
+
+        if output_file:
+            with open(output_file, "w") as f:
+                json.dump(output_data, f, indent=2)
+            console.print(f"[dim]Results saved to {output_file}[/dim]\n")
+
         if output_json:
-            output = {
-                "search_id": result.search_id,
-                "results": [
-                    {"url": r.url, "title": r.title, "publish_date": r.publish_date, "excerpts": r.excerpts}
-                    for r in result.results
-                ],
-                "warnings": result.warnings if hasattr(result, "warnings") else [],
-            }
-            print(json.dumps(output, indent=2))
+            print(json.dumps(output_data, indent=2))
         else:
             console.print(f"[bold green]Found {len(result.results)} results[/bold green]\n")
             for i, r in enumerate(result.results, 1):
@@ -313,6 +321,7 @@ def search(
 @click.option("-q", "--query", multiple=True, help="Keywords to prioritize (can be repeated)")
 @click.option("--full-content", is_flag=True, help="Include complete page content")
 @click.option("--no-excerpts", is_flag=True, help="Exclude excerpts from output")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def extract(
     urls: tuple[str, ...],
@@ -320,6 +329,7 @@ def extract(
     query: tuple[str, ...],
     full_content: bool,
     no_excerpts: bool,
+    output_file: str | None,
     output_json: bool,
 ):
     """Extract content from URLs as clean markdown."""
@@ -346,29 +356,35 @@ def extract(
 
         result = client.beta.extract(**extract_kwargs)
 
+        results_list = []
+        for r in result.results:
+            result_dict: dict[str, Any] = {"url": r.url, "title": r.title}
+            if hasattr(r, "excerpts") and r.excerpts:
+                result_dict["excerpts"] = r.excerpts
+            if hasattr(r, "full_content") and r.full_content:
+                result_dict["full_content"] = r.full_content
+            results_list.append(result_dict)
+
+        errors_list = []
+        if hasattr(result, "errors") and result.errors:
+            for e in result.errors:
+                errors_list.append(
+                    {
+                        "url": getattr(e, "url", None),
+                        "error": str(getattr(e, "error", "")),
+                        "status_code": getattr(e, "status_code", None),
+                    }
+                )
+
+        output_data = {"extract_id": result.extract_id, "results": results_list, "errors": errors_list}
+
+        if output_file:
+            with open(output_file, "w") as f:
+                json.dump(output_data, f, indent=2)
+            console.print(f"[dim]Results saved to {output_file}[/dim]\n")
+
         if output_json:
-            results_list = []
-            for r in result.results:
-                result_dict: dict[str, Any] = {"url": r.url, "title": r.title}
-                if hasattr(r, "excerpts") and r.excerpts:
-                    result_dict["excerpts"] = r.excerpts
-                if hasattr(r, "full_content") and r.full_content:
-                    result_dict["full_content"] = r.full_content
-                results_list.append(result_dict)
-
-            errors_list = []
-            if hasattr(result, "errors") and result.errors:
-                for e in result.errors:
-                    errors_list.append(
-                        {
-                            "url": getattr(e, "url", None),
-                            "error": str(getattr(e, "error", "")),
-                            "status_code": getattr(e, "status_code", None),
-                        }
-                    )
-
-            output = {"extract_id": result.extract_id, "results": results_list, "errors": errors_list}
-            print(json.dumps(output, indent=2))
+            print(json.dumps(output_data, indent=2))
         else:
             if result.errors:
                 console.print(f"[yellow]Warning: {len(result.errors)} URL(s) failed[/yellow]\n")
