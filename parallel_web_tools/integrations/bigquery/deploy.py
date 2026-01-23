@@ -347,7 +347,8 @@ def deploy_bigquery_integration(
     for statement in sql.split(";"):
         statement = statement.strip()
         if statement.startswith("CREATE"):
-            _run_command(["bq", "query", "--use_legacy_sql=false", statement + ";"])
+            print("  Creating function...")
+            _run_command(["bq", "query", "--use_legacy_sql=false", f"--project_id={project_id}", statement + ";"])
 
     print("\nDeployment complete!")
 
