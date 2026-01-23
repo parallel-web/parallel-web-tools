@@ -114,6 +114,21 @@ def deploy_bigquery_integration(
     Raises:
         RuntimeError: If any deployment step fails or user declines confirmation.
     """
+    # Check for required CLI tools
+    import shutil
+
+    missing_tools = []
+    if not shutil.which("gcloud"):
+        missing_tools.append("gcloud")
+    if not shutil.which("bq"):
+        missing_tools.append("bq")
+
+    if missing_tools:
+        raise RuntimeError(
+            f"Required CLI tools not found: {', '.join(missing_tools)}\n"
+            "Please install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install"
+        )
+
     print(f"Checking for existing resources in {project_id}...")
 
     # Check for existing resources
