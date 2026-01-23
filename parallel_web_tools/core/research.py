@@ -8,13 +8,14 @@ and returns analyst-grade intelligence reports.
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Callable
 from typing import Any
 
 from parallel_web_tools.core.auth import resolve_api_key
-from parallel_web_tools.core.batch import extract_basis
+
+# Base URL for viewing results
+PLATFORM_BASE = "https://platform.parallel.ai"
 
 # Processor tiers for deep research with expected latency (from docs)
 # Fast variants are 2-5x faster but may use slightly less fresh data
@@ -44,11 +45,35 @@ RESEARCH_PROCESSORS = {
 TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
+def _serialize_output(output: Any) -> dict[str, Any]:
+    """Serialize SDK output object to a dictionary.
+
+    The Parallel SDK returns Pydantic-like objects that can be
+    serialized via model_dump() or to_dict().
+    """
+    if output is None:
+        return {}
+
+    if isinstance(output, dict):
+        return output
+
+    # Try common serialization methods
+    if hasattr(output, "model_dump"):
+        return output.model_dump()
+
+    if hasattr(output, "to_dict"):
+        return output.to_dict()
+
+    if hasattr(output, "__dict__"):
+        return output.__dict__
+
+    return {"raw": str(output)}
+
+
 def create_research_task(
     query: str,
     processor: str = "pro-fast",
     api_key: str | None = None,
-    output_format: str = "text",
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -56,30 +81,22 @@ def create_research_task(
         query: Research question or topic (max 15,000 chars).
         processor: Processor tier (see RESEARCH_PROCESSORS).
         api_key: Optional API key.
-        output_format: "text" for markdown report (default), "auto" for structured JSON.
 
     Returns:
         Dict with run_id, result_url, and other task metadata.
     """
     from parallel import Parallel
-    from parallel.types import TaskSpecParam, TextSchemaParam
 
     client = Parallel(api_key=resolve_api_key(api_key))
-
-    # Build task spec based on output format
-    task_spec = None
-    if output_format == "text":
-        task_spec = TaskSpecParam(output_schema=TextSchemaParam(type="text"))
 
     task = client.task_run.create(
         input=query[:15000],
         processor=processor,
-        task_spec=task_spec,
     )
 
     return {
         "run_id": task.run_id,
-        "result_url": getattr(task, "result_url", f"https://platform.parallel.ai/tasks/{task.run_id}"),
+        "result_url": f"{PLATFORM_BASE}/play/deep-research/{task.run_id}",
         "processor": processor,
         "status": getattr(task, "status", "pending"),
     }
@@ -106,24 +123,22 @@ def get_research_status(
     return {
         "run_id": run_id,
         "status": status.status,
-        "result_url": f"https://platform.parallel.ai/tasks/{run_id}",
+        "result_url": f"{PLATFORM_BASE}/play/deep-research/{run_id}",
     }
 
 
 def get_research_result(
     run_id: str,
     api_key: str | None = None,
-    include_basis: bool = True,
 ) -> dict[str, Any]:
     """Get the result of a completed research task.
 
     Args:
         run_id: The task run ID.
         api_key: Optional API key.
-        include_basis: Whether to include citations/sources.
 
     Returns:
-        Dict with content, basis (if included), and metadata.
+        Dict with output data and metadata.
     """
     from parallel import Parallel
 
@@ -131,18 +146,14 @@ def get_research_result(
     result = client.task_run.result(run_id=run_id)
 
     output = result.output if hasattr(result, "output") else {}
-    content = _extract_content(output)
+    output_data = _serialize_output(output)
 
-    response: dict[str, Any] = {
+    return {
         "run_id": run_id,
+        "result_url": f"{PLATFORM_BASE}/play/deep-research/{run_id}",
         "status": "completed",
-        "content": content,
+        "output": output_data,
     }
-
-    if include_basis and hasattr(output, "basis"):
-        response["basis"] = extract_basis(output)
-
-    return response
 
 
 def _poll_until_complete(
@@ -151,12 +162,9 @@ def _poll_until_complete(
     result_url: str,
     timeout: int,
     poll_interval: int,
-    include_basis: bool,
     on_status: Callable[[str, str], None] | None,
 ) -> dict[str, Any]:
     """Poll a research task until completion and return the result.
-
-    This is the shared polling logic used by both run_research and poll_research.
 
     Args:
         client: Parallel client instance.
@@ -164,11 +172,10 @@ def _poll_until_complete(
         result_url: URL to view results.
         timeout: Maximum wait time in seconds.
         poll_interval: Seconds between status checks.
-        include_basis: Whether to include citations/sources.
         on_status: Optional callback called with (status, run_id) on each poll.
 
     Returns:
-        Dict with content, basis (if included), and metadata.
+        Dict with content and metadata.
 
     Raises:
         TimeoutError: If the task doesn't complete within timeout.
@@ -187,19 +194,14 @@ def _poll_until_complete(
             if current_status == "completed":
                 result = client.task_run.result(run_id=run_id)
                 output = result.output if hasattr(result, "output") else {}
-                content = _extract_content(output)
+                output_data = _serialize_output(output)
 
-                response: dict[str, Any] = {
+                return {
                     "run_id": run_id,
                     "result_url": result_url,
                     "status": "completed",
-                    "content": content,
+                    "output": output_data,
                 }
-
-                if include_basis and hasattr(output, "basis"):
-                    response["basis"] = extract_basis(output)
-
-                return response
 
             error = getattr(status, "error", None) or f"Task {current_status}"
             raise RuntimeError(f"Research {current_status}: {error}")
@@ -215,9 +217,7 @@ def run_research(
     api_key: str | None = None,
     timeout: int = 3600,
     poll_interval: int = 45,
-    include_basis: bool = True,
     on_status: Callable[[str, str], None] | None = None,
-    output_format: str = "text",
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -230,39 +230,30 @@ def run_research(
         api_key: Optional API key.
         timeout: Maximum wait time in seconds (default: 3600 = 1 hour).
         poll_interval: Seconds between status checks (default: 45).
-        include_basis: Whether to include citations/sources.
         on_status: Optional callback called with (status, run_id) on each poll.
-        output_format: "text" for markdown report (default), "auto" for structured JSON.
 
     Returns:
-        Dict with content, basis (if included), and metadata.
+        Dict with content and metadata.
 
     Raises:
         TimeoutError: If the task doesn't complete within timeout.
         RuntimeError: If the task fails or is cancelled.
     """
     from parallel import Parallel
-    from parallel.types import TaskSpecParam, TextSchemaParam
 
     client = Parallel(api_key=resolve_api_key(api_key))
-
-    # Build task spec based on output format
-    task_spec = None
-    if output_format == "text":
-        task_spec = TaskSpecParam(output_schema=TextSchemaParam(type="text"))
 
     task = client.task_run.create(
         input=query[:15000],
         processor=processor,
-        task_spec=task_spec,
     )
     run_id = task.run_id
-    result_url = getattr(task, "result_url", f"https://platform.parallel.ai/tasks/{run_id}")
+    result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"
 
     if on_status:
         on_status("created", run_id)
 
-    return _poll_until_complete(client, run_id, result_url, timeout, poll_interval, include_basis, on_status)
+    return _poll_until_complete(client, run_id, result_url, timeout, poll_interval, on_status)
 
 
 def poll_research(
@@ -270,7 +261,6 @@ def poll_research(
     api_key: str | None = None,
     timeout: int = 3600,
     poll_interval: int = 45,
-    include_basis: bool = True,
     on_status: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Resume polling an existing research task.
@@ -282,72 +272,17 @@ def poll_research(
         api_key: Optional API key.
         timeout: Maximum wait time in seconds.
         poll_interval: Seconds between status checks.
-        include_basis: Whether to include citations/sources.
         on_status: Optional callback called with (status, run_id) on each poll.
 
     Returns:
-        Dict with content, basis (if included), and metadata.
+        Dict with content and metadata.
     """
     from parallel import Parallel
 
     client = Parallel(api_key=resolve_api_key(api_key))
-    result_url = f"https://platform.parallel.ai/tasks/{run_id}"
+    result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"
 
     if on_status:
         on_status("polling", run_id)
 
-    return _poll_until_complete(client, run_id, result_url, timeout, poll_interval, include_basis, on_status)
-
-
-def _extract_content(output: Any) -> str:
-    """Extract the content string from various output formats.
-
-    The Parallel API can return content in several formats:
-    - Direct string (markdown text)
-    - Dict with 'content', 'markdown', or 'text' keys
-    - SDK object with .content, .markdown, or .text attributes
-    - Nested structures where content contains another dict
-
-    We prioritize finding actual text content over JSON dumping structured data.
-    """
-    if output is None:
-        return ""
-
-    if isinstance(output, str):
-        return output
-
-    if isinstance(output, dict):
-        # Priority: content > markdown > text
-        for key in ("content", "markdown", "text"):
-            if key in output:
-                value = output[key]
-                # Recursively extract if the value is also a dict/object
-                if isinstance(value, str):
-                    return value
-                return _extract_content(value)
-        # Fallback to JSON dump if no text keys found
-        return json.dumps(output, indent=2, default=str)
-
-    # Handle SDK response objects with attributes
-    if hasattr(output, "content"):
-        content = output.content
-        if isinstance(content, str):
-            return content
-        # If content is a dict, look for text fields within it
-        if isinstance(content, dict):
-            for key in ("content", "markdown", "text"):
-                if key in content:
-                    value = content[key]
-                    if isinstance(value, str):
-                        return value
-                    return _extract_content(value)
-            return json.dumps(content, indent=2, default=str)
-        return _extract_content(content)
-
-    if hasattr(output, "markdown"):
-        return str(output.markdown)
-
-    if hasattr(output, "text"):
-        return str(output.text)
-
-    return str(output)
+    return _poll_until_complete(client, run_id, result_url, timeout, poll_interval, on_status)

@@ -13,8 +13,11 @@ def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
     """Build a JSON schema from output column descriptions."""
     properties = {}
     for col in output_columns:
+        # Extract base name before any annotations like (type), [hint], {note}
         base_name = col.split("(")[0].split("[")[0].split("{")[0].strip()
-        prop_name = base_name.lower().strip().replace(" ", "_").replace("-", "_")
+
+        # Convert to valid property name
+        prop_name = base_name.lower().replace(" ", "_").replace("-", "_")
         prop_name = "".join(c for c in prop_name if c.isalnum() or c == "_")
         if prop_name and not prop_name[0].isalpha():
             prop_name = "col_" + prop_name

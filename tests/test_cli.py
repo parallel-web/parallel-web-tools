@@ -111,7 +111,7 @@ class TestMainCLI:
         """Should show version."""
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.0.2" in result.output
+        assert "0.0.3" in result.output
 
 
 class TestAuthCommand:

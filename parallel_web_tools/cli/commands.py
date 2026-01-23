@@ -682,7 +682,6 @@ def research():
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (markdown)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-@click.option("--no-basis", is_flag=True, help="Exclude citations/sources from output")
 def research_run(
     query: str | None,
     input_file: str | None,
@@ -692,7 +691,6 @@ def research_run(
     no_wait: bool,
     output_file: str | None,
     output_json: bool,
-    no_basis: bool,
 ):
     """Run deep research on a question or topic.
 
@@ -737,7 +735,9 @@ def research_run(
             def on_status(status: str, run_id: str):
                 if status == "created":
                     console.print(f"[green]Task created: {run_id}[/green]")
-                    console.print(f"[dim]Track progress: https://platform.parallel.ai/tasks/{run_id}[/dim]\n")
+                    console.print(
+                        f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]\n"
+                    )
                 else:
                     console.print(f"[dim]Status: {status}[/dim]")
 
@@ -746,11 +746,10 @@ def research_run(
                 processor=processor,
                 timeout=timeout,
                 poll_interval=poll_interval,
-                include_basis=not no_basis,
                 on_status=on_status,
             )
 
-            _output_research_result(result, output_file, output_json, no_basis)
+            _output_research_result(result, output_file, output_json)
 
     except TimeoutError as e:
         console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
@@ -805,14 +804,12 @@ def research_status(run_id: str, output_json: bool):
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (markdown)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-@click.option("--no-basis", is_flag=True, help="Exclude citations/sources from output")
 def research_poll(
     run_id: str,
     timeout: int,
     poll_interval: int,
     output_file: str | None,
     output_json: bool,
-    no_basis: bool,
 ):
     """Poll an existing research task until completion.
 
@@ -820,7 +817,7 @@ def research_poll(
     """
     try:
         console.print(f"[bold cyan]Polling task: {run_id}[/bold cyan]")
-        console.print(f"[dim]Track progress: https://platform.parallel.ai/tasks/{run_id}[/dim]\n")
+        console.print(f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]\n")
 
         def on_status(status: str, run_id: str):
             console.print(f"[dim]Status: {status}[/dim]")
@@ -829,11 +826,10 @@ def research_poll(
             run_id,
             timeout=timeout,
             poll_interval=poll_interval,
-            include_basis=not no_basis,
             on_status=on_status,
         )
 
-        _output_research_result(result, output_file, output_json, no_basis)
+        _output_research_result(result, output_file, output_json)
 
     except TimeoutError as e:
         console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
@@ -859,71 +855,35 @@ def _output_research_result(
     result: dict,
     output_file: str | None,
     output_json: bool,
-    no_basis: bool,
 ):
-    """Output research result to console and/or file."""
-    from datetime import datetime
-
-    content = result.get("content", "")
-    basis = result.get("basis", [])
-
-    # Save to file if requested
-    if output_file:
-        # Write markdown content
-        with open(output_file, "w") as f:
-            f.write(content)
-
-        # Write JSON metadata (without content - that's in the markdown file)
-        json_file = output_file.rsplit(".", 1)[0] + ".json" if "." in output_file else output_file + ".json"
-        metadata = {
-            "run_id": result.get("run_id"),
-            "result_url": result.get("result_url"),
-            "status": result.get("status"),
-            "downloaded_at": datetime.now().isoformat(),
-            "files": {
-                "markdown": output_file,
-                "json": json_file,
-            },
-        }
-        if not no_basis and basis:
-            metadata["basis"] = basis
-
-        with open(json_file, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        console.print("\n[dim]Results saved to:[/dim]")
-        console.print(f"  [green]Markdown:[/green] {output_file}")
-        console.print(f"  [green]JSON:[/green] {json_file}")
-
-    # Build console/stdout JSON output (includes content for piping)
+    """Output research result to console and/or file as JSON."""
     output_data = {
         "run_id": result.get("run_id"),
         "result_url": result.get("result_url"),
         "status": result.get("status"),
-        "content": content,
+        "output": result.get("output", {}),
     }
-    if not no_basis and basis:
-        output_data["basis"] = basis
+
+    # Save to file if requested
+    if output_file:
+        with open(output_file, "w") as f:
+            json.dump(output_data, f, indent=2, default=str)
+        console.print(f"\n[green]Results saved to:[/green] {output_file}")
 
     # Output to console
     if output_json:
-        print(json.dumps(output_data, indent=2))
+        print(json.dumps(output_data, indent=2, default=str))
     else:
         console.print("\n[bold green]Research Complete![/bold green]")
-        console.print(f"[dim]Task: {result.get('run_id')}[/dim]\n")
+        console.print(f"[dim]Task: {result.get('run_id')}[/dim]")
+        console.print(f"[dim]URL: {result.get('result_url')}[/dim]\n")
 
-        # Print content (truncate for console if very long)
-        if len(content) > 5000 and not output_file:
-            console.print(content[:5000])
-            console.print(f"\n[yellow]... truncated ({len(content)} chars total)[/yellow]")
-            console.print("[dim]Use --output to save full content to a file[/dim]")
-        else:
-            console.print(content)
-
-        # Show citation summary
-        if basis and not no_basis:
-            total_citations = sum(len(b.get("citations", [])) for b in basis if isinstance(b, dict))
-            console.print(f"\n[dim]Sources: {total_citations} citations from {len(basis)} fields[/dim]")
+        # Show summary of output
+        output = result.get("output", {})
+        if isinstance(output, dict):
+            console.print(f"[dim]Output contains {len(output)} fields[/dim]")
+            if not output_file:
+                console.print("[dim]Use --output to save full JSON to a file, or --json to print to stdout[/dim]")
 
 
 if __name__ == "__main__":

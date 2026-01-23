@@ -9,7 +9,6 @@ from click.testing import CliRunner
 from parallel_web_tools.cli.commands import main
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
-    _extract_content,
     create_research_task,
     get_research_result,
     get_research_status,
@@ -45,57 +44,6 @@ def mock_api_key():
 # =============================================================================
 
 
-class TestExtractContent:
-    """Tests for _extract_content helper function."""
-
-    def test_extract_none(self):
-        """Should return empty string for None."""
-        assert _extract_content(None) == ""
-
-    def test_extract_string(self):
-        """Should return string directly."""
-        assert _extract_content("hello world") == "hello world"
-
-    def test_extract_dict_content(self):
-        """Should extract content key from dict."""
-        output = {"content": "research results"}
-        assert _extract_content(output) == "research results"
-
-    def test_extract_dict_markdown(self):
-        """Should extract markdown key from dict."""
-        output = {"markdown": "# Report"}
-        assert _extract_content(output) == "# Report"
-
-    def test_extract_dict_text(self):
-        """Should extract text key from dict."""
-        output = {"text": "plain text"}
-        assert _extract_content(output) == "plain text"
-
-    def test_extract_dict_priority(self):
-        """Content should have priority over markdown."""
-        output = {"content": "content", "markdown": "markdown"}
-        assert _extract_content(output) == "content"
-
-    def test_extract_dict_json_fallback(self):
-        """Should JSON dump dict without known keys."""
-        output = {"custom_key": "value"}
-        result = _extract_content(output)
-        assert "custom_key" in result
-        assert "value" in result
-
-    def test_extract_object_content(self):
-        """Should extract content attribute from object."""
-        obj = mock.MagicMock()
-        obj.content = "object content"
-        assert _extract_content(obj) == "object content"
-
-    def test_extract_object_markdown(self):
-        """Should extract markdown attribute from object."""
-        obj = mock.MagicMock(spec=["markdown"])
-        obj.markdown = "# Heading"
-        assert _extract_content(obj) == "# Heading"
-
-
 class TestCreateResearchTask:
     """Tests for create_research_task function."""
 
@@ -103,7 +51,6 @@ class TestCreateResearchTask:
         """Should create a task and return metadata."""
         mock_task = mock.MagicMock()
         mock_task.run_id = "trun_123"
-        mock_task.result_url = "https://platform.parallel.ai/tasks/trun_123"
         mock_task.status = "pending"
         mock_parallel_client.task_run.create.return_value = mock_task
 
@@ -149,8 +96,7 @@ class TestGetResearchResult:
     def test_get_result_basic(self, mock_parallel_client, mock_api_key):
         """Should retrieve completed task result."""
         mock_output = mock.MagicMock()
-        mock_output.content = "Research findings"
-        mock_output.basis = []
+        mock_output.model_dump.return_value = {"content": {"text": "Research findings"}, "basis": []}
 
         mock_result = mock.MagicMock()
         mock_result.output = mock_output
@@ -160,27 +106,8 @@ class TestGetResearchResult:
 
         assert result["run_id"] == "trun_123"
         assert result["status"] == "completed"
-        assert result["content"] == "Research findings"
-
-    def test_get_result_with_basis(self, mock_parallel_client, mock_api_key):
-        """Should include basis when requested."""
-        mock_basis = mock.MagicMock()
-        mock_basis.field = "summary"
-        mock_basis.citations = []
-        mock_basis.reasoning = "Based on sources"
-        mock_basis.confidence = "HIGH"
-
-        mock_output = mock.MagicMock()
-        mock_output.content = "Findings"
-        mock_output.basis = [mock_basis]
-
-        mock_result = mock.MagicMock()
-        mock_result.output = mock_output
-        mock_parallel_client.task_run.result.return_value = mock_result
-
-        result = get_research_result("trun_123", include_basis=True)
-
-        assert "basis" in result
+        assert "output" in result
+        assert result["output"]["content"]["text"] == "Research findings"
 
 
 class TestRunResearch:
@@ -207,8 +134,7 @@ class TestRunResearch:
 
         # Mock result retrieval
         mock_output = mock.MagicMock()
-        mock_output.content = "Research complete"
-        mock_output.basis = []
+        mock_output.model_dump.return_value = {"content": {"text": "Research complete"}}
 
         mock_result = mock.MagicMock()
         mock_result.output = mock_output
@@ -218,7 +144,7 @@ class TestRunResearch:
             result = run_research("What is AI?", poll_interval=1, timeout=10)
 
         assert result["status"] == "completed"
-        assert result["content"] == "Research complete"
+        assert "output" in result
 
     def test_run_research_timeout(self, mock_parallel_client, mock_api_key):
         """Should raise TimeoutError when task doesn't complete."""
@@ -264,8 +190,7 @@ class TestRunResearch:
         mock_parallel_client.task_run.retrieve.return_value = mock_status
 
         mock_output = mock.MagicMock()
-        mock_output.content = "Done"
-        mock_output.basis = []
+        mock_output.model_dump.return_value = {"content": {"text": "Done"}}
         mock_result = mock.MagicMock()
         mock_result.output = mock_output
         mock_parallel_client.task_run.result.return_value = mock_result
@@ -292,8 +217,7 @@ class TestPollResearch:
         mock_parallel_client.task_run.retrieve.return_value = mock_status
 
         mock_output = mock.MagicMock()
-        mock_output.content = "Results"
-        mock_output.basis = []
+        mock_output.model_dump.return_value = {"content": {"text": "Results"}}
         mock_result = mock.MagicMock()
         mock_result.output = mock_output
         mock_parallel_client.task_run.result.return_value = mock_result
@@ -303,6 +227,7 @@ class TestPollResearch:
 
         assert result["status"] == "completed"
         assert result["run_id"] == "trun_123"
+        assert "output" in result
 
 
 class TestResearchProcessors:
@@ -376,7 +301,7 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
             mock_create.return_value = {
                 "run_id": "trun_123",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "pending",
             }
 
@@ -392,7 +317,7 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
             mock_create.return_value = {
                 "run_id": "trun_123",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "pending",
             }
 
@@ -407,14 +332,14 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
             mock_create.return_value = {
                 "run_id": "trun_123",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "pending",
             }
 
             result = runner.invoke(main, ["research", "run", "What is AI?", "--no-wait", "--json"])
 
             assert result.exit_code == 0
-            # Find the JSON in the output (it starts with { and ends with })
+            # Find the JSON in the output
             lines = result.output.strip().split("\n")
             json_lines = []
             in_json = False
@@ -433,15 +358,15 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_123",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "completed",
-                "content": "AI research findings",
+                "output": {"content": {"text": "AI research findings"}},
             }
 
             result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1", "--timeout", "10"])
 
             assert result.exit_code == 0
-            assert "Research Complete" in result.output or "AI research findings" in result.output
+            assert "Research Complete" in result.output
             mock_run.assert_called_once()
 
 
@@ -460,7 +385,7 @@ class TestResearchStatusCommand:
             mock_status.return_value = {
                 "run_id": "trun_123",
                 "status": "running",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
             }
 
             result = runner.invoke(main, ["research", "status", "trun_123"])
@@ -475,7 +400,7 @@ class TestResearchStatusCommand:
             mock_status.return_value = {
                 "run_id": "trun_123",
                 "status": "completed",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
             }
 
             result = runner.invoke(main, ["research", "status", "trun_123", "--json"])
@@ -500,15 +425,15 @@ class TestResearchPollCommand:
         with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
             mock_poll.return_value = {
                 "run_id": "trun_123",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "completed",
-                "content": "Research results here",
+                "output": {"content": {"text": "Research results here"}},
             }
 
             result = runner.invoke(main, ["research", "poll", "trun_123", "--poll-interval", "1"])
 
             assert result.exit_code == 0
-            assert "Research Complete" in result.output or "Research results" in result.output
+            assert "Research Complete" in result.output
 
 
 class TestResearchProcessorsCommand:
@@ -527,16 +452,15 @@ class TestResearchOutputFile:
     """Tests for saving research results to files."""
 
     def test_research_save_to_file(self, runner, tmp_path):
-        """Should save results to markdown and JSON files."""
-        output_file = tmp_path / "report.md"
+        """Should save results to JSON file."""
+        output_file = tmp_path / "report.json"
 
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_123",
-                "result_url": "https://platform.parallel.ai/tasks/trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "completed",
-                "content": "# Research Report\n\nFindings here.",
-                "basis": [{"field": "summary", "citations": []}],
+                "output": {"content": {"text": "Research findings"}, "basis": []},
             }
 
             result = runner.invoke(
@@ -546,19 +470,10 @@ class TestResearchOutputFile:
 
             assert result.exit_code == 0
 
-            # Check markdown file has content
+            # Check JSON file has output
             assert output_file.exists()
-            content = output_file.read_text()
-            assert "Research Report" in content
-
-            # Check JSON file has metadata (not content)
-            json_file = tmp_path / "report.json"
-            assert json_file.exists()
-            data = json.loads(json_file.read_text())
+            data = json.loads(output_file.read_text())
             assert data["run_id"] == "trun_123"
             assert data["status"] == "completed"
-            assert "downloaded_at" in data
-            assert "files" in data
-            assert data["files"]["markdown"] == str(output_file)
-            assert "basis" in data  # Should have basis metadata
-            assert "content" not in data  # Content should NOT be in JSON (it's in markdown)
+            assert "output" in data
+            assert data["output"]["content"]["text"] == "Research findings"
