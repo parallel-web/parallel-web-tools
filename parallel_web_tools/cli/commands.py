@@ -480,7 +480,13 @@ def enrich_run(
             console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
             run_enrichment(config_file)
         else:
+            # After validation, these are guaranteed non-None
+            assert source_type is not None
+            assert source is not None
+            assert target is not None
+
             src_cols = parse_columns(source_columns)
+            assert src_cols is not None  # Validated above
 
             if intent:
                 console.print("[dim]Getting suggestions from Parallel API...[/dim]")
@@ -490,6 +496,7 @@ def enrich_run(
                 console.print(f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n")
             else:
                 enr_cols = parse_columns(enriched_columns)
+                assert enr_cols is not None  # Validated above
                 final_processor = processor or "core-fast"
 
             config = build_config_from_args(
@@ -539,7 +546,12 @@ def enrich_plan(
 
     if has_cli_args:
         validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
+        # After validation, these are guaranteed non-None
+        assert source_type is not None
+        assert source is not None
+        assert target is not None
         src_cols = parse_columns(source_columns)
+        assert src_cols is not None  # Validated above
 
         if intent:
             console.print("[dim]Getting suggestions from Parallel API...[/dim]")
@@ -549,6 +561,7 @@ def enrich_plan(
             console.print(f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]")
         else:
             enr_cols = parse_columns(enriched_columns)
+            assert enr_cols is not None  # Validated above
             final_processor = processor or "core-fast"
 
         config = build_config_from_args(
