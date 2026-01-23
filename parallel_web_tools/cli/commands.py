@@ -680,8 +680,8 @@ def research():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
-@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (markdown)")
-@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def research_run(
     query: str | None,
     input_file: str | None,
@@ -700,7 +700,7 @@ def research_run(
 
         parallel-cli research run "What are the latest developments in quantum computing?"
 
-        parallel-cli research run -f question.txt --processor ultra -o report.md
+        parallel-cli research run -f question.txt --processor ultra -o report.json
     """
     # Get query from argument or file
     if input_file:
@@ -802,8 +802,8 @@ def research_status(run_id: str, output_json: bool):
 @click.argument("run_id")
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
-@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (markdown)")
-@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def research_poll(
     run_id: str,
     timeout: int,
