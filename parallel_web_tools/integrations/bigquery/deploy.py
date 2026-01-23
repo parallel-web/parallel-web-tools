@@ -19,7 +19,9 @@ def _run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProc
     """Run a shell command and return the result."""
     result = subprocess.run(cmd, capture_output=True, text=True)
     if check and result.returncode != 0:
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{result.stderr}")
+        # Include both stdout and stderr as some tools output errors to stdout
+        error_output = result.stderr or result.stdout or "(no output)"
+        raise RuntimeError(f"Command failed: {' '.join(cmd)}\n{error_output}")
     return result
 
 
@@ -112,6 +114,21 @@ def deploy_bigquery_integration(
     Raises:
         RuntimeError: If any deployment step fails or user declines confirmation.
     """
+    # Check for required CLI tools
+    import shutil
+
+    missing_tools = []
+    if not shutil.which("gcloud"):
+        missing_tools.append("gcloud")
+    if not shutil.which("bq"):
+        missing_tools.append("bq")
+
+    if missing_tools:
+        raise RuntimeError(
+            f"Required CLI tools not found: {', '.join(missing_tools)}\n"
+            "Please install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install"
+        )
+
     print(f"Checking for existing resources in {project_id}...")
 
     # Check for existing resources
@@ -150,10 +167,17 @@ def deploy_bigquery_integration(
     result = _run_command(["gcloud", "secrets", "describe", secret_name, "--project", project_id], check=False)
 
     if result.returncode == 0:
-        # Update existing secret
-        _run_command(
-            ["gcloud", "secrets", "versions", "add", secret_name, "--data-file=-", "--project", project_id], check=True
+        # Update existing secret - use Popen to provide api_key via stdin
+        process = subprocess.Popen(
+            ["gcloud", "secrets", "versions", "add", secret_name, "--data-file=-", "--project", project_id],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        stdout, stderr = process.communicate(input=api_key)
+        if process.returncode != 0:
+            raise RuntimeError(f"Failed to update secret: {stderr}")
     else:
         # Create new secret
         process = subprocess.Popen(
@@ -172,7 +196,9 @@ def deploy_bigquery_integration(
             stderr=subprocess.PIPE,
             text=True,
         )
-        process.communicate(input=api_key)
+        stdout, stderr = process.communicate(input=api_key)
+        if process.returncode != 0:
+            raise RuntimeError(f"Failed to create secret: {stderr}")
 
     secret_resource = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
 
@@ -187,7 +213,7 @@ def deploy_bigquery_integration(
             "deploy",
             function_name,
             "--gen2",
-            "--runtime=python311",
+            "--runtime=python312",
             "--region",
             region,
             "--source",
@@ -274,8 +300,8 @@ def deploy_bigquery_integration(
             "bq",
             "show",
             "--connection",
-            f"{project_id}.{region}.{connection_id}",
             "--format=json",
+            f"{project_id}.{region}.{connection_id}",
         ]
     )
     connection_info = json.loads(result.stdout)
@@ -333,10 +359,24 @@ def deploy_bigquery_integration(
     )
 
     # Execute each CREATE FUNCTION statement
-    for statement in sql.split(";"):
-        statement = statement.strip()
-        if statement.startswith("CREATE"):
-            _run_command(["bq", "query", "--use_legacy_sql=false", statement + ";"])
+    # Strip SQL comments (lines starting with --) before checking for CREATE
+    def strip_sql_comments(sql_text: str) -> str:
+        lines = [line for line in sql_text.split("\n") if not line.strip().startswith("--")]
+        return "\n".join(lines).strip()
+
+    statements = []
+    for chunk in sql.split(";"):
+        clean = strip_sql_comments(chunk)
+        if clean.startswith("CREATE"):
+            statements.append(clean)
+
+    if not statements:
+        print("  Warning: No CREATE statements found in SQL template")
+    for statement in statements:
+        # Extract function name for logging
+        func_name = statement.split("`")[1] if "`" in statement else "unknown"
+        print(f"  Creating {func_name}...")
+        _run_command(["bq", "query", "--use_legacy_sql=false", f"--project_id={project_id}", statement + ";"])
 
     print("\nDeployment complete!")
 
@@ -346,10 +386,24 @@ def deploy_bigquery_integration(
         "dataset_id": dataset_id,
         "function_url": function_url,
         "example_query": f"""
+-- Basic usage (returns JSON with enriched fields and basis/citations)
 SELECT `{project_id}.{dataset_id}.parallel_enrich`(
     JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
     JSON_ARRAY('CEO name', 'Founding year', 'Brief description')
 ) as enriched_data;
+
+-- Parsing the JSON result into columns
+SELECT
+    JSON_VALUE(enriched_data, '$.ceo_name') as ceo_name,
+    JSON_VALUE(enriched_data, '$.founding_year') as founding_year,
+    JSON_VALUE(enriched_data, '$.brief_description') as description,
+    JSON_QUERY(enriched_data, '$.basis') as citations
+FROM (
+    SELECT `{project_id}.{dataset_id}.parallel_enrich`(
+        JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
+        JSON_ARRAY('CEO name', 'Founding year', 'Brief description')
+    ) as enriched_data
+);
 """.strip(),
     }
 

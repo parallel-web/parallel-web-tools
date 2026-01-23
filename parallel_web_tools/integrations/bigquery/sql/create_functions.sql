@@ -10,40 +10,14 @@
 --   {function_url}   - Deployed Cloud Function URL
 
 -- Main enrichment function
+-- Accepts JSON input and returns JSON output
 CREATE OR REPLACE FUNCTION `{project_id}.{dataset_id}.parallel_enrich`(
-    input_data STRING,
-    output_columns STRING
+    input_data JSON,
+    output_columns JSON
 )
-RETURNS STRING
+RETURNS JSON
 REMOTE WITH CONNECTION `{project_id}.{location}.{connection_id}`
 OPTIONS (
     endpoint = '{function_url}',
     user_defined_context = [("processor", "lite-fast")]
 );
-
--- Convenience function for company enrichment
-CREATE OR REPLACE FUNCTION `{project_id}.{dataset_id}.parallel_enrich_company`(
-    company_name STRING,
-    company_website STRING,
-    fields STRING
-)
-RETURNS STRING
-AS (
-    `{project_id}.{dataset_id}.parallel_enrich`(
-        JSON_OBJECT('company_name', company_name, 'website', company_website),
-        fields
-    )
-);
-
--- Example queries:
---
--- SELECT parallel_enrich(
---     JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
---     JSON_ARRAY('CEO name', 'Founding year', 'Brief description')
--- );
---
--- SELECT parallel_enrich_company(
---     'Apple',
---     'apple.com',
---     JSON_ARRAY('CEO name', 'Market cap', 'Industry')
--- );

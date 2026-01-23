@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-web-tools"
-version = "0.0.3"
+version = "0.0.4"
 description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -88,6 +88,15 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["parallel_web_tools"]
+artifacts = [
+    "*.sql",
+    "*.txt",  # requirements.txt for cloud function
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/parallel_web_tools",
+]
 
 [tool.pyrefly]
 project-includes = [
