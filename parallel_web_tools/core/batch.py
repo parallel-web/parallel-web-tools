@@ -13,8 +13,11 @@ def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
     """Build a JSON schema from output column descriptions."""
     properties = {}
     for col in output_columns:
+        # Extract base name before any annotations like (type), [hint], {note}
         base_name = col.split("(")[0].split("[")[0].split("{")[0].strip()
-        prop_name = base_name.lower().strip().replace(" ", "_").replace("-", "_")
+
+        # Convert to valid property name
+        prop_name = base_name.lower().replace(" ", "_").replace("-", "_")
         prop_name = "".join(c for c in prop_name if c.isalnum() or c == "_")
         if prop_name and not prop_name[0].isalpha():
             prop_name = "col_" + prop_name
@@ -96,6 +99,7 @@ def enrich_batch(
         List of result dictionaries in same order as inputs.
     """
     from parallel.types import JsonSchemaParam, TaskSpecParam
+    from parallel.types.beta import BetaRunInputParam
 
     if not inputs:
         return []
@@ -111,8 +115,8 @@ def enrich_batch(
         task_group = client.beta.task_group.create()
         taskgroup_id = task_group.task_group_id
 
-        # Add runs
-        run_inputs = [{"input": inp, "processor": processor} for inp in inputs]
+        # Add runs - use SDK type for proper typing
+        run_inputs: list[BetaRunInputParam] = [{"input": inp, "processor": processor} for inp in inputs]
         response = client.beta.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
@@ -146,6 +150,7 @@ def enrich_batch(
                 run_id = event.run.run_id
                 if event.output and hasattr(event.output, "content"):
                     content = event.output.content
+                    result: dict[str, Any]
                     if isinstance(content, dict):
                         result = dict(content)
                     elif isinstance(content, str):

@@ -34,6 +34,7 @@ class TestParseColumns:
         """Should parse multiple columns."""
         json_str = '[{"name": "a", "description": "A"}, {"name": "b", "description": "B"}]'
         result = parse_columns(json_str)
+        assert result is not None
         assert len(result) == 2
         assert result[0]["name"] == "a"
         assert result[1]["name"] == "b"
@@ -111,7 +112,7 @@ class TestMainCLI:
         """Should show version."""
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.0.2" in result.output
+        assert "0.0.3" in result.output
 
 
 class TestAuthCommand:

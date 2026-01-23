@@ -14,3 +14,11 @@ repos:
       - id: ruff-check
       # Run the formatter.
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: pyrefly-check
+        name: pyrefly (type checking)
+        entry: uv run pyrefly check
+        language: system
+        pass_filenames: false
+        types: [python]
