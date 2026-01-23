@@ -386,17 +386,18 @@ def deploy_bigquery_integration(
         "dataset_id": dataset_id,
         "function_url": function_url,
         "example_query": f"""
--- Basic usage
+-- Basic usage (returns JSON with enriched fields and basis/citations)
 SELECT `{project_id}.{dataset_id}.parallel_enrich`(
     JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
     JSON_ARRAY('CEO name', 'Founding year', 'Brief description')
 ) as enriched_data;
 
--- Parsing the JSON result
+-- Parsing the JSON result into columns
 SELECT
     JSON_VALUE(enriched_data, '$.ceo_name') as ceo_name,
     JSON_VALUE(enriched_data, '$.founding_year') as founding_year,
-    JSON_VALUE(enriched_data, '$.brief_description') as description
+    JSON_VALUE(enriched_data, '$.brief_description') as description,
+    JSON_QUERY(enriched_data, '$.basis') as citations
 FROM (
     SELECT `{project_id}.{dataset_id}.parallel_enrich`(
         JSON_OBJECT('company_name', 'Google', 'website', 'google.com'),
