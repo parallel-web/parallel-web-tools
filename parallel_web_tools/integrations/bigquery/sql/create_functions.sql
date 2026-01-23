@@ -10,11 +10,12 @@
 --   {function_url}   - Deployed Cloud Function URL
 
 -- Main enrichment function
+-- Accepts JSON input and returns JSON output
 CREATE OR REPLACE FUNCTION `{project_id}.{dataset_id}.parallel_enrich`(
-    input_data STRING,
-    output_columns STRING
+    input_data JSON,
+    output_columns JSON
 )
-RETURNS STRING
+RETURNS JSON
 REMOTE WITH CONNECTION `{project_id}.{location}.{connection_id}`
 OPTIONS (
     endpoint = '{function_url}',
