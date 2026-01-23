@@ -310,7 +310,12 @@ class TestResearchProcessors:
 
     def test_processors_defined(self):
         """Should have expected processors."""
+        # Fast variants
+        assert "lite-fast" in RESEARCH_PROCESSORS
         assert "pro-fast" in RESEARCH_PROCESSORS
+        assert "ultra8x-fast" in RESEARCH_PROCESSORS
+        # Standard variants
+        assert "lite" in RESEARCH_PROCESSORS
         assert "ultra" in RESEARCH_PROCESSORS
         assert "ultra8x" in RESEARCH_PROCESSORS
 

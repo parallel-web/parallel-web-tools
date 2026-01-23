@@ -16,17 +16,28 @@ from typing import Any
 from parallel_web_tools.core.auth import resolve_api_key
 from parallel_web_tools.core.batch import extract_basis
 
-# Processor tiers for deep research with expected latency
+# Processor tiers for deep research with expected latency (from docs)
+# Fast variants are 2-5x faster but may use slightly less fresh data
 RESEARCH_PROCESSORS = {
-    "pro-fast": "1-5 min - exploratory research (default)",
-    "pro": "2-10 min - exploratory research, fresher data",
-    "ultra-fast": "2-12 min - multi-source deep research",
-    "ultra": "5-25 min - advanced deep research, fresher data",
-    "ultra2x-fast": "2-25 min - difficult deep research",
-    "ultra2x": "5-50 min - difficult deep research, fresher data",
-    "ultra4x-fast": "2-45 min - very difficult research",
-    "ultra4x": "5-90 min - very difficult research, fresher data",
-    "ultra8x-fast": "2-60 min - most challenging research",
+    # Fast processors (optimized for speed)
+    "lite-fast": "10-20s - quick lookups",
+    "base-fast": "15-50s - simple questions",
+    "core-fast": "15s-100s - moderate research",
+    "core2x-fast": "15s-3min - extended research",
+    "pro-fast": "30s-5min - exploratory research (default)",
+    "ultra-fast": "1-10min - multi-source deep research",
+    "ultra2x-fast": "1-20min - difficult deep research",
+    "ultra4x-fast": "1-40min - very difficult research",
+    "ultra8x-fast": "1min-1hr - most challenging research",
+    # Standard processors (fresher data)
+    "lite": "10-60s - quick lookups, fresher data",
+    "base": "15-100s - simple questions, fresher data",
+    "core": "1-5min - moderate research, fresher data",
+    "core2x": "1-10min - extended research, fresher data",
+    "pro": "2-10min - exploratory research, fresher data",
+    "ultra": "5-25min - advanced deep research, fresher data",
+    "ultra2x": "5-50min - difficult deep research, fresher data",
+    "ultra4x": "5-90min - very difficult research, fresher data",
     "ultra8x": "5min-2hr - most challenging research, fresher data",
 }
 
