@@ -150,10 +150,17 @@ def deploy_bigquery_integration(
     result = _run_command(["gcloud", "secrets", "describe", secret_name, "--project", project_id], check=False)
 
     if result.returncode == 0:
-        # Update existing secret
-        _run_command(
-            ["gcloud", "secrets", "versions", "add", secret_name, "--data-file=-", "--project", project_id], check=True
+        # Update existing secret - use Popen to provide api_key via stdin
+        process = subprocess.Popen(
+            ["gcloud", "secrets", "versions", "add", secret_name, "--data-file=-", "--project", project_id],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        stdout, stderr = process.communicate(input=api_key)
+        if process.returncode != 0:
+            raise RuntimeError(f"Failed to update secret: {stderr}")
     else:
         # Create new secret
         process = subprocess.Popen(
@@ -172,7 +179,9 @@ def deploy_bigquery_integration(
             stderr=subprocess.PIPE,
             text=True,
         )
-        process.communicate(input=api_key)
+        stdout, stderr = process.communicate(input=api_key)
+        if process.returncode != 0:
+            raise RuntimeError(f"Failed to create secret: {stderr}")
 
     secret_resource = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
 
