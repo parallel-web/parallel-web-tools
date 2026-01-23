@@ -48,6 +48,7 @@ def create_research_task(
     query: str,
     processor: str = "pro-fast",
     api_key: str | None = None,
+    output_format: str = "text",
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -55,17 +56,25 @@ def create_research_task(
         query: Research question or topic (max 15,000 chars).
         processor: Processor tier (see RESEARCH_PROCESSORS).
         api_key: Optional API key.
+        output_format: "text" for markdown report (default), "auto" for structured JSON.
 
     Returns:
         Dict with run_id, result_url, and other task metadata.
     """
     from parallel import Parallel
+    from parallel.types import TaskSpecParam, TextSchemaParam
 
     client = Parallel(api_key=resolve_api_key(api_key))
+
+    # Build task spec based on output format
+    task_spec = None
+    if output_format == "text":
+        task_spec = TaskSpecParam(output_schema=TextSchemaParam(type="text"))
 
     task = client.task_run.create(
         input=query[:15000],
         processor=processor,
+        task_spec=task_spec,
     )
 
     return {
@@ -208,6 +217,7 @@ def run_research(
     poll_interval: int = 45,
     include_basis: bool = True,
     on_status: Callable[[str, str], None] | None = None,
+    output_format: str = "text",
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -222,6 +232,7 @@ def run_research(
         poll_interval: Seconds between status checks (default: 45).
         include_basis: Whether to include citations/sources.
         on_status: Optional callback called with (status, run_id) on each poll.
+        output_format: "text" for markdown report (default), "auto" for structured JSON.
 
     Returns:
         Dict with content, basis (if included), and metadata.
@@ -231,12 +242,19 @@ def run_research(
         RuntimeError: If the task fails or is cancelled.
     """
     from parallel import Parallel
+    from parallel.types import TaskSpecParam, TextSchemaParam
 
     client = Parallel(api_key=resolve_api_key(api_key))
+
+    # Build task spec based on output format
+    task_spec = None
+    if output_format == "text":
+        task_spec = TaskSpecParam(output_schema=TextSchemaParam(type="text"))
 
     task = client.task_run.create(
         input=query[:15000],
         processor=processor,
+        task_spec=task_spec,
     )
     run_id = task.run_id
     result_url = getattr(task, "result_url", f"https://platform.parallel.ai/tasks/{run_id}")
@@ -282,7 +300,16 @@ def poll_research(
 
 
 def _extract_content(output: Any) -> str:
-    """Extract the content string from various output formats."""
+    """Extract the content string from various output formats.
+
+    The Parallel API can return content in several formats:
+    - Direct string (markdown text)
+    - Dict with 'content', 'markdown', or 'text' keys
+    - SDK object with .content, .markdown, or .text attributes
+    - Nested structures where content contains another dict
+
+    We prioritize finding actual text content over JSON dumping structured data.
+    """
     if output is None:
         return ""
 
@@ -290,20 +317,32 @@ def _extract_content(output: Any) -> str:
         return output
 
     if isinstance(output, dict):
-        # Priority: content > markdown > text > JSON dump
+        # Priority: content > markdown > text
         for key in ("content", "markdown", "text"):
             if key in output:
-                return str(output[key])
+                value = output[key]
+                # Recursively extract if the value is also a dict/object
+                if isinstance(value, str):
+                    return value
+                return _extract_content(value)
+        # Fallback to JSON dump if no text keys found
         return json.dumps(output, indent=2, default=str)
 
-    # Handle SDK response objects
+    # Handle SDK response objects with attributes
     if hasattr(output, "content"):
         content = output.content
         if isinstance(content, str):
             return content
+        # If content is a dict, look for text fields within it
         if isinstance(content, dict):
+            for key in ("content", "markdown", "text"):
+                if key in content:
+                    value = content[key]
+                    if isinstance(value, str):
+                        return value
+                    return _extract_content(value)
             return json.dumps(content, indent=2, default=str)
-        return str(content)
+        return _extract_content(content)
 
     if hasattr(output, "markdown"):
         return str(output.markdown)
