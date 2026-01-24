@@ -32,45 +32,52 @@ def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
     }
 
 
+def _parse_content(content) -> dict[str, Any]:
+    """Parse API response content into a dictionary."""
+    if isinstance(content, dict):
+        return dict(content)
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return {"result": content}
+    return {"result": str(content)}
+
+
 def extract_basis(output) -> list[dict[str, Any]]:
     """Extract basis/citations from a Parallel API output."""
+    if not getattr(output, "basis", None):
+        return []
+
     basis_list: list[dict[str, Any]] = []
-
-    if not hasattr(output, "basis") or not output.basis:
-        return basis_list
-
     for field_basis in output.basis:
-        basis_entry: dict[str, Any] = {}
+        entry: dict[str, Any] = {}
 
-        if hasattr(field_basis, "field") and field_basis.field:
-            basis_entry["field"] = field_basis.field
+        if field := getattr(field_basis, "field", None):
+            entry["field"] = field
 
-        if hasattr(field_basis, "citations") and field_basis.citations:
-            basis_entry["citations"] = [
-                {
-                    "url": c.url if hasattr(c, "url") else None,
-                    "excerpts": c.excerpts if hasattr(c, "excerpts") else [],
-                }
-                for c in field_basis.citations
+        if citations := getattr(field_basis, "citations", None):
+            entry["citations"] = [
+                {"url": getattr(c, "url", None), "excerpts": getattr(c, "excerpts", [])} for c in citations
             ]
 
-        if hasattr(field_basis, "reasoning") and field_basis.reasoning:
-            basis_entry["reasoning"] = field_basis.reasoning
+        if reasoning := getattr(field_basis, "reasoning", None):
+            entry["reasoning"] = reasoning
 
-        if hasattr(field_basis, "confidence") and field_basis.confidence:
-            basis_entry["confidence"] = field_basis.confidence
+        if confidence := getattr(field_basis, "confidence", None):
+            entry["confidence"] = confidence
 
         # Fallback for simpler basis format
-        if not basis_entry:
-            if hasattr(field_basis, "url") and field_basis.url:
-                basis_entry["url"] = field_basis.url
-            if hasattr(field_basis, "title") and field_basis.title:
-                basis_entry["title"] = field_basis.title
-            if hasattr(field_basis, "excerpts") and field_basis.excerpts:
-                basis_entry["excerpts"] = field_basis.excerpts
+        if not entry:
+            if url := getattr(field_basis, "url", None):
+                entry["url"] = url
+            if title := getattr(field_basis, "title", None):
+                entry["title"] = title
+            if excerpts := getattr(field_basis, "excerpts", None):
+                entry["excerpts"] = excerpts
 
-        if basis_entry:
-            basis_list.append(basis_entry)
+        if entry:
+            basis_list.append(entry)
 
     return basis_list
 
@@ -148,22 +155,10 @@ def enrich_batch(
         for event in runs_stream:
             if event.type == "task_run.state":
                 run_id = event.run.run_id
-                if event.output and hasattr(event.output, "content"):
-                    content = event.output.content
-                    result: dict[str, Any]
-                    if isinstance(content, dict):
-                        result = dict(content)
-                    elif isinstance(content, str):
-                        try:
-                            result = json.loads(content)
-                        except json.JSONDecodeError:
-                            result = {"result": content}
-                    else:
-                        result = {"result": str(content)}
-
+                if content := getattr(event.output, "content", None):
+                    result = _parse_content(content)
                     if include_basis:
                         result["basis"] = extract_basis(event.output)
-
                     results_by_id[run_id] = result
                 elif event.run.error:
                     results_by_id[run_id] = {"error": str(event.run.error)}
@@ -202,111 +197,85 @@ def run_tasks(
 ) -> list[Any]:
     """Run batch tasks using Pydantic models for schema.
 
-    This is the async-based batch processing using task groups.
-    For simpler use cases, use enrich_batch() instead.
+    Uses the Parallel SDK's task group API with proper SSE handling.
     """
-    import asyncio
     import logging
     import uuid
     from datetime import UTC, datetime
 
-    from parallel.types import TaskSpecParam
+    from parallel import Parallel
+    from parallel.types import JsonSchemaParam, TaskSpecParam
+    from parallel.types.beta import BetaRunInputParam
+
+    from parallel_web_tools.core.auth import resolve_api_key
 
     logger = logging.getLogger(__name__)
 
-    def build_task_spec_param(input_schema, output_schema) -> TaskSpecParam:
-        return {
-            "input_schema": {"type": "json", "json_schema": input_schema.model_json_schema()},
-            "output_schema": {"type": "json", "json_schema": output_schema.model_json_schema()},
-        }
+    batch_id = str(uuid.uuid4())
+    logger.info(f"Generated batch_id: {batch_id}")
 
-    async def run_batch_task(
-        input_data: list[dict[str, Any]],
-        InputModel,
-        OutputModel,
-        processor: str,
-        batch_size: int = 100,
-    ):
-        import httpx
+    client = Parallel(api_key=resolve_api_key(None))
 
-        from parallel_web_tools.core.auth import get_api_key
+    # Build task spec from Pydantic models
+    task_spec = TaskSpecParam(
+        input_schema=JsonSchemaParam(type="json", json_schema=InputModel.model_json_schema()),
+        output_schema=JsonSchemaParam(type="json", json_schema=OutputModel.model_json_schema()),
+    )
 
-        batch_id = str(uuid.uuid4())
-        logger.info(f"Generated batch_id: {batch_id}")
+    # Create task group
+    task_group = client.beta.task_group.create()
+    taskgroup_id = task_group.task_group_id
+    logger.info(f"Created taskgroup id {taskgroup_id}")
 
-        api_key = get_api_key()
-        base_url = "https://api.parallel.ai"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Anthropic-Beta": "tasks-2025-01-15",
-        }
+    # Add runs in batches
+    batch_size = 100
+    total_created = 0
+    for i in range(0, len(input_data), batch_size):
+        batch = input_data[i : i + batch_size]
+        run_inputs: list[BetaRunInputParam] = [{"input": row, "processor": processor} for row in batch]
+        response = client.beta.task_group.add_runs(
+            taskgroup_id,
+            default_task_spec=task_spec,
+            inputs=run_inputs,
+        )
+        total_created += len(response.run_ids)
+        logger.info(f"Processing {i + len(batch)} entities. Created {total_created} Tasks.")
 
-        async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=120) as client:
-            # Create task group
-            response = await client.post("/v1beta/tasks/groups", json={})
-            response.raise_for_status()
-            group_response = response.json()
-            taskgroup_id = group_response["taskgroup_id"]
-            logger.info(f"Created taskgroup id {taskgroup_id}")
+    # Wait for completion
+    import time
 
-            total_created = 0
+    time.sleep(3)  # Initial delay
+    while True:
+        status = client.beta.task_group.retrieve(taskgroup_id)
+        status_counts = status.status.task_run_status_counts or {}
+        logger.info(f"Status: {status_counts}")
 
-            for i in range(0, len(input_data), batch_size):
-                batch = input_data[i : i + batch_size]
-                run_inputs = [{"input": row, "processor": processor} for row in batch]
-                task_spec = build_task_spec_param(InputModel, OutputModel)
+        if not status.status.is_active:
+            logger.info("All tasks completed!")
+            break
 
-                response = await client.post(
-                    f"/v1beta/tasks/groups/{taskgroup_id}/runs",
-                    json={"default_task_spec": task_spec, "inputs": run_inputs},
+        time.sleep(10)
+
+    # Get results using SDK's streaming (handles SSE properly)
+    results = []
+    runs_stream = client.beta.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
+
+    for event in runs_stream:
+        if event.type == "task_run.state" and event.output:
+            try:
+                input_val = InputModel.model_validate(event.input.input if event.input else {})
+                content = _parse_content(event.output.content)
+                output_val = OutputModel.model_validate(content)
+                results.append(
+                    {
+                        **input_val.model_dump(),
+                        **output_val.model_dump(),
+                        "batch_id": batch_id,
+                        "insertion_timestamp": datetime.now(UTC).isoformat(),
+                    }
                 )
-                response.raise_for_status()
-                resp_data = response.json()
-                total_created += len(resp_data.get("run_ids", []))
-                logger.info(f"Processing {i + len(batch)} entities. Created {total_created} Tasks.")
+            except Exception as e:
+                logger.warning(f"Failed to parse result: {e}")
 
-            # Wait for completion
-            while True:
-                response = await client.get(f"/v1beta/tasks/groups/{taskgroup_id}")
-                response.raise_for_status()
-                resp_data = response.json()
-                status = resp_data.get("status", {})
-                logger.info(f"Status: {status.get('task_run_status_counts', {})}")
-
-                if not status.get("is_active", True):
-                    logger.info("All tasks completed!")
-                    break
-
-                await asyncio.sleep(10)
-
-            # Get results - use streaming endpoint
-            results = []
-            path = f"/v1beta/tasks/groups/{taskgroup_id}/runs?include_input=true&include_output=true"
-
-            async with client.stream("GET", path) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.strip():
-                        continue
-                    # Parse SSE data lines
-                    if line.startswith("data: "):
-                        import json
-
-                        event = json.loads(line[6:])
-                        if event.get("type") == "task_run.state" and event.get("output"):
-                            input_val = InputModel.model_validate(event["input"]["input"])
-                            output_val = OutputModel.model_validate(event["output"]["content"])
-                            results.append(
-                                {
-                                    **input_val.model_dump(),
-                                    **output_val.model_dump(),
-                                    "batch_id": batch_id,
-                                    "insertion_timestamp": datetime.now(UTC).isoformat(),
-                                }
-                            )
-
-            logger.info(f"Successfully processed {len(results)} entities.")
-            return results
-
-    return asyncio.run(run_batch_task(input_data, InputModel, OutputModel, processor))
+    logger.info(f"Successfully processed {len(results)} entities.")
+    return results
