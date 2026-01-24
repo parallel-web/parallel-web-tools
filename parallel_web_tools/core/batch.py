@@ -244,7 +244,6 @@ def run_tasks(
     # Wait for completion
     import time
 
-    time.sleep(3)  # Initial delay
     while True:
         status = client.beta.task_group.retrieve(taskgroup_id)
         status_counts = status.status.task_run_status_counts or {}
@@ -254,7 +253,7 @@ def run_tasks(
             logger.info("All tasks completed!")
             break
 
-        time.sleep(10)
+        time.sleep(2)
 
     # Get results using SDK's streaming (handles SSE properly)
     results = []
