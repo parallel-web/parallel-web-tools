@@ -729,31 +729,54 @@ def enrich_suggest(intent: str, source_columns: str | None, output_json: bool):
 
 
 @enrich.command(name="deploy")
-@click.option("--system", type=click.Choice(["bigquery"]), required=True, help="Target system to deploy to")
+@click.option(
+    "--system", type=click.Choice(["bigquery", "snowflake"]), required=True, help="Target system to deploy to"
+)
 @click.option("--project", "-p", help="Cloud project ID (required for bigquery)")
-@click.option("--region", "-r", default="us-central1", show_default=True, help="Cloud region")
+@click.option("--region", "-r", default="us-central1", show_default=True, help="Cloud region (BigQuery)")
 @click.option("--api-key", "-k", help="Parallel API key (or use PARALLEL_API_KEY env var)")
 @click.option("--dataset", default="parallel_functions", show_default=True, help="Dataset name (BigQuery)")
-def enrich_deploy(system: str, project: str | None, region: str, api_key: str | None, dataset: str):
+@click.option("--account", help="Snowflake account identifier (e.g., abc12345.us-east-1)")
+@click.option("--user", "-u", help="Snowflake username")
+@click.option("--password", help="Snowflake password (or use SSO with --authenticator)")
+@click.option("--warehouse", "-w", default="COMPUTE_WH", show_default=True, help="Snowflake warehouse")
+@click.option("--authenticator", default="externalbrowser", show_default=True, help="Snowflake auth method")
+@click.option("--passcode", help="MFA passcode from authenticator app (use with --authenticator username_password_mfa)")
+@click.option("--role", default="ACCOUNTADMIN", show_default=True, help="Snowflake role for deployment")
+def enrich_deploy(
+    system: str,
+    project: str | None,
+    region: str,
+    api_key: str | None,
+    dataset: str,
+    account: str | None,
+    user: str | None,
+    password: str | None,
+    warehouse: str,
+    authenticator: str,
+    passcode: str | None,
+    role: str,
+):
     """Deploy Parallel enrichment to a cloud system."""
+    # Resolve API key for all systems
+    if not api_key:
+        api_key = os.environ.get("PARALLEL_API_KEY")
+    if not api_key:
+        try:
+            api_key = get_api_key()
+        except Exception:
+            pass
+    if not api_key:
+        console.print("[bold red]Error: Parallel API key required[/bold red]")
+        console.print("  Use --api-key, PARALLEL_API_KEY env var, or run 'parallel-cli login'")
+        raise click.Abort()
+
     if system == "bigquery":
         if not project:
             console.print("[bold red]Error: --project is required for BigQuery deployment.[/bold red]")
             raise click.Abort()
 
         from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
-
-        if not api_key:
-            api_key = os.environ.get("PARALLEL_API_KEY")
-        if not api_key:
-            try:
-                api_key = get_api_key()
-            except Exception:
-                pass
-        if not api_key:
-            console.print("[bold red]Error: Parallel API key required[/bold red]")
-            console.print("  Use --api-key, PARALLEL_API_KEY env var, or run 'parallel-cli login'")
-            raise click.Abort()
 
         console.print(f"[bold cyan]Deploying to BigQuery in {project}...[/bold cyan]\n")
 
@@ -768,6 +791,55 @@ def enrich_deploy(system: str, project: str | None, region: str, api_key: str | 
             console.print(f"\nFunction URL: {result['function_url']}")
             console.print("\n[cyan]Example query:[/cyan]")
             console.print(result["example_query"])
+        except Exception as e:
+            console.print(f"[bold red]Deployment failed: {e}[/bold red]")
+            raise click.Abort() from None
+
+    elif system == "snowflake":
+        if not account:
+            console.print("[bold red]Error: --account is required for Snowflake deployment.[/bold red]")
+            raise click.Abort()
+        if not user:
+            console.print("[bold red]Error: --user is required for Snowflake deployment.[/bold red]")
+            raise click.Abort()
+
+        from parallel_web_tools.integrations.snowflake import deploy_parallel_functions
+
+        console.print(f"[bold cyan]Deploying to Snowflake account {account}...[/bold cyan]\n")
+
+        try:
+            deploy_parallel_functions(
+                account=account,
+                user=user,
+                password=password,
+                warehouse=warehouse,
+                role=role,
+                parallel_api_key=api_key,
+                authenticator=authenticator if not password else None,
+                passcode=passcode,
+            )
+            console.print("\n[bold green]Deployment complete![/bold green]")
+            console.print("\n[cyan]Example query:[/cyan]")
+            console.print("""
+-- Basic usage (returns JSON with enriched fields and basis/citations)
+SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+    OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
+    ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
+) AS enriched_data;
+
+-- Parsing the JSON result into columns
+SELECT
+    data:ceo_name::STRING AS ceo_name,
+    data:founding_year::STRING AS founding_year,
+    data:brief_description::STRING AS description,
+    data:basis AS basis
+FROM (
+    SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+        OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
+        ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
+    ) AS data
+);
+""")
         except Exception as e:
             console.print(f"[bold red]Deployment failed: {e}[/bold red]")
             raise click.Abort() from None
