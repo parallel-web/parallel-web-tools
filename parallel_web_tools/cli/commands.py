@@ -758,24 +758,26 @@ def enrich_deploy(
     role: str,
 ):
     """Deploy Parallel enrichment to a cloud system."""
-    # Resolve API key for all systems
-    if not api_key:
-        api_key = os.environ.get("PARALLEL_API_KEY")
-    if not api_key:
-        try:
-            api_key = get_api_key()
-        except Exception:
-            pass
-    if not api_key:
-        console.print("[bold red]Error: Parallel API key required[/bold red]")
-        console.print("  Use --api-key, PARALLEL_API_KEY env var, or run 'parallel-cli login'")
-        raise click.Abort()
+    from parallel_web_tools.core.auth import get_api_key
 
-    if system == "bigquery":
-        if not project:
-            console.print("[bold red]Error: --project is required for BigQuery deployment.[/bold red]")
+    # Validate required parameters FIRST (before triggering OAuth)
+    if system == "bigquery" and not project:
+        console.print("[bold red]Error: --project is required for BigQuery deployment.[/bold red]")
+        raise click.Abort()
+    if system == "snowflake":
+        if not account:
+            console.print("[bold red]Error: --account is required for Snowflake deployment.[/bold red]")
+            raise click.Abort()
+        if not user:
+            console.print("[bold red]Error: --user is required for Snowflake deployment.[/bold red]")
             raise click.Abort()
 
+    # Now resolve API key (may trigger OAuth flow if needed)
+    if not api_key:
+        api_key = get_api_key()
+
+    if system == "bigquery":
+        assert project is not None  # Validated above
         from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
 
         console.print(f"[bold cyan]Deploying to BigQuery in {project}...[/bold cyan]\n")
@@ -796,13 +798,7 @@ def enrich_deploy(
             raise click.Abort() from None
 
     elif system == "snowflake":
-        if not account:
-            console.print("[bold red]Error: --account is required for Snowflake deployment.[/bold red]")
-            raise click.Abort()
-        if not user:
-            console.print("[bold red]Error: --user is required for Snowflake deployment.[/bold red]")
-            raise click.Abort()
-
+        assert account is not None and user is not None  # Validated above
         from parallel_web_tools.integrations.snowflake import deploy_parallel_functions
 
         console.print(f"[bold cyan]Deploying to Snowflake account {account}...[/bold cyan]\n")
