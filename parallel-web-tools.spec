@@ -37,10 +37,10 @@ a = Analysis(
         'parallel_web_tools.cli.commands',
         'parallel_web_tools.cli.planner',
         # Processors (for local file/db enrichment)
+        # Note: bigquery processor not included - requires sqlalchemy-bigquery driver
         'parallel_web_tools.processors',
         'parallel_web_tools.processors.csv',
         'parallel_web_tools.processors.duckdb',
-        'parallel_web_tools.processors.bigquery',
         # Note: Deploy commands (bigquery, snowflake) are NOT included in standalone CLI
         # They require: pip install parallel-web-tools[snowflake] or [bigquery]
         # Dependencies that might not be auto-detected

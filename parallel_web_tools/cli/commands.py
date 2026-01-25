@@ -36,6 +36,13 @@ console = Console()
 
 load_dotenv(".env.local")
 
+# Source types available for enrich run/plan
+# BigQuery requires sqlalchemy-bigquery driver which isn't in standalone CLI
+if getattr(sys, "frozen", False):
+    AVAILABLE_SOURCE_TYPES = ["csv", "duckdb"]
+else:
+    AVAILABLE_SOURCE_TYPES = ["csv", "duckdb", "bigquery"]
+
 
 # =============================================================================
 # Output Helpers
@@ -507,7 +514,7 @@ def enrich():
 
 @enrich.command(name="run")
 @click.argument("config_file", required=False)
-@click.option("--source-type", type=click.Choice(["csv", "duckdb", "bigquery"]), help="Data source type")
+@click.option("--source-type", type=click.Choice(AVAILABLE_SOURCE_TYPES), help="Data source type")
 @click.option("--source", help="Source file path or table name")
 @click.option("--target", help="Target file path or table name")
 @click.option("--source-columns", help="Source columns as JSON")
@@ -629,7 +636,7 @@ def enrich_run(
 
 @enrich.command(name="plan")
 @click.option("-o", "--output", default="config.yaml", help="Output YAML file path", show_default=True)
-@click.option("--source-type", type=click.Choice(["csv", "duckdb", "bigquery"]), help="Data source type")
+@click.option("--source-type", type=click.Choice(AVAILABLE_SOURCE_TYPES), help="Data source type")
 @click.option("--source", help="Source file path or table name")
 @click.option("--target", help="Target file path or table name")
 @click.option("--source-columns", help="Source columns as JSON")
