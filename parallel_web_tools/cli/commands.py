@@ -778,7 +778,12 @@ def enrich_deploy(
 
     if system == "bigquery":
         assert project is not None  # Validated above
-        from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
+        try:
+            from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
+        except ImportError:
+            console.print("[bold red]Error: BigQuery deployment is not available in the standalone CLI.[/bold red]")
+            console.print("\nInstall via pip: [cyan]pip install parallel-web-tools[bigquery][/cyan]")
+            raise click.Abort() from None
 
         console.print(f"[bold cyan]Deploying to BigQuery in {project}...[/bold cyan]\n")
 
@@ -799,7 +804,12 @@ def enrich_deploy(
 
     elif system == "snowflake":
         assert account is not None and user is not None  # Validated above
-        from parallel_web_tools.integrations.snowflake import deploy_parallel_functions
+        try:
+            from parallel_web_tools.integrations.snowflake import deploy_parallel_functions
+        except ImportError:
+            console.print("[bold red]Error: Snowflake deployment is not available in the standalone CLI.[/bold red]")
+            console.print("\nInstall via pip: [cyan]pip install parallel-web-tools[snowflake][/cyan]")
+            raise click.Abort() from None
 
         console.print(f"[bold cyan]Deploying to Snowflake account {account}...[/bold cyan]\n")
 

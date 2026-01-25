@@ -78,6 +78,8 @@ Or with uv:
 uv add "parallel-web-tools[snowflake]"
 ```
 
+> **Note:** The standalone `parallel-cli` binary does not include deployment commands. You must install via pip/uv with the `[snowflake]` extra to use `parallel-cli enrich deploy --system snowflake`.
+
 ## Quick Start - CLI Deployment
 
 The easiest way to deploy is using the CLI:

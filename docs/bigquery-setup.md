@@ -36,6 +36,8 @@ Parallel Task API
 pip install parallel-web-tools[bigquery]
 ```
 
+> **Note:** The standalone `parallel-cli` binary does not include deployment commands. You must install via pip with the `[bigquery]` extra to use `parallel-cli enrich deploy --system bigquery`.
+
 ## Quick Start Deployment
 
 ### Option 1: CLI (Recommended)

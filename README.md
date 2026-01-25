@@ -20,13 +20,15 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 
 ### Standalone CLI (Recommended)
 
-Install the standalone `parallel-cli` binary with everything bundled (no Python required):
+Install the standalone `parallel-cli` binary for search, extract, and enrichment (no Python required):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/parallel-web/parallel-web-tools/main/install-cli.sh | bash
 ```
 
 This automatically detects your platform (macOS/Linux, x64/arm64) and installs to `~/.local/bin`.
+
+> **Note:** The standalone binary includes core CLI features. For deployment commands (`enrich deploy`), use pip: `pip install parallel-web-tools[snowflake]` or `[bigquery]`.
 
 ### Python Package
 
@@ -60,7 +62,7 @@ parallel-cli
     ├── run                 # Run enrichment
     ├── plan                # Create YAML config
     ├── suggest             # AI suggests output columns
-    └── deploy              # Deploy to cloud systems (BigQuery, etc.)
+    └── deploy              # Deploy to cloud systems (requires pip install)
 ```
 
 ## Quick Start
