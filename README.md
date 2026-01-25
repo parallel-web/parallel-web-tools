@@ -20,7 +20,7 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 
 ### Standalone CLI (Recommended)
 
-Install the standalone `parallel-cli` binary for search, extract, and enrichment (no Python required):
+Install the standalone `parallel-cli` binary for search, extract, enrichment, and deep research (no Python required):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/parallel-web/parallel-web-tools/main/install-cli.sh | bash
