@@ -41,6 +41,22 @@ load_dotenv(".env.local")
 # =============================================================================
 
 
+def parse_comma_separated(values: tuple[str, ...]) -> list[str]:
+    """Parse a tuple of values that may contain comma-separated items.
+
+    Supports both repeated flags and comma-separated values:
+        --flag a,b --flag c  ->  ['a', 'b', 'c']
+        --flag a --flag b    ->  ['a', 'b']
+        --flag "a,b,c"       ->  ['a', 'b', 'c']
+    """
+    result = []
+    for value in values:
+        # Split by comma and strip whitespace
+        parts = [p.strip() for p in value.split(",")]
+        result.extend(p for p in parts if p)  # Skip empty strings
+    return result
+
+
 def write_json_output(data: dict[str, Any], output_file: str | None, output_json: bool) -> None:
     """Write output data to file and/or stdout as JSON.
 
@@ -303,8 +319,8 @@ def logout_cmd():
     "--mode", type=click.Choice(["one-shot", "agentic"]), default="one-shot", help="Search mode", show_default=True
 )
 @click.option("--max-results", type=int, default=10, help="Maximum results", show_default=True)
-@click.option("--include-domains", multiple=True, help="Only search these domains")
-@click.option("--exclude-domains", multiple=True, help="Exclude these domains")
+@click.option("--include-domains", multiple=True, help="Only search these domains (comma-separated or repeated)")
+@click.option("--exclude-domains", multiple=True, help="Exclude these domains (comma-separated or repeated)")
 @click.option("--after-date", help="Only results after this date (YYYY-MM-DD)")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
@@ -338,9 +354,9 @@ def search(
 
         source_policy: dict[str, Any] = {}
         if include_domains:
-            source_policy["include_domains"] = list(include_domains)
+            source_policy["include_domains"] = parse_comma_separated(include_domains)
         if exclude_domains:
-            source_policy["exclude_domains"] = list(exclude_domains)
+            source_policy["exclude_domains"] = parse_comma_separated(exclude_domains)
         if after_date:
             source_policy["after_date"] = after_date
         if source_policy:

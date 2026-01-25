@@ -11,6 +11,7 @@ from parallel_web_tools.cli.commands import (
     build_config_from_args,
     main,
     parse_columns,
+    parse_comma_separated,
     parse_inline_data,
     suggest_from_intent,
 )
@@ -20,6 +21,45 @@ from parallel_web_tools.cli.commands import (
 def runner():
     """Create a CLI test runner."""
     return CliRunner()
+
+
+class TestParseCommaSeparated:
+    """Tests for parse_comma_separated helper function."""
+
+    def test_single_value(self):
+        """Should handle single value."""
+        result = parse_comma_separated(("example.com",))
+        assert result == ["example.com"]
+
+    def test_comma_separated(self):
+        """Should split comma-separated values."""
+        result = parse_comma_separated(("google.com,github.com",))
+        assert result == ["google.com", "github.com"]
+
+    def test_repeated_flags(self):
+        """Should handle repeated flags."""
+        result = parse_comma_separated(("google.com", "github.com"))
+        assert result == ["google.com", "github.com"]
+
+    def test_mixed_usage(self):
+        """Should handle mix of comma-separated and repeated."""
+        result = parse_comma_separated(("google.com,github.com", "twitter.com"))
+        assert result == ["google.com", "github.com", "twitter.com"]
+
+    def test_whitespace_handling(self):
+        """Should trim whitespace around values."""
+        result = parse_comma_separated(("google.com , github.com",))
+        assert result == ["google.com", "github.com"]
+
+    def test_empty_tuple(self):
+        """Should return empty list for empty tuple."""
+        result = parse_comma_separated(())
+        assert result == []
+
+    def test_skips_empty_strings(self):
+        """Should skip empty strings from trailing commas."""
+        result = parse_comma_separated(("google.com,",))
+        assert result == ["google.com"]
 
 
 class TestParseColumns:
@@ -232,6 +272,14 @@ class TestSearchCommand:
         assert result.exit_code == 0
         assert "Search the web" in result.output
         assert "--json" in result.output
+
+    def test_search_help_shows_comma_separated(self, runner):
+        """Should mention comma-separated in domain options help."""
+        result = runner.invoke(main, ["search", "--help"])
+        assert result.exit_code == 0
+        assert "--include-domains" in result.output
+        assert "--exclude-domains" in result.output
+        assert "comma-separated" in result.output
 
     def test_search_no_args(self, runner):
         """Should error without objective or query."""
