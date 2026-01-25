@@ -17,7 +17,7 @@ Deployment:
     )
 
 SQL Usage:
-    SELECT parallel_enrich(
+    SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
         OBJECT_CONSTRUCT('company_name', 'Google'),
         ARRAY_CONSTRUCT('CEO name', 'Founding year')
     ) AS enriched_data;

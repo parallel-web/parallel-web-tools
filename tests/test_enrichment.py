@@ -792,10 +792,10 @@ class TestEnrichSingle:
 
 
 class TestRunTasks:
-    """Tests for run_tasks function with httpx-based API calls."""
+    """Tests for run_tasks function with Parallel SDK."""
 
     def test_run_tasks_basic(self):
-        """Should process batch tasks using httpx and return results."""
+        """Should process batch tasks using the Parallel SDK and return results."""
         from pydantic import BaseModel
 
         class InputModel(BaseModel):
@@ -804,88 +804,48 @@ class TestRunTasks:
         class OutputModel(BaseModel):
             ceo: str
 
-        # Mock responses for the API flow
-        mock_responses = [
-            # Create task group
-            mock.MagicMock(status_code=200, json=mock.MagicMock(return_value={"taskgroup_id": "tgrp_123"})),
-            # Add runs
-            mock.MagicMock(status_code=200, json=mock.MagicMock(return_value={"run_ids": ["run_1", "run_2"]})),
-            # Check status - still running
-            mock.MagicMock(
-                status_code=200,
-                json=mock.MagicMock(
-                    return_value={"status": {"is_active": True, "task_run_status_counts": {"running": 2}}}
-                ),
-            ),
-            # Check status - completed
-            mock.MagicMock(
-                status_code=200,
-                json=mock.MagicMock(
-                    return_value={"status": {"is_active": False, "task_run_status_counts": {"completed": 2}}}
-                ),
-            ),
-        ]
+        # Mock the Parallel SDK client
+        mock_client = mock.MagicMock()
 
-        # Mock the streaming response
-        class MockStreamResponse:
-            def __init__(self):
-                self.status_code = 200
+        # Mock task group create
+        mock_client.beta.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_123")
 
-            async def __aenter__(self):
-                return self
+        # Mock add_runs
+        mock_client.beta.task_group.add_runs.return_value = mock.MagicMock(run_ids=["run_1", "run_2"])
 
-            async def __aexit__(self, *args):
-                pass
+        # Mock retrieve (status check) - return completed immediately
+        mock_client.beta.task_group.retrieve.return_value = mock.MagicMock(
+            status=mock.MagicMock(is_active=False, task_run_status_counts={"completed": 2})
+        )
 
-            def raise_for_status(self):
-                pass
+        # Mock get_runs (streaming results)
+        mock_event1 = mock.MagicMock(
+            type="task_run.state",
+            input=mock.MagicMock(input={"company": "Anthropic"}),
+            output=mock.MagicMock(content={"ceo": "Dario Amodei"}),
+        )
+        mock_event2 = mock.MagicMock(
+            type="task_run.state",
+            input=mock.MagicMock(input={"company": "OpenAI"}),
+            output=mock.MagicMock(content={"ceo": "Sam Altman"}),
+        )
+        mock_client.beta.task_group.get_runs.return_value = [mock_event1, mock_event2]
 
-            async def aiter_lines(self):
-                yield 'data: {"type": "task_run.state", "input": {"input": {"company": "Anthropic"}}, "output": {"content": {"ceo": "Dario Amodei"}}}'
-                yield 'data: {"type": "task_run.state", "input": {"input": {"company": "OpenAI"}}, "output": {"content": {"ceo": "Sam Altman"}}}'
+        with mock.patch("parallel_web_tools.core.auth.resolve_api_key", return_value="test-key"):
+            with mock.patch("parallel.Parallel", return_value=mock_client):
+                with mock.patch("time.sleep"):  # Speed up test
+                    input_data = [
+                        {"company": "Anthropic"},
+                        {"company": "OpenAI"},
+                    ]
 
-        with mock.patch("parallel_web_tools.core.auth.get_api_key", return_value="test-key"):
-            with mock.patch("httpx.AsyncClient") as mock_client_class:
-                mock_client = mock.MagicMock()
-
-                # Set up response iterator
-                response_iter = iter(mock_responses)
-
-                async def mock_post(*args, **kwargs):
-                    resp = next(response_iter)
-                    resp.raise_for_status = mock.MagicMock()
-                    return resp
-
-                async def mock_get(*args, **kwargs):
-                    resp = next(response_iter)
-                    resp.raise_for_status = mock.MagicMock()
-                    return resp
-
-                mock_client.post = mock_post
-                mock_client.get = mock_get
-                mock_client.stream = mock.MagicMock(return_value=MockStreamResponse())
-
-                async def async_context_manager(*args, **kwargs):
-                    return mock_client
-
-                mock_client.__aenter__ = async_context_manager
-                mock_client.__aexit__ = mock.AsyncMock(return_value=None)
-                mock_client_class.return_value = mock_client
-
-                input_data = [
-                    {"company": "Anthropic"},
-                    {"company": "OpenAI"},
-                ]
-
-                # Patch asyncio.sleep to speed up test
-                with mock.patch("asyncio.sleep", return_value=None):
                     results = run_tasks(input_data, InputModel, OutputModel, "lite-fast")
 
-                assert len(results) == 2
-                assert results[0]["company"] == "Anthropic"
-                assert results[0]["ceo"] == "Dario Amodei"
-                assert results[1]["company"] == "OpenAI"
-                assert results[1]["ceo"] == "Sam Altman"
-                # Check batch_id and timestamp are added
-                assert "batch_id" in results[0]
-                assert "insertion_timestamp" in results[0]
+        assert len(results) == 2
+        assert results[0]["company"] == "Anthropic"
+        assert results[0]["ceo"] == "Dario Amodei"
+        assert results[1]["company"] == "OpenAI"
+        assert results[1]["ceo"] == "Sam Altman"
+        # Check batch_id and timestamp are added
+        assert "batch_id" in results[0]
+        assert "insertion_timestamp" in results[0]

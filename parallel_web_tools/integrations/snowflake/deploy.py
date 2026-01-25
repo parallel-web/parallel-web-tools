@@ -87,50 +87,101 @@ def get_cleanup_sql() -> str:
     return get_sql_template("03_cleanup")
 
 
+def _check_resource_exists(cursor, query: str) -> bool:
+    """Execute a SHOW query and return True if any result exists."""
+    try:
+        cursor.execute(query)
+        return cursor.fetchone() is not None
+    except Exception:
+        return False
+
+
+def _strip_sql_comments(sql_text: str) -> str:
+    """Strip SQL comment lines from a statement."""
+    lines = [line for line in sql_text.split("\n") if not line.strip().startswith("--")]
+    return "\n".join(lines).strip()
+
+
+def _is_critical_statement(sql: str) -> bool:
+    """Check if a SQL statement is critical (should fail deployment if it errors)."""
+    return "CREATE" in sql.upper()
+
+
+def _execute_sql_statements(cursor, sql: str) -> list[str]:
+    """Execute semicolon-separated SQL statements, collecting critical errors.
+
+    Returns list of error messages for critical statements that failed.
+    """
+    errors = []
+    for statement in sql.split(";"):
+        clean = _strip_sql_comments(statement)
+        if not clean:
+            continue
+        try:
+            cursor.execute(clean)
+        except Exception as e:
+            clean_upper = clean.upper()
+            if _is_critical_statement(clean):
+                errors.append(str(e))
+                print(f"Error: {e}")
+            elif "SHOW" not in clean_upper and "SELECT" not in clean_upper:
+                print(f"Warning: {e}")
+    return errors
+
+
+def _build_connection_params(
+    account: str,
+    user: str,
+    warehouse: str,
+    role: str,
+    password: str | None = None,
+    authenticator: str | None = None,
+    passcode: str | None = None,
+    database: str | None = None,
+    schema: str | None = None,
+) -> dict:
+    """Build Snowflake connection parameters."""
+    params = {"account": account, "user": user, "warehouse": warehouse, "role": role}
+
+    if database:
+        params["database"] = database
+    if schema:
+        params["schema"] = schema
+
+    if password:
+        params["password"] = password
+        if authenticator:
+            params["authenticator"] = authenticator
+        if passcode:
+            params["passcode"] = passcode
+    elif authenticator:
+        params["authenticator"] = authenticator
+    else:
+        params["authenticator"] = "externalbrowser"
+
+    return params
+
+
 def _check_existing_resources(cursor, database: str, schema: str) -> list[str]:
     """Check which Snowflake resources already exist and would be overwritten."""
     existing = []
 
-    # Check database
-    try:
-        cursor.execute(f"SHOW DATABASES LIKE '{database}'")
-        if cursor.fetchone():
-            existing.append(f"Database: {database}")
-    except Exception:
-        pass
+    db_exists = _check_resource_exists(cursor, f"SHOW DATABASES LIKE '{database}'")
+    if db_exists:
+        existing.append(f"Database: {database}")
 
-    # Check schema (only if database exists)
-    if existing:
-        try:
-            cursor.execute(f"SHOW SCHEMAS LIKE '{schema}' IN DATABASE {database}")
-            if cursor.fetchone():
-                existing.append(f"Schema: {database}.{schema}")
-        except Exception:
-            pass
+    if _check_resource_exists(cursor, "SHOW EXTERNAL ACCESS INTEGRATIONS LIKE 'parallel_api_access_integration'"):
+        existing.append("External Access Integration: parallel_api_access_integration")
 
-    # Check external access integration
-    try:
-        cursor.execute("SHOW EXTERNAL ACCESS INTEGRATIONS LIKE 'parallel_api_access_integration'")
-        if cursor.fetchone():
-            existing.append("External Access Integration: parallel_api_access_integration")
-    except Exception:
-        pass
-
-    # Check secret
-    try:
-        cursor.execute(f"SHOW SECRETS LIKE 'parallel_api_key' IN DATABASE {database}")
-        if cursor.fetchone():
+    if db_exists:
+        if _check_resource_exists(cursor, f"SHOW SCHEMAS LIKE '{schema}' IN DATABASE {database}"):
+            existing.append(f"Schema: {database}.{schema}")
+        if _check_resource_exists(cursor, f"SHOW SECRETS LIKE 'parallel_api_key' IN DATABASE {database}"):
             existing.append(f"Secret: {database}.{schema}.parallel_api_key")
-    except Exception:
-        pass
-
-    # Check network rule
-    try:
-        cursor.execute(f"SHOW NETWORK RULES LIKE 'parallel_api_network_rule' IN DATABASE {database}")
-        if cursor.fetchone():
+        if _check_resource_exists(
+            cursor, f"SHOW NETWORK RULES LIKE 'parallel_api_network_rule' IN DATABASE {database}"
+        ):
             existing.append(f"Network Rule: {database}.{schema}.parallel_api_network_rule")
-    except Exception:
-        pass
 
     return existing
 
@@ -145,6 +196,7 @@ def deploy_parallel_functions(
     role: str = "ACCOUNTADMIN",
     parallel_api_key: str | None = None,
     authenticator: str | None = None,
+    passcode: str | None = None,
     force: bool = False,
 ) -> None:
     """
@@ -199,22 +251,15 @@ def deploy_parallel_functions(
             "or PARALLEL_API_KEY environment variable."
         )
 
-    # Build connection parameters
-    conn_params = {
-        "account": account,
-        "user": user,
-        "warehouse": warehouse,
-        "database": database,
-        "schema": schema,
-        "role": role,
-    }
-
-    if password:
-        conn_params["password"] = password
-    elif authenticator:
-        conn_params["authenticator"] = authenticator
-    else:
-        conn_params["authenticator"] = "externalbrowser"
+    conn_params = _build_connection_params(
+        account=account,
+        user=user,
+        warehouse=warehouse,
+        role=role,
+        password=password,
+        authenticator=authenticator,
+        passcode=passcode,
+    )
 
     # Connect to Snowflake
     print(f"Connecting to Snowflake account: {account}")
@@ -233,37 +278,15 @@ def deploy_parallel_functions(
 
         # Run setup SQL
         print("Running setup SQL (network rule, secret, integration)...")
-        setup_sql = get_setup_sql(api_key)
-        for statement in setup_sql.split(";"):
-            statement = statement.strip()
-            if statement and not statement.startswith("--"):
-                try:
-                    cursor.execute(statement)
-                except Exception as e:
-                    # Skip errors for verification queries
-                    if "SHOW" not in statement and "SELECT" not in statement:
-                        print(f"Warning: {e}")
+        setup_errors = _execute_sql_statements(cursor, get_setup_sql(api_key))
+        if setup_errors:
+            raise RuntimeError(f"Setup failed with {len(setup_errors)} error(s). See messages above.")
 
         # Run UDF creation SQL
         print("Creating parallel_enrich() UDF...")
-        udf_sql = get_udf_sql()
-        for statement in udf_sql.split(";"):
-            statement = statement.strip()
-            if statement and not statement.startswith("--"):
-                try:
-                    cursor.execute(statement)
-                except Exception as e:
-                    # Skip errors for verification queries
-                    if "SELECT" not in statement:
-                        print(f"Warning: {e}")
-
-        print("Deployment complete!")
-        print()
-        print("Test the integration with:")
-        print("  SELECT parallel_enrich(")
-        print("      OBJECT_CONSTRUCT('company_name', 'Google'),")
-        print("      ARRAY_CONSTRUCT('CEO name', 'Founding year')")
-        print("  ) AS enriched_data;")
+        udf_errors = _execute_sql_statements(cursor, get_udf_sql())
+        if udf_errors:
+            raise RuntimeError(f"UDF creation failed with {len(udf_errors)} error(s). See messages above.")
 
     finally:
         conn.close()
@@ -306,38 +329,29 @@ def cleanup_parallel_functions(
             "snowflake-connector-python is required. Install it with: pip install parallel-web-tools[snowflake]"
         ) from e
 
-    # Build connection parameters
-    conn_params = {
-        "account": account,
-        "user": user,
-        "warehouse": warehouse,
-        "database": "PARALLEL_INTEGRATION",
-        "schema": "ENRICHMENT",
-        "role": role,
-    }
+    conn_params = _build_connection_params(
+        account=account,
+        user=user,
+        warehouse=warehouse,
+        role=role,
+        password=password,
+        authenticator=authenticator,
+        database="PARALLEL_INTEGRATION",
+        schema="ENRICHMENT",
+    )
 
-    if password:
-        conn_params["password"] = password
-    elif authenticator:
-        conn_params["authenticator"] = authenticator
-    else:
-        conn_params["authenticator"] = "externalbrowser"
-
-    # Connect to Snowflake
     print(f"Connecting to Snowflake account: {account}")
     conn = snowflake.connector.connect(**conn_params)
 
     try:
         cursor = conn.cursor()
-
-        # Run cleanup SQL
         print("Running cleanup SQL...")
-        cleanup_sql = get_cleanup_sql()
-        for statement in cleanup_sql.split(";"):
-            statement = statement.strip()
-            if statement and not statement.startswith("--"):
+
+        for statement in get_cleanup_sql().split(";"):
+            clean = _strip_sql_comments(statement)
+            if clean:
                 try:
-                    cursor.execute(statement)
+                    cursor.execute(clean)
                 except Exception as e:
                     print(f"Warning: {e}")
 

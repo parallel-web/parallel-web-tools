@@ -64,8 +64,7 @@ jobs:
         run: uv run ruff format --check parallel_web_tools/ tests/
 
       - name: Type check with pyrefly
-        run: uv run pyrefly check parallel_web_tools/
-        continue-on-error: true
+        run: uv run pyrefly check
 
   cli-test:
     runs-on: ubuntu-latest

@@ -37,17 +37,12 @@ a = Analysis(
         'parallel_web_tools.cli.commands',
         'parallel_web_tools.cli.planner',
         # Processors (for local file/db enrichment)
+        # Note: bigquery processor not included - requires sqlalchemy-bigquery driver
         'parallel_web_tools.processors',
         'parallel_web_tools.processors.csv',
         'parallel_web_tools.processors.duckdb',
-        'parallel_web_tools.processors.bigquery',
-        # Integrations with deploy capability (bundled in CLI)
-        'parallel_web_tools.integrations',
-        'parallel_web_tools.integrations.bigquery',
-        'parallel_web_tools.integrations.bigquery.deploy',
-        'parallel_web_tools.integrations.snowflake',
-        'parallel_web_tools.integrations.snowflake.deploy',
-        # Note: polars, duckdb, spark integrations are library-only (no deploy step)
+        # Note: Deploy commands (bigquery, snowflake) are NOT included in standalone CLI
+        # They require: pip install parallel-web-tools[snowflake] or [bigquery]
         # Dependencies that might not be auto-detected
         'click',
         'questionary',

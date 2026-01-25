@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import os
+import sys
 import tempfile
 from typing import Any
 
@@ -34,6 +35,13 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 load_dotenv(".env.local")
+
+# Source types available for enrich run/plan
+# BigQuery requires sqlalchemy-bigquery driver which isn't in standalone CLI
+if getattr(sys, "frozen", False):
+    AVAILABLE_SOURCE_TYPES = ["csv", "duckdb"]
+else:
+    AVAILABLE_SOURCE_TYPES = ["csv", "duckdb", "bigquery"]
 
 
 # =============================================================================
@@ -506,7 +514,7 @@ def enrich():
 
 @enrich.command(name="run")
 @click.argument("config_file", required=False)
-@click.option("--source-type", type=click.Choice(["csv", "duckdb", "bigquery"]), help="Data source type")
+@click.option("--source-type", type=click.Choice(AVAILABLE_SOURCE_TYPES), help="Data source type")
 @click.option("--source", help="Source file path or table name")
 @click.option("--target", help="Target file path or table name")
 @click.option("--source-columns", help="Source columns as JSON")
@@ -628,7 +636,7 @@ def enrich_run(
 
 @enrich.command(name="plan")
 @click.option("-o", "--output", default="config.yaml", help="Output YAML file path", show_default=True)
-@click.option("--source-type", type=click.Choice(["csv", "duckdb", "bigquery"]), help="Data source type")
+@click.option("--source-type", type=click.Choice(AVAILABLE_SOURCE_TYPES), help="Data source type")
 @click.option("--source", help="Source file path or table name")
 @click.option("--target", help="Target file path or table name")
 @click.option("--source-columns", help="Source columns as JSON")
@@ -728,32 +736,65 @@ def enrich_suggest(intent: str, source_columns: str | None, output_json: bool):
         raise click.Abort() from None
 
 
-@enrich.command(name="deploy")
-@click.option("--system", type=click.Choice(["bigquery"]), required=True, help="Target system to deploy to")
+# Deploy command - only registered when not running as frozen executable (standalone CLI)
+# Standalone CLI users should use: pip install parallel-web-tools[snowflake|bigquery]
+@click.command(name="deploy")
+@click.option(
+    "--system", type=click.Choice(["bigquery", "snowflake"]), required=True, help="Target system to deploy to"
+)
 @click.option("--project", "-p", help="Cloud project ID (required for bigquery)")
-@click.option("--region", "-r", default="us-central1", show_default=True, help="Cloud region")
+@click.option("--region", "-r", default="us-central1", show_default=True, help="Cloud region (BigQuery)")
 @click.option("--api-key", "-k", help="Parallel API key (or use PARALLEL_API_KEY env var)")
 @click.option("--dataset", default="parallel_functions", show_default=True, help="Dataset name (BigQuery)")
-def enrich_deploy(system: str, project: str | None, region: str, api_key: str | None, dataset: str):
+@click.option("--account", help="Snowflake account identifier (e.g., abc12345.us-east-1)")
+@click.option("--user", "-u", help="Snowflake username")
+@click.option("--password", help="Snowflake password (or use SSO with --authenticator)")
+@click.option("--warehouse", "-w", default="COMPUTE_WH", show_default=True, help="Snowflake warehouse")
+@click.option("--authenticator", default="externalbrowser", show_default=True, help="Snowflake auth method")
+@click.option("--passcode", help="MFA passcode from authenticator app (use with --authenticator username_password_mfa)")
+@click.option("--role", default="ACCOUNTADMIN", show_default=True, help="Snowflake role for deployment")
+def enrich_deploy(
+    system: str,
+    project: str | None,
+    region: str,
+    api_key: str | None,
+    dataset: str,
+    account: str | None,
+    user: str | None,
+    password: str | None,
+    warehouse: str,
+    authenticator: str,
+    passcode: str | None,
+    role: str,
+):
     """Deploy Parallel enrichment to a cloud system."""
+    from parallel_web_tools.core.auth import get_api_key
+
+    # Validate required parameters FIRST (before triggering OAuth)
+    if system == "bigquery" and not project:
+        console.print("[bold red]Error: --project is required for BigQuery deployment.[/bold red]")
+        raise click.Abort()
+    if system == "snowflake":
+        if not account:
+            console.print("[bold red]Error: --account is required for Snowflake deployment.[/bold red]")
+            raise click.Abort()
+        if not user:
+            console.print("[bold red]Error: --user is required for Snowflake deployment.[/bold red]")
+            raise click.Abort()
+
+    # Now resolve API key (may trigger OAuth flow if needed)
+    if not api_key:
+        api_key = get_api_key()
+
     if system == "bigquery":
-        if not project:
-            console.print("[bold red]Error: --project is required for BigQuery deployment.[/bold red]")
-            raise click.Abort()
-
-        from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
-
-        if not api_key:
-            api_key = os.environ.get("PARALLEL_API_KEY")
-        if not api_key:
-            try:
-                api_key = get_api_key()
-            except Exception:
-                pass
-        if not api_key:
-            console.print("[bold red]Error: Parallel API key required[/bold red]")
-            console.print("  Use --api-key, PARALLEL_API_KEY env var, or run 'parallel-cli login'")
-            raise click.Abort()
+        assert project is not None  # Validated above
+        try:
+            from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
+        except ImportError:
+            console.print("[bold red]Error: BigQuery deployment is not available in the standalone CLI.[/bold red]")
+            console.print("\nInstall via pip: [cyan]pip install parallel-web-tools[/cyan]")
+            console.print("Also requires: gcloud CLI installed and authenticated")
+            raise click.Abort() from None
 
         console.print(f"[bold cyan]Deploying to BigQuery in {project}...[/bold cyan]\n")
 
@@ -771,6 +812,60 @@ def enrich_deploy(system: str, project: str | None, region: str, api_key: str | 
         except Exception as e:
             console.print(f"[bold red]Deployment failed: {e}[/bold red]")
             raise click.Abort() from None
+
+    elif system == "snowflake":
+        assert account is not None and user is not None  # Validated above
+        try:
+            from parallel_web_tools.integrations.snowflake import deploy_parallel_functions
+        except ImportError:
+            console.print("[bold red]Error: Snowflake deployment is not available in the standalone CLI.[/bold red]")
+            console.print("\nInstall via pip: [cyan]pip install parallel-web-tools[snowflake][/cyan]")
+            raise click.Abort() from None
+
+        console.print(f"[bold cyan]Deploying to Snowflake account {account}...[/bold cyan]\n")
+
+        try:
+            deploy_parallel_functions(
+                account=account,
+                user=user,
+                password=password,
+                warehouse=warehouse,
+                role=role,
+                parallel_api_key=api_key,
+                authenticator=authenticator if not password else None,
+                passcode=passcode,
+            )
+            console.print("\n[bold green]Deployment complete![/bold green]")
+            console.print("\n[cyan]Example query:[/cyan]")
+            console.print("""
+-- Basic usage (returns JSON with enriched fields and basis/citations)
+SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+    OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
+    ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
+) AS enriched_data;
+
+-- Parsing the JSON result into columns
+SELECT
+    data:ceo_name::STRING AS ceo_name,
+    data:founding_year::STRING AS founding_year,
+    data:brief_description::STRING AS description,
+    data:basis AS basis
+FROM (
+    SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+        OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
+        ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
+    ) AS data
+);
+""")
+        except Exception as e:
+            console.print(f"[bold red]Deployment failed: {e}[/bold red]")
+            raise click.Abort() from None
+
+
+# Only register deploy command when not running as frozen executable (PyInstaller)
+# Standalone CLI doesn't bundle deploy dependencies - use pip install instead
+if not getattr(sys, "frozen", False):
+    enrich.add_command(enrich_deploy)
 
 
 # =============================================================================

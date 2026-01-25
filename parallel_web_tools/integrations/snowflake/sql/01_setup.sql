@@ -56,13 +56,23 @@ CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION parallel_api_access_integration
     COMMENT = 'External access integration for Parallel API';
 
 -- =============================================================================
--- Step 4: Create Roles
+-- Step 4: Grant PyPI Repository Access
+-- =============================================================================
+-- Required for UDFs to use parallel-web-tools package from PyPI
+
+GRANT DATABASE ROLE SNOWFLAKE.PYPI_REPOSITORY_USER TO ROLE ACCOUNTADMIN;
+
+-- =============================================================================
+-- Step 5: Create Roles
 -- =============================================================================
 -- PARALLEL_DEVELOPER: Can create and modify UDFs
 -- PARALLEL_USER: Can execute UDFs
 
 CREATE ROLE IF NOT EXISTS PARALLEL_DEVELOPER;
 CREATE ROLE IF NOT EXISTS PARALLEL_USER;
+
+-- Grant PyPI access to developer role
+GRANT DATABASE ROLE SNOWFLAKE.PYPI_REPOSITORY_USER TO ROLE PARALLEL_DEVELOPER;
 
 -- Grant permissions to PARALLEL_DEVELOPER
 GRANT USAGE ON DATABASE PARALLEL_INTEGRATION TO ROLE PARALLEL_DEVELOPER;

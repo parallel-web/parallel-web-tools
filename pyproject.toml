@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-web-tools"
-version = "0.0.4"
+version = "0.0.5"
 description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -32,6 +32,11 @@ dependencies = [
     "pyarrow>=18.0.0",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0.0",
+    # CLI dependencies
+    "click>=8.1.0",
+    "questionary>=2.0.0",
+    "rich>=13.0.0",
+    "httpx>=0.25.0",
 ]
 
 [project.urls]
@@ -44,13 +49,6 @@ Issues = "https://github.com/parallel-web/parallel-web-tools/issues"
 parallel-cli = "parallel_web_tools.cli:main"
 
 [project.optional-dependencies]
-# CLI extras (interactive features)
-cli = [
-    "click>=8.1.0",
-    "questionary>=2.0.0",
-    "rich>=13.0.0",
-    "pyrefly>=0.49.0",
-]
 # Polars integration (already in main deps, this is for explicit install)
 polars = []  # polars>=1.37.0 is in main dependencies
 # DuckDB integration
@@ -74,7 +72,7 @@ spark = [
 ]
 # All features (default for CLI install)
 all = [
-    "parallel-web-tools[cli,polars,duckdb,snowflake,bigquery]",
+    "parallel-web-tools[polars,duckdb,snowflake,bigquery]",
 ]
 # Development
 dev = [
@@ -84,6 +82,7 @@ dev = [
     "pyinstaller>=6.0.0",
     "pre-commit>=4.0.0",
     "ruff>=0.14.0",
+    "pyrefly>=0.49.0",
 ]
 
 [tool.hatch.build.targets.wheel]
