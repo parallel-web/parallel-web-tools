@@ -311,6 +311,23 @@ class TestExtractCommand:
         pass
 
 
+class TestFetchCommand:
+    """Tests for the fetch command (alias for extract)."""
+
+    def test_fetch_help(self, runner):
+        """Should show fetch help (same as extract)."""
+        result = runner.invoke(main, ["fetch", "--help"])
+        assert result.exit_code == 0
+        assert "Extract content" in result.output
+        assert "--json" in result.output
+
+    def test_fetch_in_main_help(self, runner):
+        """Should show fetch as a command in main help."""
+        result = runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "fetch" in result.output
+
+
 class TestEnrichGroup:
     """Tests for the enrich command group."""
 

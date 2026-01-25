@@ -1122,7 +1122,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "parallel-web", specifier = ">=0.4.0" },
     { name = "parallel-web-tools", extras = ["all", "spark"], marker = "extra == 'dev'" },
-    { name = "parallel-web-tools", extras = ["cli", "polars", "duckdb", "snowflake", "bigquery"], marker = "extra == 'all'" },
+    { name = "parallel-web-tools", extras = ["polars", "duckdb", "snowflake", "bigquery"], marker = "extra == 'all'" },
     { name = "polars", specifier = ">=1.37.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pyarrow", specifier = ">=18.0.0" },
@@ -1140,7 +1140,7 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'bigquery'", specifier = ">=2.0.0" },
     { name = "sqlalchemy-bigquery", marker = "extra == 'bigquery'", specifier = ">=1.11.0" },
 ]
-provides-extras = ["cli", "polars", "duckdb", "snowflake", "bigquery", "bigquery-native", "spark", "all", "dev"]
+provides-extras = ["polars", "duckdb", "snowflake", "bigquery", "bigquery-native", "spark", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ipykernel", specifier = ">=7.1.0" }]
