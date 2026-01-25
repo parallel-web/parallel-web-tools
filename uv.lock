@@ -1060,21 +1060,21 @@ name = "parallel-web-tools"
 version = "0.0.5"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
+    { name = "httpx" },
     { name = "pandas" },
     { name = "parallel-web" },
     { name = "polars" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "questionary" },
+    { name = "rich" },
 ]
 
 [package.optional-dependencies]
 all = [
-    { name = "click" },
     { name = "duckdb" },
-    { name = "pyrefly" },
-    { name = "questionary" },
-    { name = "rich" },
     { name = "snowflake-connector-python" },
     { name = "sqlalchemy" },
     { name = "sqlalchemy-bigquery" },
@@ -1083,14 +1083,7 @@ bigquery = [
     { name = "sqlalchemy" },
     { name = "sqlalchemy-bigquery" },
 ]
-cli = [
-    { name = "click" },
-    { name = "pyrefly" },
-    { name = "questionary" },
-    { name = "rich" },
-]
 dev = [
-    { name = "click" },
     { name = "duckdb" },
     { name = "httpx" },
     { name = "pre-commit" },
@@ -1099,8 +1092,6 @@ dev = [
     { name = "pyspark" },
     { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "questionary" },
-    { name = "rich" },
     { name = "ruff" },
     { name = "snowflake-connector-python" },
     { name = "sqlalchemy" },
@@ -1124,8 +1115,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", marker = "extra == 'cli'", specifier = ">=8.1.0" },
+    { name = "click", specifier = ">=8.1.0" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.25.0" },
     { name = "httpx", marker = "extra == 'spark'", specifier = ">=0.25.0" },
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "parallel-web", specifier = ">=0.4.0" },
@@ -1135,14 +1127,14 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pyarrow", specifier = ">=18.0.0" },
     { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.0.0" },
-    { name = "pyrefly", marker = "extra == 'cli'", specifier = ">=0.49.0" },
+    { name = "pyrefly", marker = "extra == 'dev'", specifier = ">=0.49.0" },
     { name = "pyspark", marker = "extra == 'spark'", specifier = ">=3.4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "questionary", marker = "extra == 'cli'", specifier = ">=2.0.0" },
-    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.0.0" },
+    { name = "questionary", specifier = ">=2.0.0" },
+    { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.0" },
     { name = "snowflake-connector-python", marker = "extra == 'snowflake'", specifier = ">=3.0.0" },
     { name = "sqlalchemy", marker = "extra == 'bigquery'", specifier = ">=2.0.0" },
