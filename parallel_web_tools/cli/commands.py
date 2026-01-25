@@ -1073,19 +1073,53 @@ def _output_research_result(
     output_file: str | None,
     output_json: bool,
 ):
-    """Output research result to console and/or file as JSON."""
+    """Output research result to console and/or file as JSON.
+
+    When saving to a file, the 'content' field is extracted and saved
+    as a separate markdown file alongside the JSON.
+    """
+    output = result.get("output", {})
     output_data = {
         "run_id": result.get("run_id"),
         "result_url": result.get("result_url"),
         "status": result.get("status"),
-        "output": result.get("output", {}),
+        "output": output.copy() if isinstance(output, dict) else output,
     }
 
     # Save to file if requested
     if output_file:
+        # Extract content to a separate markdown file
+        content_file = None
+        if isinstance(output, dict) and "content" in output:
+            content = output["content"]
+            # Handle both string content and {"text": "..."} structure
+            if isinstance(content, dict) and "text" in content:
+                content_text = content["text"]
+            elif isinstance(content, str):
+                content_text = content
+            else:
+                content_text = None
+
+            if content_text:
+                # Create markdown file path from JSON file path
+                from pathlib import Path
+
+                json_path = Path(output_file)
+                md_path = json_path.with_suffix(".md")
+                content_file = md_path.name
+
+                with open(md_path, "w") as f:
+                    f.write(content_text)
+                console.print(f"[green]Content saved to:[/green] {md_path}")
+
+                # Replace content in JSON with reference to markdown file
+                output_data["output"] = output_data["output"].copy()
+                output_data["output"]["content_file"] = content_file
+                del output_data["output"]["content"]
+
         with open(output_file, "w") as f:
             json.dump(output_data, f, indent=2, default=str)
-        console.print(f"\n[green]Results saved to:[/green] {output_file}")
+        console.print(f"[green]Results saved to:[/green] {output_file}")
 
     # Output to console
     if output_json:
