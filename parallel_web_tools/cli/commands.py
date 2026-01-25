@@ -785,7 +785,8 @@ def enrich_deploy(
             from parallel_web_tools.integrations.bigquery import deploy_bigquery_integration
         except ImportError:
             console.print("[bold red]Error: BigQuery deployment is not available in the standalone CLI.[/bold red]")
-            console.print("\nInstall via pip: [cyan]pip install parallel-web-tools[bigquery][/cyan]")
+            console.print("\nInstall via pip: [cyan]pip install parallel-web-tools[/cyan]")
+            console.print("Also requires: gcloud CLI installed and authenticated")
             raise click.Abort() from None
 
         console.print(f"[bold cyan]Deploying to BigQuery in {project}...[/bold cyan]\n")
