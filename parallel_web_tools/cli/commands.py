@@ -4,6 +4,7 @@ import csv
 import json
 import logging
 import os
+import sys
 import tempfile
 from typing import Any
 
@@ -728,7 +729,9 @@ def enrich_suggest(intent: str, source_columns: str | None, output_json: bool):
         raise click.Abort() from None
 
 
-@enrich.command(name="deploy")
+# Deploy command - only registered when not running as frozen executable (standalone CLI)
+# Standalone CLI users should use: pip install parallel-web-tools[snowflake|bigquery]
+@click.command(name="deploy")
 @click.option(
     "--system", type=click.Choice(["bigquery", "snowflake"]), required=True, help="Target system to deploy to"
 )
@@ -849,6 +852,12 @@ FROM (
         except Exception as e:
             console.print(f"[bold red]Deployment failed: {e}[/bold red]")
             raise click.Abort() from None
+
+
+# Only register deploy command when not running as frozen executable (PyInstaller)
+# Standalone CLI doesn't bundle deploy dependencies - use pip install instead
+if not getattr(sys, "frozen", False):
+    enrich.add_command(enrich_deploy)
 
 
 # =============================================================================
