@@ -11,6 +11,8 @@ from parallel_web_tools.cli.commands import (
     build_config_from_args,
     main,
     parse_columns,
+    parse_comma_separated,
+    parse_inline_data,
     suggest_from_intent,
 )
 
@@ -19,6 +21,45 @@ from parallel_web_tools.cli.commands import (
 def runner():
     """Create a CLI test runner."""
     return CliRunner()
+
+
+class TestParseCommaSeparated:
+    """Tests for parse_comma_separated helper function."""
+
+    def test_single_value(self):
+        """Should handle single value."""
+        result = parse_comma_separated(("example.com",))
+        assert result == ["example.com"]
+
+    def test_comma_separated(self):
+        """Should split comma-separated values."""
+        result = parse_comma_separated(("google.com,github.com",))
+        assert result == ["google.com", "github.com"]
+
+    def test_repeated_flags(self):
+        """Should handle repeated flags."""
+        result = parse_comma_separated(("google.com", "github.com"))
+        assert result == ["google.com", "github.com"]
+
+    def test_mixed_usage(self):
+        """Should handle mix of comma-separated and repeated."""
+        result = parse_comma_separated(("google.com,github.com", "twitter.com"))
+        assert result == ["google.com", "github.com", "twitter.com"]
+
+    def test_whitespace_handling(self):
+        """Should trim whitespace around values."""
+        result = parse_comma_separated(("google.com , github.com",))
+        assert result == ["google.com", "github.com"]
+
+    def test_empty_tuple(self):
+        """Should return empty list for empty tuple."""
+        result = parse_comma_separated(())
+        assert result == []
+
+    def test_skips_empty_strings(self):
+        """Should skip empty strings from trailing commas."""
+        result = parse_comma_separated(("google.com,",))
+        assert result == ["google.com"]
 
 
 class TestParseColumns:
@@ -94,6 +135,78 @@ class TestBuildConfigFromArgs:
         assert len(config["enriched_columns"]) == 1
 
 
+class TestParseInlineData:
+    """Tests for parse_inline_data helper function."""
+
+    def test_parse_valid_data(self):
+        """Should parse valid JSON array and create temp CSV."""
+        data = '[{"company": "Google", "industry": "Tech"}, {"company": "Apple", "industry": "Tech"}]'
+        csv_path, source_columns = parse_inline_data(data)
+
+        try:
+            # Verify temp file was created
+            assert os.path.exists(csv_path)
+            assert csv_path.endswith(".csv")
+
+            # Verify source columns were inferred
+            assert len(source_columns) == 2
+            col_names = [c["name"] for c in source_columns]
+            assert "company" in col_names
+            assert "industry" in col_names
+
+            # Verify CSV content
+            import csv as csv_module
+
+            with open(csv_path) as f:
+                reader = csv_module.DictReader(f)
+                rows = list(reader)
+                assert len(rows) == 2
+                assert rows[0]["company"] == "Google"
+                assert rows[1]["company"] == "Apple"
+        finally:
+            os.unlink(csv_path)
+
+    def test_parse_single_item(self):
+        """Should work with a single item array."""
+        data = '[{"name": "Test"}]'
+        csv_path, source_columns = parse_inline_data(data)
+
+        try:
+            assert os.path.exists(csv_path)
+            assert len(source_columns) == 1
+            assert source_columns[0]["name"] == "name"
+        finally:
+            os.unlink(csv_path)
+
+    def test_parse_invalid_json(self):
+        """Should raise BadParameter for invalid JSON."""
+        from click import BadParameter
+
+        with pytest.raises(BadParameter, match="Invalid JSON"):
+            parse_inline_data("not valid json")
+
+    def test_parse_not_array(self):
+        """Should raise BadParameter for non-array JSON."""
+        from click import BadParameter
+
+        with pytest.raises(BadParameter, match="must be a JSON array"):
+            parse_inline_data('{"name": "test"}')
+
+    def test_parse_empty_array(self):
+        """Should raise BadParameter for empty array."""
+        from click import BadParameter
+
+        with pytest.raises(BadParameter, match="cannot be empty"):
+            parse_inline_data("[]")
+
+    def test_parse_not_objects(self):
+        """Should raise BadParameter for array of non-objects."""
+        from click import BadParameter
+
+        with pytest.raises(BadParameter, match="array of objects"):
+            parse_inline_data('["a", "b", "c"]')
+
+
 class TestMainCLI:
     """Tests for the main CLI group."""
 
@@ -159,6 +272,14 @@ class TestSearchCommand:
         assert result.exit_code == 0
         assert "Search the web" in result.output
         assert "--json" in result.output
+
+    def test_search_help_shows_comma_separated(self, runner):
+        """Should mention comma-separated in domain options help."""
+        result = runner.invoke(main, ["search", "--help"])
+        assert result.exit_code == 0
+        assert "--include-domains" in result.output
+        assert "--exclude-domains" in result.output
+        assert "comma-separated" in result.output
 
     def test_search_no_args(self, runner):
         """Should error without objective or query."""
@@ -250,6 +371,71 @@ class TestEnrichRunCommand:
         )
         assert result.exit_code != 0
         assert "either" in result.output.lower() or "not both" in result.output.lower()
+
+    def test_enrich_run_help_shows_data_option(self, runner):
+        """Should show --data option in help."""
+        result = runner.invoke(main, ["enrich", "run", "--help"])
+        assert result.exit_code == 0
+        assert "--data" in result.output
+        assert "Inline JSON data" in result.output
+
+    def test_enrich_run_data_and_source_error(self, runner):
+        """Should error when both --data and --source provided."""
+        result = runner.invoke(
+            main,
+            [
+                "enrich",
+                "run",
+                "--data",
+                '[{"company": "Google"}]',
+                "--source",
+                "input.csv",
+                "--target",
+                "output.csv",
+                "--intent",
+                "Find CEO",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "data" in result.output.lower() and "source" in result.output.lower()
+
+    def test_enrich_run_data_with_non_csv_error(self, runner):
+        """Should error when --data used with non-csv source type."""
+        result = runner.invoke(
+            main,
+            [
+                "enrich",
+                "run",
+                "--data",
+                '[{"company": "Google"}]',
+                "--source-type",
+                "duckdb",
+                "--target",
+                "output.csv",
+                "--intent",
+                "Find CEO",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "csv" in result.output.lower()
+
+    def test_enrich_run_data_invalid_json(self, runner):
+        """Should error with invalid JSON data."""
+        result = runner.invoke(
+            main,
+            [
+                "enrich",
+                "run",
+                "--data",
+                "not valid json",
+                "--target",
+                "output.csv",
+                "--intent",
+                "Find CEO",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "invalid" in result.output.lower() or "json" in result.output.lower()
 
 
 class TestEnrichPlanCommand:
