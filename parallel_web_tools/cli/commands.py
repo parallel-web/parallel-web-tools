@@ -1,8 +1,10 @@
 """CLI commands for Parallel."""
 
+import csv
 import json
 import logging
 import os
+import tempfile
 from typing import Any
 
 import click
@@ -130,6 +132,51 @@ def build_config_from_args(
         "enriched_columns": enriched_columns,
         "processor": processor,
     }
+
+
+def parse_inline_data(data_json: str) -> tuple[str, list[dict[str, str]]]:
+    """Parse inline JSON data and write to a temporary CSV file.
+
+    Args:
+        data_json: JSON string containing array of objects
+
+    Returns:
+        Tuple of (temp_csv_path, inferred_source_columns)
+
+    Raises:
+        click.BadParameter: If JSON is invalid or not an array of objects
+    """
+    try:
+        data = json.loads(data_json)
+    except json.JSONDecodeError as e:
+        raise click.BadParameter(f"Invalid JSON data: {e}") from e
+
+    if not isinstance(data, list):
+        raise click.BadParameter("Data must be a JSON array")
+
+    if len(data) == 0:
+        raise click.BadParameter("Data array cannot be empty")
+
+    if not isinstance(data[0], dict):
+        raise click.BadParameter("Data must be an array of objects")
+
+    # Infer columns from the first row
+    columns = list(data[0].keys())
+    if not columns:
+        raise click.BadParameter("Data objects must have at least one field")
+
+    # Create source_columns with inferred descriptions
+    source_columns = [{"name": col, "description": f"The {col} field"} for col in columns]
+
+    # Write to a temporary CSV file
+    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="")
+    writer = csv.DictWriter(temp_file, fieldnames=columns)
+    writer.writeheader()
+    for row in data:
+        writer.writerow(row)
+    temp_file.close()
+
+    return temp_file.name, source_columns
 
 
 def suggest_from_intent(
@@ -450,6 +497,7 @@ def enrich():
 @click.option("--enriched-columns", help="Enriched columns as JSON")
 @click.option("--intent", help="Natural language description (AI suggests columns)")
 @click.option("--processor", type=click.Choice(AVAILABLE_PROCESSORS), help="Processor to use")
+@click.option("--data", "inline_data", help="Inline JSON data array (alternative to --source)")
 def enrich_run(
     config_file: str | None,
     source_type: str | None,
@@ -459,23 +507,60 @@ def enrich_run(
     enriched_columns: str | None,
     intent: str | None,
     processor: str | None,
+    inline_data: str | None,
 ):
-    """Run data enrichment from YAML config or CLI arguments."""
-    base_args = [source_type, source, target, source_columns]
-    has_cli_args = any(arg is not None for arg in base_args) or enriched_columns or intent
+    """Run data enrichment from YAML config or CLI arguments.
 
-    if config_file and has_cli_args:
-        console.print("[bold red]Error: Provide either a config file OR CLI arguments, not both.[/bold red]")
-        raise click.Abort()
+    You can provide data in three ways:
 
-    if not config_file and not has_cli_args:
-        console.print("[bold red]Error: Provide a config file or CLI arguments.[/bold red]")
-        raise click.Abort()
+    \b
+    1. YAML config file:
+       parallel-cli enrich run config.yaml
 
-    if has_cli_args:
-        validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
+    \b
+    2. CLI arguments with source file:
+       parallel-cli enrich run --source-type csv --source data.csv ...
+
+    \b
+    3. Inline JSON data (no CSV file needed):
+       parallel-cli enrich run --data '[{"company": "Google"}, {"company": "Apple"}]' \\
+           --target output.csv --intent "Find the CEO"
+    """
+    temp_csv_path: str | None = None
 
     try:
+        # Handle inline data - creates a temp CSV and infers source columns
+        if inline_data:
+            if source:
+                console.print("[bold red]Error: Use --data OR --source, not both.[/bold red]")
+                raise click.Abort()
+            if source_type and source_type != "csv":
+                console.print("[bold red]Error: --data only works with CSV output (--source-type csv).[/bold red]")
+                raise click.Abort()
+
+            temp_csv_path, inferred_cols = parse_inline_data(inline_data)
+            source = temp_csv_path
+            source_type = "csv"
+
+            # Use inferred columns if not explicitly provided
+            if not source_columns:
+                source_columns = json.dumps(inferred_cols)
+                console.print(f"[dim]Inferred {len(inferred_cols)} source column(s) from data[/dim]")
+
+        base_args = [source_type, source, target, source_columns]
+        has_cli_args = any(arg is not None for arg in base_args) or enriched_columns or intent
+
+        if config_file and has_cli_args:
+            console.print("[bold red]Error: Provide either a config file OR CLI arguments, not both.[/bold red]")
+            raise click.Abort()
+
+        if not config_file and not has_cli_args:
+            console.print("[bold red]Error: Provide a config file or CLI arguments.[/bold red]")
+            raise click.Abort()
+
+        if has_cli_args:
+            validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
+
         if config_file:
             console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
             run_enrichment(config_file)
@@ -519,6 +604,10 @@ def enrich_run(
     except Exception as e:
         console.print(f"[bold red]Error during enrichment: {e}[/bold red]")
         raise
+    finally:
+        # Clean up temp file if we created one
+        if temp_csv_path and os.path.exists(temp_csv_path):
+            os.unlink(temp_csv_path)
 
 
 @enrich.command(name="plan")
