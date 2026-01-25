@@ -501,6 +501,10 @@ def extract(
         raise click.Abort() from None
 
 
+# Add fetch as an alias for extract
+main.add_command(extract, name="fetch")
+
+
 # =============================================================================
 # Enrich Command Group
 # =============================================================================
