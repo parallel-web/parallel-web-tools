@@ -370,14 +370,221 @@ class TestEnrichTable:
         assert df["ceo_name"].iloc[0] == "Sundar Pichai"
 
 
+class TestEnrichAllAsync:
+    """Tests for the _enrich_all_async function."""
+
+    def test_concurrent_processing(self):
+        """Should process all items concurrently using asyncio.gather."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_all_async
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id=f"run_{input['company']}")
+
+        async def mock_result(run_id, api_timeout):
+            company = run_id.replace("run_", "")
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            items = [
+                {"company": "Google"},
+                {"company": "Microsoft"},
+                {"company": "Apple"},
+            ]
+
+            results = asyncio.run(
+                _enrich_all_async(
+                    items=items,
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="lite-fast",
+                    timeout=300,
+                )
+            )
+
+        assert len(results) == 3
+        assert json.loads(results[0])["ceo_name"] == "CEO of Google"
+        assert json.loads(results[1])["ceo_name"] == "CEO of Microsoft"
+        assert json.loads(results[2])["ceo_name"] == "CEO of Apple"
+
+    def test_error_handling_per_item(self):
+        """Should handle errors for individual items without failing others."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_all_async
+
+        async def mock_create(input, task_spec, processor):
+            if input.get("company") == "BadCompany":
+                raise ValueError("Invalid company")
+            return SimpleNamespace(run_id=f"run_{input['company']}")
+
+        async def mock_result(run_id, api_timeout):
+            company = run_id.replace("run_", "")
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            items = [
+                {"company": "Google"},
+                {"company": "BadCompany"},
+                {"company": "Apple"},
+            ]
+
+            results = asyncio.run(
+                _enrich_all_async(
+                    items=items,
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="lite-fast",
+                    timeout=300,
+                )
+            )
+
+        assert len(results) == 3
+        assert json.loads(results[0])["ceo_name"] == "CEO of Google"
+        assert "error" in json.loads(results[1])
+        assert "Invalid company" in json.loads(results[1])["error"]
+        assert json.loads(results[2])["ceo_name"] == "CEO of Apple"
+
+    def test_handles_non_dict_content(self):
+        """Should wrap non-dict content in a result key."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_all_async
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(output=SimpleNamespace(content="plain text response"))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            results = asyncio.run(
+                _enrich_all_async(
+                    items=[{"company": "Google"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="lite-fast",
+                    timeout=300,
+                )
+            )
+
+        result = json.loads(results[0])
+        assert result["result"] == "plain text response"
+
+
+class TestEnrichBatchSync:
+    """Tests for the _enrich_batch_sync function."""
+
+    def test_parses_json_inputs(self):
+        """Should parse JSON input strings correctly."""
+        from types import SimpleNamespace
+
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_batch_sync
+
+        captured_items = []
+
+        async def mock_create(input, task_spec, processor):
+            captured_items.append(input)
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": "Test"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            _enrich_batch_sync(
+                input_jsons=['{"company": "Google"}', '{"company": "Apple"}'],
+                output_columns_json='["CEO name"]',
+                api_key="test-key",
+            )
+
+        assert len(captured_items) == 2
+        assert captured_items[0] == {"company": "Google"}
+        assert captured_items[1] == {"company": "Apple"}
+
+    def test_handles_invalid_input_json(self):
+        """Should return error for invalid input JSON."""
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_batch_sync
+
+        results = _enrich_batch_sync(
+            input_jsons=["invalid json", '{"company": "Google"}'],
+            output_columns_json='["CEO name"]',
+            api_key="test-key",
+        )
+
+        assert len(results) == 2
+        error_result = json.loads(results[0])
+        assert "error" in error_result
+        assert "JSON" in error_result["error"]
+
+    def test_handles_invalid_output_columns_json(self):
+        """Should return error for invalid output columns JSON."""
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_batch_sync
+
+        results = _enrich_batch_sync(
+            input_jsons=['{"company": "Google"}'],
+            output_columns_json="invalid json",
+            api_key="test-key",
+        )
+
+        assert len(results) == 1
+        error_result = json.loads(results[0])
+        assert "error" in error_result
+        assert "JSON" in error_result["error"]
+
+    def test_handles_non_array_output_columns(self):
+        """Should return error when output_columns is not an array."""
+        from parallel_web_tools.integrations.duckdb.udf import _enrich_batch_sync
+
+        results = _enrich_batch_sync(
+            input_jsons=['{"company": "Google"}'],
+            output_columns_json='{"not": "an array"}',
+            api_key="test-key",
+        )
+
+        assert len(results) == 1
+        error_result = json.loads(results[0])
+        assert "error" in error_result
+        assert "array" in error_result["error"]
+
+
 class TestRegisterParallelFunctions:
     """Tests for register_parallel_functions function."""
 
     def test_registers_function(self, conn):
         """Should register parallel_enrich function."""
-        with mock.patch("parallel_web_tools.integrations.duckdb.udf.enrich_single") as mock_single:
-            mock_single.return_value = {"ceo_name": "Test"}
+        from types import SimpleNamespace
 
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": "Test"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
             register_parallel_functions(conn, api_key="test-key")
 
             # Function should be callable
@@ -392,10 +599,27 @@ class TestRegisterParallelFunctions:
             assert data["ceo_name"] == "Test"
 
     def test_passes_parameters(self, conn):
-        """Should pass parameters to enrich_single."""
-        with mock.patch("parallel_web_tools.integrations.duckdb.udf.enrich_single") as mock_single:
-            mock_single.return_value = {"ceo_name": "Test"}
+        """Should pass parameters to async client."""
+        from types import SimpleNamespace
 
+        captured_processor = None
+        captured_timeout = None
+
+        async def mock_create(input, task_spec, processor):
+            nonlocal captured_processor
+            captured_processor = processor
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            nonlocal captured_timeout
+            captured_timeout = api_timeout
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": "Test"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
             register_parallel_functions(
                 conn,
                 api_key="my-key",
@@ -407,14 +631,12 @@ class TestRegisterParallelFunctions:
                 SELECT parallel_enrich('{"company": "Google"}', '["CEO name"]')
             """).fetchone()
 
-        call_kwargs = mock_single.call_args.kwargs
-        assert call_kwargs["api_key"] == "my-key"
-        assert call_kwargs["processor"] == "pro-fast"
-        assert call_kwargs["timeout"] == 500
+        assert captured_processor == "pro-fast"
+        assert captured_timeout == 500
 
     def test_handles_json_error(self, conn):
         """Should return error for invalid JSON input."""
-        register_parallel_functions(conn)
+        register_parallel_functions(conn, api_key="test-key")
 
         result = conn.execute("""
             SELECT parallel_enrich('invalid json', '["CEO name"]')
@@ -426,10 +648,15 @@ class TestRegisterParallelFunctions:
 
     def test_handles_enrichment_error(self, conn):
         """Should return error when enrichment fails."""
-        with mock.patch("parallel_web_tools.integrations.duckdb.udf.enrich_single") as mock_single:
-            mock_single.side_effect = Exception("API error")
 
-            register_parallel_functions(conn)
+        async def mock_create(input, task_spec, processor):
+            raise Exception("API error")
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            register_parallel_functions(conn, api_key="test-key")
 
             result = conn.execute("""
                 SELECT parallel_enrich('{"company": "Google"}', '["CEO name"]')
@@ -439,14 +666,69 @@ class TestRegisterParallelFunctions:
             assert "error" in data
             assert "API error" in data["error"]
 
+    def test_vectorized_processing(self, conn):
+        """Should process multiple rows concurrently with vectorized UDF."""
+        from types import SimpleNamespace
+
+        call_count = 0
+
+        async def mock_create(input, task_spec, processor):
+            nonlocal call_count
+            call_count += 1
+            return SimpleNamespace(run_id=f"run_{input.get('company', call_count)}")
+
+        async def mock_result(run_id, api_timeout):
+            company = run_id.replace("run_", "")
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            register_parallel_functions(conn, api_key="test-key")
+
+            # Create a table with multiple rows
+            conn.execute("""
+                CREATE TABLE companies AS SELECT * FROM (VALUES
+                    ('Google'),
+                    ('Microsoft'),
+                    ('Apple')
+                ) AS t(company)
+            """)
+
+            results = conn.execute("""
+                SELECT parallel_enrich(
+                    json_object('company', company),
+                    '["CEO name"]'
+                ) as enriched
+                FROM companies
+            """).fetchall()
+
+        assert len(results) == 3
+        # All 3 rows should have been processed
+        assert call_count == 3
+
 
 class TestUnregisterParallelFunctions:
     """Tests for unregister_parallel_functions function."""
 
     def test_unregisters_function(self, conn):
         """Should unregister the function."""
-        with mock.patch("parallel_web_tools.integrations.duckdb.udf.enrich_single"):
-            register_parallel_functions(conn)
+        from types import SimpleNamespace
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(output=SimpleNamespace(content={"result": "test"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            register_parallel_functions(conn, api_key="test-key")
             unregister_parallel_functions(conn)
 
         # Function should no longer exist

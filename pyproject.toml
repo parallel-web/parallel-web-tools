@@ -106,6 +106,7 @@ project-includes = [
 project-excludes = [
     "**/integrations/bigquery/cloud_function/**",  # Separate deployment with flask, functions_framework
     "**/integrations/spark/**",  # PySpark type stubs are incomplete (pandas_udf overloads)
+    "**/integrations/duckdb/udf.py",  # DuckDB UDF uses type="arrow" not in type stubs
     "scripts/runtime_hook_ssl.py",  # PyInstaller runtime hook with sys._MEIPASS
     "notebooks/**",  # Jupyter notebooks with Databricks display()
     "examples/**",  # Example scripts
