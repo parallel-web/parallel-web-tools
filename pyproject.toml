@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-web-tools"
-version = "0.0.5"
+version = "0.0.6"
 description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -105,6 +105,7 @@ project-includes = [
 # Exclude files that have external dependencies not in the main project
 project-excludes = [
     "**/integrations/bigquery/cloud_function/**",  # Separate deployment with flask, functions_framework
+    "**/integrations/spark/**",  # PySpark type stubs are incomplete (pandas_udf overloads)
     "scripts/runtime_hook_ssl.py",  # PyInstaller runtime hook with sys._MEIPASS
     "notebooks/**",  # Jupyter notebooks with Databricks display()
     "examples/**",  # Example scripts
