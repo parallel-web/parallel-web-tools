@@ -1075,6 +1075,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "duckdb" },
+    { name = "nest-asyncio" },
     { name = "snowflake-connector-python" },
     { name = "sqlalchemy" },
     { name = "sqlalchemy-bigquery" },
@@ -1086,6 +1087,7 @@ bigquery = [
 dev = [
     { name = "duckdb" },
     { name = "httpx" },
+    { name = "nest-asyncio" },
     { name = "pre-commit" },
     { name = "pyinstaller" },
     { name = "pyrefly" },
@@ -1099,6 +1101,7 @@ dev = [
 ]
 duckdb = [
     { name = "duckdb" },
+    { name = "nest-asyncio" },
 ]
 snowflake = [
     { name = "snowflake-connector-python" },
@@ -1119,6 +1122,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "httpx", marker = "extra == 'spark'", specifier = ">=0.25.0" },
+    { name = "nest-asyncio", marker = "extra == 'duckdb'", specifier = ">=1.6.0" },
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "parallel-web", specifier = ">=0.4.0" },
     { name = "parallel-web-tools", extras = ["all", "spark"], marker = "extra == 'dev'" },

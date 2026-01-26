@@ -52,7 +52,7 @@ parallel-cli = "parallel_web_tools.cli:main"
 # Polars integration (already in main deps, this is for explicit install)
 polars = []  # polars>=1.37.0 is in main dependencies
 # DuckDB integration
-duckdb = ["duckdb>=1.0.0"]
+duckdb = ["duckdb>=1.0.0", "nest-asyncio>=1.6.0"]
 # Snowflake integration
 snowflake = [
     "snowflake-connector-python>=3.0.0",
@@ -106,6 +106,7 @@ project-includes = [
 project-excludes = [
     "**/integrations/bigquery/cloud_function/**",  # Separate deployment with flask, functions_framework
     "**/integrations/spark/**",  # PySpark type stubs are incomplete (pandas_udf overloads)
+    "**/integrations/duckdb/udf.py",  # DuckDB UDF uses type="arrow" not in type stubs
     "scripts/runtime_hook_ssl.py",  # PyInstaller runtime hook with sys._MEIPASS
     "notebooks/**",  # Jupyter notebooks with Databricks display()
     "examples/**",  # Example scripts
