@@ -52,7 +52,7 @@ parallel-cli = "parallel_web_tools.cli:main"
 # Polars integration (already in main deps, this is for explicit install)
 polars = []  # polars>=1.37.0 is in main dependencies
 # DuckDB integration
-duckdb = ["duckdb>=1.0.0"]
+duckdb = ["duckdb>=1.0.0", "nest-asyncio>=1.6.0"]
 # Snowflake integration
 snowflake = [
     "snowflake-connector-python>=3.0.0",

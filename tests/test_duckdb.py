@@ -709,6 +709,39 @@ class TestRegisterParallelFunctions:
         # All 3 rows should have been processed
         assert call_count == 3
 
+    def test_works_in_nested_event_loop(self, conn):
+        """Should work when called from within an existing event loop (e.g., Jupyter)."""
+        import asyncio
+        from types import SimpleNamespace
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": "Test CEO"}))
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        async def run_in_event_loop():
+            """Simulate being inside an event loop like Jupyter."""
+            with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+                register_parallel_functions(conn, api_key="test-key")
+
+                result = conn.execute("""
+                    SELECT parallel_enrich(
+                        '{"company_name": "Google"}',
+                        '["CEO name"]'
+                    )
+                """).fetchone()[0]
+
+                return json.loads(result)
+
+        # Run inside an event loop to simulate Jupyter environment
+        result = asyncio.run(run_in_event_loop())
+        assert result["ceo_name"] == "Test CEO"
+
 
 class TestUnregisterParallelFunctions:
     """Tests for unregister_parallel_functions function."""

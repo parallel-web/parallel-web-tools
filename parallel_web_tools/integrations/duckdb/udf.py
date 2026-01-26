@@ -133,8 +133,23 @@ def _enrich_batch_sync(
         # All inputs had parse errors
         return [parse_errors.get(i, json.dumps({"error": "Unknown error"})) for i in range(len(input_jsons))]
 
-    # Run async enrichment
-    results = asyncio.run(_enrich_all_async(valid_items, output_columns, api_key, processor, timeout))
+    # Run async enrichment - handle both standalone and nested event loop cases (e.g., Jupyter)
+    try:
+        # Check if there's already a running event loop
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        # We're inside an existing event loop (e.g., Jupyter notebook)
+        # Use nest_asyncio to allow nested event loops
+        import nest_asyncio
+
+        nest_asyncio.apply()
+        results = asyncio.run(_enrich_all_async(valid_items, output_columns, api_key, processor, timeout))
+    else:
+        # No existing event loop, use standard asyncio.run
+        results = asyncio.run(_enrich_all_async(valid_items, output_columns, api_key, processor, timeout))
 
     # Map results back to original positions
     output: list[str] = [""] * len(input_jsons)
