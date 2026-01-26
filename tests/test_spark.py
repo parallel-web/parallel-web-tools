@@ -260,6 +260,134 @@ class TestEnrichAllAsync:
         result = json.loads(results[0])
         assert result["result"] == "plain text response"
 
+    def test_include_basis_adds_citations(self):
+        """Should include _basis field when include_basis=True."""
+        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(
+                output=SimpleNamespace(
+                    content={"ceo_name": "Sundar Pichai"},
+                    basis=[
+                        SimpleNamespace(
+                            field="ceo_name",
+                            citations=[
+                                SimpleNamespace(
+                                    url="https://example.com/source",
+                                    excerpts=["Sundar Pichai is the CEO"],
+                                )
+                            ],
+                            reasoning="Found in Wikipedia article",
+                            confidence="high",
+                        )
+                    ],
+                )
+            )
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            results = asyncio.run(
+                _enrich_all_async(
+                    items=[{"company": "Google"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="lite-fast",
+                    timeout=300,
+                    include_basis=True,
+                )
+            )
+
+        result = json.loads(results[0])
+        assert result["ceo_name"] == "Sundar Pichai"
+        assert "_basis" in result
+        assert len(result["_basis"]) == 1
+        assert result["_basis"][0]["field"] == "ceo_name"
+        assert result["_basis"][0]["citations"][0]["url"] == "https://example.com/source"
+        assert result["_basis"][0]["reasoning"] == "Found in Wikipedia article"
+        assert result["_basis"][0]["confidence"] == "high"
+
+    def test_include_basis_false_excludes_citations(self):
+        """Should not include _basis field when include_basis=False."""
+        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(
+                output=SimpleNamespace(
+                    content={"ceo_name": "Sundar Pichai"},
+                    basis=[
+                        SimpleNamespace(
+                            field="ceo_name",
+                            citations=[SimpleNamespace(url="https://example.com", excerpts=[])],
+                        )
+                    ],
+                )
+            )
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            results = asyncio.run(
+                _enrich_all_async(
+                    items=[{"company": "Google"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="lite-fast",
+                    timeout=300,
+                    include_basis=False,
+                )
+            )
+
+        result = json.loads(results[0])
+        assert result["ceo_name"] == "Sundar Pichai"
+        assert "_basis" not in result
+
+    def test_include_basis_empty_basis(self):
+        """Should include empty _basis when include_basis=True but no basis in response."""
+        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(
+                output=SimpleNamespace(
+                    content={"ceo_name": "Sundar Pichai"},
+                    basis=None,
+                )
+            )
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            results = asyncio.run(
+                _enrich_all_async(
+                    items=[{"company": "Google"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="lite-fast",
+                    timeout=300,
+                    include_basis=True,
+                )
+            )
+
+        result = json.loads(results[0])
+        assert result["ceo_name"] == "Sundar Pichai"
+        assert "_basis" in result
+        assert result["_basis"] == []
+
 
 class TestParallelEnrichPartition:
     """Tests for the _parallel_enrich_partition function."""
@@ -368,6 +496,48 @@ class TestParallelEnrichPartition:
         assert json.loads(result[1])["ceo_name"] == "CEO of Beta"
         assert json.loads(result[2])["ceo_name"] == "CEO of Gamma"
 
+    def test_include_basis_passed_through(self):
+        """Should pass include_basis parameter to async function."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        async def mock_create(input, task_spec, processor):
+            return SimpleNamespace(run_id="run_1")
+
+        async def mock_result(run_id, api_timeout):
+            return SimpleNamespace(
+                output=SimpleNamespace(
+                    content={"ceo_name": "Test CEO"},
+                    basis=[
+                        SimpleNamespace(
+                            field="ceo_name",
+                            citations=[SimpleNamespace(url="https://test.com", excerpts=["test"])],
+                            reasoning="Test reasoning",
+                            confidence="high",
+                        )
+                    ],
+                )
+            )
+
+        mock_client = mock.AsyncMock()
+        mock_client.task_run.create = mock_create
+        mock_client.task_run.result = mock_result
+
+        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+            result = _parallel_enrich_partition(
+                input_data_series=pd.Series([{"company": "Test"}]),
+                output_columns=["CEO name"],
+                api_key="test-key",
+                processor="lite-fast",
+                timeout=300,
+                include_basis=True,
+            )
+
+        assert len(result) == 1
+        parsed = json.loads(result[0])
+        assert parsed["ceo_name"] == "Test CEO"
+        assert "_basis" in parsed
+        assert parsed["_basis"][0]["field"] == "ceo_name"
+
 
 class TestCreateParallelEnrichUdf:
     """Tests for the create_parallel_enrich_udf factory function."""
@@ -411,6 +581,22 @@ class TestCreateParallelEnrichUdf:
         ):
             # Should not raise with defaults
             udf_func = create_parallel_enrich_udf()
+            assert udf_func is not None
+
+    def test_include_basis_parameter(self):
+        """Should accept include_basis parameter."""
+        from parallel_web_tools.integrations.spark.udf import create_parallel_enrich_udf
+
+        with mock.patch(
+            "parallel_web_tools.integrations.spark.udf.resolve_api_key",
+            return_value="test-key",
+        ):
+            # Should not raise with include_basis=True
+            udf_func = create_parallel_enrich_udf(include_basis=True)
+            assert udf_func is not None
+
+            # Should not raise with include_basis=False
+            udf_func = create_parallel_enrich_udf(include_basis=False)
             assert udf_func is not None
 
 
@@ -479,6 +665,24 @@ class TestRegisterParallelUdfs:
 
             # Should be called to resolve the key
             mock_resolve.assert_called()
+
+    def test_include_basis_parameter(self):
+        """Should accept include_basis parameter when registering UDFs."""
+        from parallel_web_tools.integrations.spark.udf import register_parallel_udfs
+
+        mock_spark = mock.MagicMock()
+
+        with mock.patch(
+            "parallel_web_tools.integrations.spark.udf.resolve_api_key",
+            return_value="test-key",
+        ):
+            # Should not raise with include_basis=True
+            register_parallel_udfs(mock_spark, include_basis=True)
+
+            # Verify UDFs were still registered
+            call_names = [call[0][0] for call in mock_spark.udf.register.call_args_list]
+            assert "parallel_enrich" in call_names
+            assert "parallel_enrich_with_processor" in call_names
 
 
 class TestIntegration:
