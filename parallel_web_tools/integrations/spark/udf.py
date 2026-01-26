@@ -26,7 +26,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import StringType
 
-from parallel_web_tools.core import build_output_schema
+from parallel_web_tools.core import build_output_schema, extract_basis
 from parallel_web_tools.core.auth import resolve_api_key
 
 
@@ -36,6 +36,7 @@ async def _enrich_all_async(
     api_key: str,
     processor: str = "lite-fast",
     timeout: int = 300,
+    include_basis: bool = False,
 ) -> list[str]:
     """
     Enrich all items concurrently using asyncio.gather.
@@ -46,6 +47,7 @@ async def _enrich_all_async(
         api_key: Parallel API key.
         processor: Parallel processor to use.
         timeout: Timeout in seconds for each API call.
+        include_basis: Whether to include basis/citations in the response.
 
     Returns:
         List of JSON strings containing enrichment results (same order as inputs).
@@ -67,8 +69,14 @@ async def _enrich_all_async(
             result = await client.task_run.result(task_run.run_id, api_timeout=timeout)
             content = result.output.content
             if isinstance(content, dict):
-                return json.dumps(content)
-            return json.dumps({"result": str(content)})
+                output_dict = content
+            else:
+                output_dict = {"result": str(content)}
+
+            if include_basis:
+                output_dict["_basis"] = extract_basis(result.output)
+
+            return json.dumps(output_dict)
         except Exception as e:
             return json.dumps({"error": str(e)})
 
@@ -81,6 +89,7 @@ def _parallel_enrich_partition(
     api_key: str,
     processor: str = "lite-fast",
     timeout: int = 300,
+    include_basis: bool = False,
 ) -> pd.Series:
     """
     Enrich an entire partition of data concurrently.
@@ -91,6 +100,7 @@ def _parallel_enrich_partition(
         api_key: Parallel API key.
         processor: Parallel processor to use.
         timeout: Timeout in seconds for each API call.
+        include_basis: Whether to include basis/citations in the response.
 
     Returns:
         Pandas Series of JSON strings containing enrichment results.
@@ -113,7 +123,7 @@ def _parallel_enrich_partition(
         return pd.Series([None] * len(items))
 
     # Run all enrichments concurrently
-    results = asyncio.run(_enrich_all_async(valid_items, output_columns, api_key, processor, timeout))
+    results = asyncio.run(_enrich_all_async(valid_items, output_columns, api_key, processor, timeout, include_basis))
 
     # Map results back to original positions
     output: list[str | None] = [None] * len(items)
@@ -127,6 +137,7 @@ def create_parallel_enrich_udf(
     api_key: str | None = None,
     processor: str = "lite-fast",
     timeout: int = 300,
+    include_basis: bool = False,
 ):
     """
     Create a Spark pandas_udf for parallel_enrich with pre-configured parameters.
@@ -139,6 +150,7 @@ def create_parallel_enrich_udf(
         api_key: Parallel API key. Uses PARALLEL_API_KEY env var if not provided.
         processor: Parallel processor to use. Default is 'lite-fast'.
         timeout: Timeout in seconds for each API call. Default is 300 (5 min).
+        include_basis: Whether to include basis/citations in the response. Default is False.
 
     Returns:
         A Spark pandas_udf function that can be registered with spark.udf.register().
@@ -168,6 +180,7 @@ def create_parallel_enrich_udf(
             api_key=key,
             processor=processor,
             timeout=timeout,
+            include_basis=include_basis,
         )
 
     return _enrich
@@ -178,6 +191,7 @@ def register_parallel_udfs(
     api_key: str | None = None,
     processor: str = "lite-fast",
     timeout: int = 300,
+    include_basis: bool = False,
     udf_name: str = "parallel_enrich",
 ) -> None:
     """
@@ -204,6 +218,8 @@ def register_parallel_udfs(
             Options: lite, lite-fast, base, base-fast, core, core-fast,
             pro, pro-fast, ultra, ultra-fast, etc.
         timeout: Timeout in seconds for each API call. Default is 300 (5 min).
+        include_basis: Whether to include basis/citations in the response. Default is False.
+            When True, each result will include a '_basis' field with citations.
         udf_name: Name to register the UDF under. Default is 'parallel_enrich'.
 
     Example:
@@ -220,6 +236,9 @@ def register_parallel_udfs(
         ...         array('CEO', 'headquarters')
         ...     ) as info
         ... ''')
+        >>>
+        >>> # With basis/citations
+        >>> register_parallel_udfs(spark, include_basis=True)
     """
     # Resolve and capture the API key at registration time
     # This is critical because Spark executors may not have the env var
@@ -230,6 +249,7 @@ def register_parallel_udfs(
         api_key=key,
         processor=processor,
         timeout=timeout,
+        include_basis=include_basis,
     )
 
     # Register with Spark
@@ -249,6 +269,7 @@ def register_parallel_udfs(
             api_key=key,
             processor=proc_val,
             timeout=timeout,
+            include_basis=include_basis,
         )
 
     spark.udf.register(f"{udf_name}_with_processor", _enrich_with_processor)
