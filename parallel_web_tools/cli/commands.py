@@ -897,7 +897,9 @@ def research():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
-@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option(
+    "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
+)
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def research_run(
     query: str | None,
@@ -917,7 +919,7 @@ def research_run(
 
         parallel-cli research run "What are the latest developments in quantum computing?"
 
-        parallel-cli research run -f question.txt --processor ultra -o report.json
+        parallel-cli research run -f question.txt --processor ultra -o report
     """
     # Get query from argument or file
     if input_file:
@@ -1019,7 +1021,9 @@ def research_status(run_id: str, output_json: bool):
 @click.argument("run_id")
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
-@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option(
+    "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
+)
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def research_poll(
     run_id: str,
@@ -1068,15 +1072,75 @@ def research_processors():
     console.print("\n[dim]Use --processor/-p to select a processor[/dim]")
 
 
+def _content_to_markdown(content: Any, level: int = 1) -> str:
+    """Convert structured content to markdown.
+
+    Handles:
+    - Strings: returned as-is
+    - Dicts with 'text' key: extracts the text
+    - Dicts with other keys: converts to headings and nested content
+    - Lists: converts to bullet points or numbered lists
+    """
+    if content is None:
+        return ""
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, dict):
+        # Check for {text: "..."} structure
+        if "text" in content and len(content) == 1:
+            return content["text"]
+
+        # Convert dict to markdown sections
+        lines = []
+        for key, value in content.items():
+            # Convert key to title (e.g., "quantum_computing_summary" -> "Quantum Computing Summary")
+            title = key.replace("_", " ").title()
+            heading = "#" * min(level, 6)
+            lines.append(f"{heading} {title}\n")
+
+            # Recursively convert value
+            if isinstance(value, str):
+                lines.append(value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        # For complex items, render as sub-content
+                        lines.append(_content_to_markdown(item, level + 1))
+                    else:
+                        lines.append(f"- {item}")
+            elif isinstance(value, dict):
+                lines.append(_content_to_markdown(value, level + 1))
+            else:
+                lines.append(str(value))
+
+            lines.append("")  # Blank line after section
+
+        return "\n".join(lines)
+
+    if isinstance(content, list):
+        lines = []
+        for item in content:
+            if isinstance(item, dict):
+                lines.append(_content_to_markdown(item, level))
+            else:
+                lines.append(f"- {item}")
+        return "\n".join(lines)
+
+    return str(content)
+
+
 def _output_research_result(
     result: dict,
     output_file: str | None,
     output_json: bool,
 ):
-    """Output research result to console and/or file as JSON.
+    """Output research result to console and/or files.
 
-    When saving to a file, the 'content' field is extracted and saved
-    as a separate markdown file alongside the JSON.
+    When saving to a file, creates two files from the base name:
+    - {name}.json: metadata and citations
+    - {name}.md: research content as markdown
     """
     output = result.get("output", {})
     output_data = {
@@ -1086,40 +1150,36 @@ def _output_research_result(
         "output": output.copy() if isinstance(output, dict) else output,
     }
 
-    # Save to file if requested
+    # Save to files if requested
     if output_file:
-        # Extract content to a separate markdown file
-        content_file = None
+        from pathlib import Path
+
+        # Strip any extension to get base name
+        base_path = Path(output_file)
+        if base_path.suffix:
+            base_path = base_path.with_suffix("")
+
+        json_path = base_path.with_suffix(".json")
+        md_path = base_path.with_suffix(".md")
+
+        # Extract content to markdown file
         if isinstance(output, dict) and "content" in output:
             content = output["content"]
-            # Handle both string content and {"text": "..."} structure
-            if isinstance(content, dict) and "text" in content:
-                content_text = content["text"]
-            elif isinstance(content, str):
-                content_text = content
-            else:
-                content_text = None
+            content_text = _content_to_markdown(content)
 
             if content_text:
-                # Create markdown file path from JSON file path
-                from pathlib import Path
-
-                json_path = Path(output_file)
-                md_path = json_path.with_suffix(".md")
-                content_file = md_path.name
-
                 with open(md_path, "w") as f:
                     f.write(content_text)
                 console.print(f"[green]Content saved to:[/green] {md_path}")
 
                 # Replace content in JSON with reference to markdown file
                 output_data["output"] = output_data["output"].copy()
-                output_data["output"]["content_file"] = content_file
+                output_data["output"]["content_file"] = md_path.name
                 del output_data["output"]["content"]
 
-        with open(output_file, "w") as f:
+        with open(json_path, "w") as f:
             json.dump(output_data, f, indent=2, default=str)
-        console.print(f"[green]Results saved to:[/green] {output_file}")
+        console.print(f"[green]Metadata saved to:[/green] {json_path}")
 
     # Output to console
     if output_json:
