@@ -451,29 +451,162 @@ class TestResearchProcessorsCommand:
 class TestResearchOutputFile:
     """Tests for saving research results to files."""
 
-    def test_research_save_to_file(self, runner, tmp_path):
-        """Should save results to JSON file."""
-        output_file = tmp_path / "report.json"
+    def test_research_save_to_file_with_content(self, runner, tmp_path):
+        """Should save content to separate markdown file."""
+        output_base = tmp_path / "report"
+        json_file = tmp_path / "report.json"
+        md_file = tmp_path / "report.md"
 
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_123",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "completed",
-                "output": {"content": {"text": "Research findings"}, "basis": []},
+                "output": {"content": {"text": "# Research findings\n\nThis is the report."}, "basis": []},
             }
 
             result = runner.invoke(
                 main,
-                ["research", "run", "What is AI?", "-o", str(output_file), "--poll-interval", "1"],
+                ["research", "run", "What is AI?", "-o", str(output_base), "--poll-interval", "1"],
             )
 
             assert result.exit_code == 0
 
-            # Check JSON file has output
-            assert output_file.exists()
-            data = json.loads(output_file.read_text())
+            # Check JSON file has output with content_file reference
+            assert json_file.exists()
+            data = json.loads(json_file.read_text())
             assert data["run_id"] == "trun_123"
             assert data["status"] == "completed"
             assert "output" in data
-            assert data["output"]["content"]["text"] == "Research findings"
+            assert "content" not in data["output"]
+            assert data["output"]["content_file"] == "report.md"
+            assert data["output"]["basis"] == []
+
+            # Check markdown file has content
+            assert md_file.exists()
+            assert md_file.read_text() == "# Research findings\n\nThis is the report."
+
+    def test_research_save_to_file_strips_extension(self, runner, tmp_path):
+        """Should strip extension from output path and create both files."""
+        output_with_ext = tmp_path / "report.json"
+        json_file = tmp_path / "report.json"
+        md_file = tmp_path / "report.md"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_ext",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_ext",
+                "status": "completed",
+                "output": {"content": "Content here"},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Question?", "-o", str(output_with_ext), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+            assert json_file.exists()
+            assert md_file.exists()
+
+    def test_research_save_to_file_string_content(self, runner, tmp_path):
+        """Should handle string content directly."""
+        output_base = tmp_path / "report"
+        json_file = tmp_path / "report.json"
+        md_file = tmp_path / "report.md"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_456",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_456",
+                "status": "completed",
+                "output": {"content": "Plain string content"},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Question?", "-o", str(output_base), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+
+            # Check markdown file has content
+            assert md_file.exists()
+            assert md_file.read_text() == "Plain string content"
+
+            # Check JSON references markdown file
+            data = json.loads(json_file.read_text())
+            assert data["output"]["content_file"] == "report.md"
+
+    def test_research_save_to_file_no_content(self, runner, tmp_path):
+        """Should handle output without content field."""
+        output_base = tmp_path / "report"
+        json_file = tmp_path / "report.json"
+        md_file = tmp_path / "report.md"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_789",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_789",
+                "status": "completed",
+                "output": {"other_field": "some value"},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Question?", "-o", str(output_base), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+
+            # No markdown file should be created
+            assert not md_file.exists()
+
+            # JSON should have original output
+            data = json.loads(json_file.read_text())
+            assert data["output"]["other_field"] == "some value"
+            assert "content_file" not in data["output"]
+
+    def test_research_save_to_file_structured_content(self, runner, tmp_path):
+        """Should convert structured dict content to markdown."""
+        output_base = tmp_path / "report"
+        json_file = tmp_path / "report.json"
+        md_file = tmp_path / "report.md"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_structured",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_structured",
+                "status": "completed",
+                "output": {
+                    "content": {
+                        "summary": "This is the summary.",
+                        "key_findings": ["Finding 1", "Finding 2"],
+                        "detailed_analysis": {"section_one": "Details here."},
+                    },
+                    "basis": [],
+                },
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Question?", "-o", str(output_base), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+
+            # Markdown file should be created
+            assert md_file.exists()
+            md_content = md_file.read_text()
+
+            # Check markdown has sections
+            assert "# Summary" in md_content
+            assert "This is the summary." in md_content
+            assert "# Key Findings" in md_content
+            assert "- Finding 1" in md_content
+            assert "# Detailed Analysis" in md_content
+
+            # JSON should reference markdown file
+            data = json.loads(json_file.read_text())
+            assert data["output"]["content_file"] == "report.md"
+            assert "content" not in data["output"]
