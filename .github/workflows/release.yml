@@ -62,7 +62,7 @@ jobs:
           echo ""
           echo "Archive contents:"
           if [ -f "dist/parallel-cli-${{ matrix.platform }}.zip" ]; then
-            unzip -l "dist/parallel-cli-${{ matrix.platform }}.zip" | head -20
+            unzip -l "dist/parallel-cli-${{ matrix.platform }}.zip" | head -20 || true
           fi
 
       - name: Verify checksum file exists
