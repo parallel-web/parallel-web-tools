@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from parallel_web_tools.core.auth import resolve_api_key
+from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
 
 
 def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
@@ -90,6 +91,7 @@ def enrich_batch(
     timeout: int = 600,
     poll_interval: int = 10,
     include_basis: bool = True,
+    source: ClientSource = "python",
 ) -> list[dict[str, Any]]:
     """Enrich multiple inputs using the Parallel Task Group API.
 
@@ -101,6 +103,7 @@ def enrich_batch(
         timeout: Max wait time in seconds
         poll_interval: Seconds between status polls
         include_basis: Whether to include citations
+        source: Client source identifier for User-Agent (default: python)
 
     Returns:
         List of result dictionaries in same order as inputs.
@@ -114,7 +117,10 @@ def enrich_batch(
     try:
         from parallel import Parallel
 
-        client = Parallel(api_key=resolve_api_key(api_key))
+        client = Parallel(
+            api_key=resolve_api_key(api_key),
+            default_headers=get_default_headers(source),
+        )
         output_schema = build_output_schema(output_columns)
         task_spec = TaskSpecParam(output_schema=JsonSchemaParam(type="json", json_schema=output_schema))
 
@@ -176,6 +182,7 @@ def enrich_single(
     processor: str = "lite-fast",
     timeout: int = 300,
     include_basis: bool = True,
+    source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Enrich a single input using the Parallel API."""
     results = enrich_batch(
@@ -185,6 +192,7 @@ def enrich_single(
         processor=processor,
         timeout=timeout,
         include_basis=include_basis,
+        source=source,
     )
     return results[0] if results else {"error": "No result"}
 
@@ -194,6 +202,7 @@ def run_tasks(
     InputModel,
     OutputModel,
     processor: str = "core-fast",
+    source: ClientSource = "python",
 ) -> list[Any]:
     """Run batch tasks using Pydantic models for schema.
 
@@ -214,7 +223,10 @@ def run_tasks(
     batch_id = str(uuid.uuid4())
     logger.info(f"Generated batch_id: {batch_id}")
 
-    client = Parallel(api_key=resolve_api_key(None))
+    client = Parallel(
+        api_key=resolve_api_key(None),
+        default_headers=get_default_headers(source),
+    )
 
     # Build task spec from Pydantic models
     task_spec = TaskSpecParam(

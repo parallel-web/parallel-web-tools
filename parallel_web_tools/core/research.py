@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import Any
 
 from parallel_web_tools.core.auth import resolve_api_key
+from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
 
 # Base URL for viewing results
 PLATFORM_BASE = "https://platform.parallel.ai"
@@ -74,6 +75,7 @@ def create_research_task(
     query: str,
     processor: str = "pro-fast",
     api_key: str | None = None,
+    source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -81,13 +83,17 @@ def create_research_task(
         query: Research question or topic (max 15,000 chars).
         processor: Processor tier (see RESEARCH_PROCESSORS).
         api_key: Optional API key.
+        source: Client source identifier for User-Agent.
 
     Returns:
         Dict with run_id, result_url, and other task metadata.
     """
     from parallel import Parallel
 
-    client = Parallel(api_key=resolve_api_key(api_key))
+    client = Parallel(
+        api_key=resolve_api_key(api_key),
+        default_headers=get_default_headers(source),
+    )
 
     task = client.task_run.create(
         input=query[:15000],
@@ -105,19 +111,24 @@ def create_research_task(
 def get_research_status(
     run_id: str,
     api_key: str | None = None,
+    source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Get the current status of a research task.
 
     Args:
         run_id: The task run ID.
         api_key: Optional API key.
+        source: Client source identifier for User-Agent.
 
     Returns:
         Dict with status and other task info.
     """
     from parallel import Parallel
 
-    client = Parallel(api_key=resolve_api_key(api_key))
+    client = Parallel(
+        api_key=resolve_api_key(api_key),
+        default_headers=get_default_headers(source),
+    )
     status = client.task_run.retrieve(run_id=run_id)
 
     return {
@@ -130,19 +141,24 @@ def get_research_status(
 def get_research_result(
     run_id: str,
     api_key: str | None = None,
+    source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Get the result of a completed research task.
 
     Args:
         run_id: The task run ID.
         api_key: Optional API key.
+        source: Client source identifier for User-Agent.
 
     Returns:
         Dict with output data and metadata.
     """
     from parallel import Parallel
 
-    client = Parallel(api_key=resolve_api_key(api_key))
+    client = Parallel(
+        api_key=resolve_api_key(api_key),
+        default_headers=get_default_headers(source),
+    )
     result = client.task_run.result(run_id=run_id)
 
     output = result.output if hasattr(result, "output") else {}
@@ -218,6 +234,7 @@ def run_research(
     timeout: int = 3600,
     poll_interval: int = 45,
     on_status: Callable[[str, str], None] | None = None,
+    source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -231,6 +248,7 @@ def run_research(
         timeout: Maximum wait time in seconds (default: 3600 = 1 hour).
         poll_interval: Seconds between status checks (default: 45).
         on_status: Optional callback called with (status, run_id) on each poll.
+        source: Client source identifier for User-Agent.
 
     Returns:
         Dict with content and metadata.
@@ -241,7 +259,10 @@ def run_research(
     """
     from parallel import Parallel
 
-    client = Parallel(api_key=resolve_api_key(api_key))
+    client = Parallel(
+        api_key=resolve_api_key(api_key),
+        default_headers=get_default_headers(source),
+    )
 
     task = client.task_run.create(
         input=query[:15000],
@@ -262,6 +283,7 @@ def poll_research(
     timeout: int = 3600,
     poll_interval: int = 45,
     on_status: Callable[[str, str], None] | None = None,
+    source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Resume polling an existing research task.
 
@@ -273,13 +295,17 @@ def poll_research(
         timeout: Maximum wait time in seconds.
         poll_interval: Seconds between status checks.
         on_status: Optional callback called with (status, run_id) on each poll.
+        source: Client source identifier for User-Agent.
 
     Returns:
         Dict with content and metadata.
     """
     from parallel import Parallel
 
-    client = Parallel(api_key=resolve_api_key(api_key))
+    client = Parallel(
+        api_key=resolve_api_key(api_key),
+        default_headers=get_default_headers(source),
+    )
     result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"
 
     if on_status:

@@ -22,6 +22,7 @@ from parallel_web_tools.core import (
     get_api_key,
     get_auth_status,
     get_research_status,
+    get_user_agent,
     logout,
     poll_research,
     run_enrichment_from_dict,
@@ -227,7 +228,11 @@ def suggest_from_intent(
     """Use Parallel Ingest API to suggest output columns and processor."""
     api_key = get_api_key()
     base_url = "https://api.parallel.ai"
-    headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    headers = {
+        "x-api-key": api_key,
+        "Content-Type": "application/json",
+        "User-Agent": get_user_agent("cli"),
+    }
 
     full_intent = intent
     if source_columns:
@@ -368,8 +373,10 @@ def search(
     try:
         from parallel import Parallel
 
+        from parallel_web_tools.core import get_default_headers
+
         api_key = get_api_key()
-        client = Parallel(api_key=api_key)
+        client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
 
         search_kwargs: dict[str, Any] = {"mode": mode, "max_results": max_results}
         if objective:
@@ -446,8 +453,10 @@ def extract(
     try:
         from parallel import Parallel
 
+        from parallel_web_tools.core import get_default_headers
+
         api_key = get_api_key()
-        client = Parallel(api_key=api_key)
+        client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
 
         extract_kwargs: dict[str, Any] = {
             "urls": list(urls),
@@ -970,7 +979,7 @@ def research_run(
         if no_wait:
             # Create task and return immediately
             console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
-            result = create_research_task(query, processor=processor)
+            result = create_research_task(query, processor=processor, source="cli")
 
             console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
             console.print(f"Track progress: {result['result_url']}")
@@ -999,6 +1008,7 @@ def research_run(
                 timeout=timeout,
                 poll_interval=poll_interval,
                 on_status=on_status,
+                source="cli",
             )
 
             _output_research_result(result, output_file, output_json)
@@ -1024,7 +1034,7 @@ def research_status(run_id: str, output_json: bool):
     RUN_ID is the task identifier (e.g., trun_xxx).
     """
     try:
-        result = get_research_status(run_id)
+        result = get_research_status(run_id, source="cli")
 
         if output_json:
             print(json.dumps(result, indent=2))
@@ -1081,6 +1091,7 @@ def research_poll(
             timeout=timeout,
             poll_interval=poll_interval,
             on_status=on_status,
+            source="cli",
         )
 
         _output_research_result(result, output_file, output_json)

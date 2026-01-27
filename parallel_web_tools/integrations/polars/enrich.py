@@ -132,6 +132,7 @@ def parallel_enrich(
         processor=processor,
         timeout=timeout,
         include_basis=include_basis,
+        source="polars",
     )
 
     # Build output schema to get property names

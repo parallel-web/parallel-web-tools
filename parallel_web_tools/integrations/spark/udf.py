@@ -28,6 +28,7 @@ from pyspark.sql.types import StringType
 
 from parallel_web_tools.core import build_output_schema, extract_basis
 from parallel_web_tools.core.auth import resolve_api_key
+from parallel_web_tools.core.user_agent import get_default_headers
 
 
 async def _enrich_all_async(
@@ -55,7 +56,7 @@ async def _enrich_all_async(
     from parallel import AsyncParallel
     from parallel.types import JsonSchemaParam, TaskSpecParam
 
-    client = AsyncParallel(api_key=api_key)
+    client = AsyncParallel(api_key=api_key, default_headers=get_default_headers("spark"))
     output_schema = build_output_schema(output_columns)
     task_spec = TaskSpecParam(output_schema=JsonSchemaParam(type="json", json_schema=output_schema))
 
