@@ -23,30 +23,31 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 Install the standalone `parallel-cli` binary for search, extract, enrichment, and deep research (no Python required):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/parallel-web/parallel-web-tools/main/install-cli.sh | bash
+curl -fsSL https://parallel.ai/install.sh | bash
 ```
 
 This automatically detects your platform (macOS/Linux, x64/arm64) and installs to `~/.local/bin`.
 
-> **Note:** The standalone binary includes core CLI features. For deployment commands (`enrich deploy`), use pip: `pip install parallel-web-tools[snowflake]` or `[bigquery]`.
+> **Note:** The standalone binary supports `search`, `extract`, and `enrich run` with CLI arguments and CSV files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
 
 ### Python Package
 
-For programmatic usage or data enrichment integrations:
+For programmatic usage or additional features:
 
 ```bash
-# Full install with CLI and all connectors
-pip install parallel-web-tools[all]
-
-# Library only (minimal dependencies)
+# Minimal CLI (search, extract, enrich with CLI args)
 pip install parallel-web-tools
 
-# With specific connectors
-pip install parallel-web-tools[cli]          # CLI only
-pip install parallel-web-tools[polars]       # Polars DataFrame
-pip install parallel-web-tools[duckdb]       # DuckDB
-pip install parallel-web-tools[bigquery]     # BigQuery
+# + YAML config files and interactive planner
+pip install parallel-web-tools[cli]
+
+# + Data integrations
+pip install parallel-web-tools[duckdb]       # DuckDB (includes cli, polars)
+pip install parallel-web-tools[bigquery]     # BigQuery (includes cli)
 pip install parallel-web-tools[spark]        # Apache Spark
+
+# Full install with all features
+pip install parallel-web-tools[all]
 ```
 
 ## CLI Overview
