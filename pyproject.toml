@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-web-tools"
-version = "0.0.7"
+version = "0.0.8"
 description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,14 +27,9 @@ classifiers = [
 
 dependencies = [
     "parallel-web>=0.4.0",
-    "pandas>=2.3.0",
-    "polars>=1.37.0",
-    "pyarrow>=18.0.0",
     "python-dotenv>=1.0.0",
-    "pyyaml>=6.0.0",
-    # CLI dependencies
+    # CLI dependencies (minimal - search, extract, enrich with CLI args)
     "click>=8.1.0",
-    "questionary>=2.0.0",
     "rich>=13.0.0",
     "httpx>=0.25.0",
 ]
@@ -49,16 +44,33 @@ Issues = "https://github.com/parallel-web/parallel-web-tools/issues"
 parallel-cli = "parallel_web_tools.cli:main"
 
 [project.optional-dependencies]
-# Polars integration (already in main deps, this is for explicit install)
-polars = []  # polars>=1.37.0 is in main dependencies
-# DuckDB integration
-duckdb = ["duckdb>=1.0.0", "nest-asyncio>=1.6.0"]
+# CLI extras: YAML config files and interactive planner
+cli = [
+    "pyyaml>=6.0.0",
+    "questionary>=2.0.0",
+]
+# Polars integration for data processing
+polars = [
+    "polars>=1.37.0",
+    "pyarrow>=18.0.0",
+]
+# Pandas integration (for Spark UDFs)
+pandas = [
+    "pandas>=2.3.0",
+]
+# DuckDB integration (includes polars for data handling)
+duckdb = [
+    "parallel-web-tools[cli,polars]",
+    "duckdb>=1.0.0",
+    "nest-asyncio>=1.6.0",
+]
 # Snowflake integration
 snowflake = [
     "snowflake-connector-python>=3.0.0",
 ]
 # SQLAlchemy-based BigQuery connector (for YAML configs and ETL)
 bigquery = [
+    "parallel-web-tools[cli]",
     "sqlalchemy>=2.0.0",
     "sqlalchemy-bigquery>=1.11.0",
 ]
@@ -67,12 +79,12 @@ bigquery = [
 bigquery-native = []  # No Python deps, just CLI tools
 # Apache Spark integration
 spark = [
+    "parallel-web-tools[pandas]",
     "pyspark>=3.4.0",
-    "httpx>=0.25.0",
 ]
-# All features (default for CLI install)
+# All features (recommended for full CLI experience)
 all = [
-    "parallel-web-tools[polars,duckdb,snowflake,bigquery]",
+    "parallel-web-tools[cli,polars,duckdb,snowflake,bigquery]",
 ]
 # Development
 dev = [

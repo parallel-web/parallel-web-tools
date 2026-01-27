@@ -5,7 +5,6 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
-import yaml
 from pydantic import BaseModel, Field, create_model
 
 
@@ -124,7 +123,15 @@ class InputSchema:
 
 
 def load_schema(filename: str) -> dict[str, Any]:
-    """Load schema from YAML file."""
+    """Load schema from YAML file.
+
+    Requires pyyaml: pip install parallel-web-tools[yaml]
+    """
+    try:
+        import yaml
+    except ImportError as e:
+        raise ImportError("YAML support requires pyyaml. Install with: pip install parallel-web-tools[yaml]") from e
+
     with open(filename) as f:
         return yaml.safe_load(f)
 

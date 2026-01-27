@@ -1057,18 +1057,13 @@ wheels = [
 
 [[package]]
 name = "parallel-web-tools"
-version = "0.0.7"
+version = "0.0.8"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "httpx" },
-    { name = "pandas" },
     { name = "parallel-web" },
-    { name = "polars" },
-    { name = "pyarrow" },
     { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "questionary" },
     { name = "rich" },
 ]
 
@@ -1076,24 +1071,38 @@ dependencies = [
 all = [
     { name = "duckdb" },
     { name = "nest-asyncio" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "pyyaml" },
+    { name = "questionary" },
     { name = "snowflake-connector-python" },
     { name = "sqlalchemy" },
     { name = "sqlalchemy-bigquery" },
 ]
 bigquery = [
+    { name = "pyyaml" },
+    { name = "questionary" },
     { name = "sqlalchemy" },
     { name = "sqlalchemy-bigquery" },
 ]
+cli = [
+    { name = "pyyaml" },
+    { name = "questionary" },
+]
 dev = [
     { name = "duckdb" },
-    { name = "httpx" },
     { name = "nest-asyncio" },
+    { name = "pandas" },
+    { name = "polars" },
     { name = "pre-commit" },
+    { name = "pyarrow" },
     { name = "pyinstaller" },
     { name = "pyrefly" },
     { name = "pyspark" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pyyaml" },
+    { name = "questionary" },
     { name = "ruff" },
     { name = "snowflake-connector-python" },
     { name = "sqlalchemy" },
@@ -1102,12 +1111,23 @@ dev = [
 duckdb = [
     { name = "duckdb" },
     { name = "nest-asyncio" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "pyyaml" },
+    { name = "questionary" },
+]
+pandas = [
+    { name = "pandas" },
+]
+polars = [
+    { name = "polars" },
+    { name = "pyarrow" },
 ]
 snowflake = [
     { name = "snowflake-connector-python" },
 ]
 spark = [
-    { name = "httpx" },
+    { name = "pandas" },
     { name = "pyspark" },
 ]
 
@@ -1121,30 +1141,32 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.25.0" },
-    { name = "httpx", marker = "extra == 'spark'", specifier = ">=0.25.0" },
     { name = "nest-asyncio", marker = "extra == 'duckdb'", specifier = ">=1.6.0" },
-    { name = "pandas", specifier = ">=2.3.0" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.3.0" },
     { name = "parallel-web", specifier = ">=0.4.0" },
     { name = "parallel-web-tools", extras = ["all", "spark"], marker = "extra == 'dev'" },
-    { name = "parallel-web-tools", extras = ["polars", "duckdb", "snowflake", "bigquery"], marker = "extra == 'all'" },
-    { name = "polars", specifier = ">=1.37.0" },
+    { name = "parallel-web-tools", extras = ["cli"], marker = "extra == 'bigquery'" },
+    { name = "parallel-web-tools", extras = ["cli", "polars"], marker = "extra == 'duckdb'" },
+    { name = "parallel-web-tools", extras = ["cli", "polars", "duckdb", "snowflake", "bigquery"], marker = "extra == 'all'" },
+    { name = "parallel-web-tools", extras = ["pandas"], marker = "extra == 'spark'" },
+    { name = "polars", marker = "extra == 'polars'", specifier = ">=1.37.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pyarrow", specifier = ">=18.0.0" },
+    { name = "pyarrow", marker = "extra == 'polars'", specifier = ">=18.0.0" },
     { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pyrefly", marker = "extra == 'dev'", specifier = ">=0.49.0" },
     { name = "pyspark", marker = "extra == 'spark'", specifier = ">=3.4.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "questionary", specifier = ">=2.0.0" },
+    { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.0" },
+    { name = "questionary", marker = "extra == 'cli'", specifier = ">=2.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.0" },
     { name = "snowflake-connector-python", marker = "extra == 'snowflake'", specifier = ">=3.0.0" },
     { name = "sqlalchemy", marker = "extra == 'bigquery'", specifier = ">=2.0.0" },
     { name = "sqlalchemy-bigquery", marker = "extra == 'bigquery'", specifier = ">=1.11.0" },
 ]
-provides-extras = ["polars", "duckdb", "snowflake", "bigquery", "bigquery-native", "spark", "all", "dev"]
+provides-extras = ["cli", "polars", "pandas", "duckdb", "snowflake", "bigquery", "bigquery-native", "spark", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ipykernel", specifier = ">=7.1.0" }]

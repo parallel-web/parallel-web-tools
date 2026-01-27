@@ -62,7 +62,8 @@ uv run scripts/build.py
 
 ### Binary Size
 
-Expect ~100-150 MB per binary (includes Python runtime and all dependencies).
+Expect ~35-50 MB per platform archive (zip). The standalone CLI uses PyInstaller onedir mode
+for fast startup (~0.2s). The archive extracts to ~80 MB on disk.
 
 ## PyPI Publishing
 
