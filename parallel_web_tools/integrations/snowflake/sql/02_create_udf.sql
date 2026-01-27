@@ -64,6 +64,7 @@ def enrich(input_data: dict, output_columns: list, processor: str, api_key_overr
             processor=processor,
             timeout=300,
             include_basis=True,
+            source="snowflake",
         )
 
         if results and len(results) > 0:
