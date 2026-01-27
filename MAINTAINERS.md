@@ -41,12 +41,12 @@ parallel-cli --version
 
 ### Supported Platforms
 
-| Platform | Runner | Binary Name |
-|----------|--------|-------------|
-| macOS Apple Silicon | `macos-15` | `parallel-cli-darwin-arm64` |
-| macOS Intel | `macos-15-large` | `parallel-cli-darwin-x64` |
-| Linux x64 | `ubuntu-latest` | `parallel-cli-linux-x64` |
-| Windows x64 | `windows-latest` | `parallel-cli-windows-x64.exe` |
+| Platform | Runner | Archive Name |
+|----------|--------|--------------|
+| macOS Apple Silicon | `macos-15` | `parallel-cli-darwin-arm64.zip` |
+| macOS Intel | `macos-15-large` | `parallel-cli-darwin-x64.zip` |
+| Linux x64 | `ubuntu-latest` | `parallel-cli-linux-x64.zip` |
+| Windows x64 | `windows-latest` | `parallel-cli-windows-x64.zip` |
 
 Note: Linux arm64 is not supported (no GitHub-hosted ARM64 runners available).
 
@@ -56,8 +56,8 @@ Note: Linux arm64 is not supported (no GitHub-hosted ARM64 runners available).
 # Build for current platform
 uv run scripts/build.py
 
-# Test the binary
-./dist/parallel-cli --version
+# Test the binary (onedir mode - binary is in a folder)
+./dist/parallel-cli/parallel-cli --version
 ```
 
 ### Binary Size
@@ -174,9 +174,9 @@ gh workflow run publish.yml -f test_pypi=true
 
 ### Install script fails
 
-1. Check if binaries exist on the release
-2. Verify checksum files are present (`.sha256`)
+1. Check if zip archives exist on the release
+2. Verify checksum files are present (`.zip.sha256`)
 3. Test the download URL manually:
    ```bash
-   curl -fsSL https://github.com/parallel-web/parallel-web-tools/releases/download/v0.0.1/parallel-cli-darwin-arm64
+   curl -fsSL https://github.com/parallel-web/parallel-web-tools/releases/download/v0.0.1/parallel-cli-darwin-arm64.zip -o test.zip
    ```
