@@ -43,6 +43,7 @@ from pyspark.sql.types import StringType
 
 from parallel_web_tools.core import build_output_schema
 from parallel_web_tools.core.auth import resolve_api_key
+from parallel_web_tools.core.user_agent import get_default_headers, get_user_agent
 
 
 def _stream_task_run_events(
@@ -75,6 +76,7 @@ def _stream_task_run_events(
             headers = {
                 "x-api-key": api_key,
                 "parallel-beta": "events-sse-2025-07-24",
+                "User-Agent": get_user_agent("spark"),
             }
 
             with httpx.Client(timeout=600.0) as http_client:
@@ -177,7 +179,10 @@ def enrich_streaming_batch(
     try:
         from parallel import Parallel
 
-        client = Parallel(api_key=resolve_api_key(api_key))
+        client = Parallel(
+            api_key=resolve_api_key(api_key),
+            default_headers=get_default_headers("spark"),
+        )
 
         # Build output schema
         output_schema = build_output_schema(output_columns)

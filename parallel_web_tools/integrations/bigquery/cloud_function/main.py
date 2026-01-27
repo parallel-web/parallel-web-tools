@@ -81,6 +81,7 @@ def _process_batch(
         processor=processor,
         timeout=timeout,
         include_basis=True,
+        source="bigquery",
     )
 
 

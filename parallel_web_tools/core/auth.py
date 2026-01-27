@@ -13,8 +13,14 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from parallel import AsyncParallel, Parallel
+
+from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
+
+if TYPE_CHECKING:
+    pass
 
 # OAuth Configuration
 OAUTH_PROVIDER_HOST = "platform.parallel.ai"
@@ -224,16 +230,45 @@ def get_api_key(force_login: bool = False) -> str:
     return access_token
 
 
-def get_client(force_login: bool = False) -> Parallel:
-    """Get a configured Parallel client."""
+def get_client(
+    force_login: bool = False,
+    source: ClientSource = "python",
+) -> Parallel:
+    """Get a configured Parallel client with User-Agent header.
+
+    Args:
+        force_login: Force a new OAuth login flow.
+        source: Source identifier for User-Agent (cli, duckdb, bigquery, etc.)
+
+    Returns:
+        A configured Parallel client.
+    """
     api_key = get_api_key(force_login=force_login)
-    return Parallel(api_key=api_key)
+    return Parallel(
+        api_key=api_key,
+        default_headers=get_default_headers(source),
+    )
 
 
-def get_async_client(force_login: bool = False) -> AsyncParallel:
-    """Get a configured async Parallel client."""
+def get_async_client(
+    force_login: bool = False,
+    source: ClientSource = "python",
+) -> AsyncParallel:
+    """Get a configured async Parallel client with User-Agent header.
+
+    Args:
+        force_login: Force a new OAuth login flow.
+        source: Source identifier for User-Agent (cli, duckdb, bigquery, etc.)
+
+    Returns:
+        A configured async Parallel client.
+    """
     api_key = get_api_key(force_login=force_login)
-    return AsyncParallel(base_url="https://api.parallel.ai", api_key=api_key)
+    return AsyncParallel(
+        base_url="https://api.parallel.ai",
+        api_key=api_key,
+        default_headers=get_default_headers(source),
+    )
 
 
 def logout() -> bool:

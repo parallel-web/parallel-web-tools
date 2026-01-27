@@ -759,6 +759,7 @@ class TestEnrichSingle:
                 processor="lite-fast",
                 timeout=300,
                 include_basis=True,
+                source="python",
             )
             assert result == {"ceo_name": "Test CEO"}
 

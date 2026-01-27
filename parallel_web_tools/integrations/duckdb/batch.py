@@ -150,6 +150,7 @@ def enrich_table(
         processor=processor,
         timeout=timeout,
         include_basis=include_basis,
+        source="duckdb",
     )
 
     # Build output schema to get property names

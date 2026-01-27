@@ -42,6 +42,11 @@ from parallel_web_tools.core.schema import (
     parse_input_and_output_models,
     parse_schema,
 )
+from parallel_web_tools.core.user_agent import (
+    ClientSource,
+    get_default_headers,
+    get_user_agent,
+)
 
 __all__ = [
     # Auth
@@ -51,6 +56,10 @@ __all__ = [
     "get_async_client",
     "logout",
     "resolve_api_key",
+    # User Agent
+    "ClientSource",
+    "get_default_headers",
+    "get_user_agent",
     # Schema
     "AVAILABLE_PROCESSORS",
     "Column",
