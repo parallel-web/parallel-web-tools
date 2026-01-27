@@ -8,19 +8,19 @@ This guide covers how to deploy and use the Parallel Snowflake integration for d
 Snowflake SQL Query
        │
        ▼
-parallel_enrich(input_data, output_columns)
+TABLE(parallel_enrich(...) OVER (PARTITION BY 1))
        │
        ▼
-Python UDF with External Access Integration
+Python UDTF with end_partition() batching
        │
        ▼
-Parallel Task API (via HTTPS)
+Single Parallel Task Group API call (all rows batched)
        │
        ▼
-VARIANT result with enriched data
+(input VARIANT, enriched VARIANT) results
 ```
 
-The integration uses Snowflake's External Access Integration feature to allow UDFs to make secure HTTPS calls to the Parallel API.
+The integration uses a **User Defined Table Function (UDTF)** with `end_partition()` to batch all rows in a partition into a single API call. This is much faster than row-by-row processing.
 
 ## Prerequisites
 
@@ -32,20 +32,22 @@ The integration uses Snowflake's External Access Integration feature to allow UD
 
 ## How It Works
 
-The Snowflake integration uses the `parallel-web-tools` package from PyPI, sharing the same core enrichment logic as BigQuery and Spark integrations:
+The Snowflake integration uses a **UDTF (User Defined Table Function)** with batching:
 
 ```
-Snowflake UDF
+parallel_enrich() UDTF
     │
-    ├── Uses: ARTIFACT_REPOSITORY = snowflake.snowpark.pypi_shared_repository
-    ├── Package: parallel-web-tools (from PyPI)
+    ├── process(): Collects each row
+    ├── end_partition(): Batches all rows together
     │
-    └── Calls: enrich_batch() from parallel_web_tools.core
+    └── Calls: enrich_batch() with ALL rows at once
                     │
-                    └── Parallel Task Group API
+                    └── Single Task Group with N runs
 ```
 
-This ensures consistent behavior across all platforms.
+**Performance:**
+- `PARTITION BY 1` → all rows in one batch → 1 API call
+- Without partition → each row separate → N API calls (slow)
 
 ## Finding Your Account Identifier
 
@@ -168,7 +170,7 @@ This creates:
 - Network rule for `api.parallel.ai`
 - Secret with your API key
 - External access integration
-- `parallel_enrich()` UDF
+- `parallel_enrich()` UDTF (batched table function)
 - Roles: `PARALLEL_DEVELOPER` and `PARALLEL_USER`
 
 ## Manual SQL Deployment (For Admins)
@@ -202,113 +204,47 @@ After admin completes setup, users with `PARALLEL_USER` role can use the functio
 
 ## SQL Usage
 
-First, set your context or use fully qualified names:
-
-```sql
--- Option 1: Set context
-USE DATABASE PARALLEL_INTEGRATION;
-USE SCHEMA ENRICHMENT;
-
--- Option 2: Use fully qualified names
-SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(...);
-```
+The function is a table function (UDTF) that requires `PARTITION BY` for batching.
 
 ### Basic Enrichment
 
 ```sql
--- Returns JSON with enriched fields and basis/citations
-SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
-    OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
-    ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
-) AS enriched_data;
-```
-
-Result:
-```json
-{
-  "ceo_name": "Sundar Pichai",
-  "founding_year": "1998",
-  "brief_description": "Google is a multinational technology company...",
-  "basis": [...]
-}
-```
-
-### Parsing JSON Results
-
-```sql
--- Extract fields from the JSON result
+WITH companies AS (
+    SELECT * FROM (VALUES
+        ('Google', 'google.com'),
+        ('Anthropic', 'anthropic.com'),
+        ('Apple', 'apple.com')
+    ) AS t(company_name, website)
+)
 SELECT
-    data:ceo_name::STRING AS ceo_name,
-    data:founding_year::STRING AS founding_year,
-    data:brief_description::STRING AS description,
-    data:basis AS basis
-FROM (
-    SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
-        OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
-        ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
-    ) AS data
-);
+    e.input:company_name::STRING AS company_name,
+    e.input:website::STRING AS website,
+    e.enriched:ceo_name::STRING AS ceo_name,
+    e.enriched:founding_year::STRING AS founding_year
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name, 'website', t.website)),
+         ARRAY_CONSTRUCT('CEO name', 'Founding year')
+     ) OVER (PARTITION BY 1)) e;
 ```
 
-### Multiple Input Fields
-
-```sql
-SELECT parallel_enrich(
-    OBJECT_CONSTRUCT(
-        'company_name', 'Apple',
-        'website', 'apple.com',
-        'industry', 'Technology'
-    ),
-    ARRAY_CONSTRUCT(
-        'CEO name',
-        'Founding year',
-        'Headquarters city',
-        'Number of employees'
-    )
-) AS enriched_data;
-```
+**Key points:**
+- `TO_JSON(OBJECT_CONSTRUCT(...))` creates the input
+- `PARTITION BY 1` batches all rows into single API call
+- Returns `input` (original data) and `enriched` (results)
 
 ### Custom Processor
 
 ```sql
-SELECT parallel_enrich(
-    OBJECT_CONSTRUCT('company_name', 'Microsoft'),
-    ARRAY_CONSTRUCT('CEO name', 'Recent news headline'),
-    'base-fast'  -- processor option
-) AS enriched_data;
-```
-
-### Enrich Table Rows
-
-```sql
 SELECT
-    company_name,
-    parallel_enrich(
-        OBJECT_CONSTRUCT('company_name', company_name, 'website', website),
-        ARRAY_CONSTRUCT('CEO name', 'Industry', 'Founding year')
-    ) AS enriched_data
-FROM companies
-LIMIT 10;
-```
-
-### Parse Enriched Results
-
-```sql
-WITH enriched AS (
-    SELECT
-        company_name,
-        parallel_enrich(
-            OBJECT_CONSTRUCT('company_name', company_name),
-            ARRAY_CONSTRUCT('CEO name', 'Founding year')
-        ) AS data
-    FROM companies
-)
-SELECT
-    company_name,
-    data:ceo_name::STRING AS ceo,
-    data:founding_year::STRING AS founded,
-    data:basis AS sources
-FROM enriched;
+    e.input:company_name::STRING AS company_name,
+    e.enriched:ceo_name::STRING AS ceo_name
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name)),
+         ARRAY_CONSTRUCT('CEO name'),
+         'base-fast'  -- processor option
+     ) OVER (PARTITION BY 1)) e;
 ```
 
 ### Save Results to Table
@@ -316,16 +252,15 @@ FROM enriched;
 ```sql
 CREATE TABLE enriched_companies AS
 SELECT
-    c.*,
-    e.enriched_data:ceo_name::STRING AS ceo_name,
-    e.enriched_data:founding_year::STRING AS founding_year
-FROM companies c
-CROSS JOIN LATERAL (
-    SELECT parallel_enrich(
-        OBJECT_CONSTRUCT('company_name', c.company_name),
-        ARRAY_CONSTRUCT('CEO name', 'Founding year')
-    ) AS enriched_data
-) e;
+    e.input:company_name::STRING AS company_name,
+    e.input:website::STRING AS website,
+    e.enriched:ceo_name::STRING AS ceo_name,
+    e.enriched:founding_year::STRING AS founding_year
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name, 'website', t.website)),
+         ARRAY_CONSTRUCT('CEO name', 'Founding year')
+     ) OVER (PARTITION BY 1)) e;
 ```
 
 ## Troubleshooting
@@ -467,21 +402,25 @@ Removes all Parallel integration objects from Snowflake.
 
 ```sql
 -- Version 1: Default processor (lite-fast)
-parallel_enrich(input_data OBJECT, output_columns ARRAY) RETURNS VARIANT
+TABLE(parallel_enrich(input_json VARCHAR, output_columns ARRAY))
+    RETURNS TABLE (input VARIANT, enriched VARIANT)
 
 -- Version 2: Custom processor
-parallel_enrich(input_data OBJECT, output_columns ARRAY, processor VARCHAR) RETURNS VARIANT
+TABLE(parallel_enrich(input_json VARCHAR, output_columns ARRAY, processor VARCHAR))
+    RETURNS TABLE (input VARIANT, enriched VARIANT)
 ```
 
 **Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `input_data` | `OBJECT` | JSON object with input data |
+| `input_json` | `VARCHAR` | JSON string via `TO_JSON(OBJECT_CONSTRUCT(...))` |
 | `output_columns` | `ARRAY` | Array of output column descriptions |
-| `processor` | `VARCHAR` | Processor to use (optional) |
+| `processor` | `VARCHAR` | Processor to use (optional, default: `lite-fast`) |
 
-**Returns:** `VARIANT` containing enriched data or error
+**Returns:** Table with `input` (original data) and `enriched` (results) VARIANT columns
+
+**Usage:** Must use with `OVER (PARTITION BY ...)` for batching
 
 ## Processor Options
 
@@ -527,9 +466,9 @@ GRANT ROLE PARALLEL_USER TO USER analyst_user;
 
 ## Cost Considerations
 
-Each row enrichment makes one API call. Costs depend on:
+Costs depend on:
 
-1. **Number of rows**: Each row = one API call
+1. **Number of rows**: Each row = one enrichment run (but batched efficiently)
 2. **Processor used**: `pro` is 20x more expensive than `lite`
 3. **Output columns**: More columns may require more processing
 
@@ -537,6 +476,8 @@ Estimate costs:
 - `lite-fast`: ~$0.005/row
 - `base-fast`: ~$0.01/row
 - `pro-fast`: ~$0.10/row
+
+**Note:** With `PARTITION BY 1`, all rows are batched into a single API call, reducing latency significantly.
 
 ## Best Practices
 
@@ -557,14 +498,75 @@ ARRAY_CONSTRUCT('CEO', 'Year')
 
 Use `lite-fast` for testing, then switch to `base-fast` or higher for production.
 
-### 3. Process in Batches
+### 3. Use PARTITION BY for Batching
 
-For large tables, process in batches to manage costs and avoid timeouts:
+The `PARTITION BY` clause controls how rows are batched into API calls:
 
 ```sql
-SELECT parallel_enrich(...)
-FROM companies
-WHERE id BETWEEN 1 AND 100;
+-- All rows in one batch (single API call)
+TABLE(parallel_enrich(...) OVER (PARTITION BY 1))
+
+-- One batch per region (one API call per region)
+TABLE(parallel_enrich(...) OVER (PARTITION BY region))
+
+-- One batch per date (process daily data separately)
+TABLE(parallel_enrich(...) OVER (PARTITION BY DATE_TRUNC('day', created_at)))
+```
+
+**When to use each approach:**
+
+| Pattern | Use Case |
+|---------|----------|
+| `PARTITION BY 1` | Small datasets (<1000 rows), fastest for few rows |
+| `PARTITION BY column` | Large datasets, natural groupings, incremental processing |
+| `PARTITION BY CEIL(ROW_NUMBER() OVER () / 100)` | Fixed batch sizes |
+
+**Example: Partition by existing column**
+
+```sql
+-- Process each region as a separate batch
+SELECT
+    e.input:company_name::STRING AS company_name,
+    e.input:region::STRING AS region,
+    e.enriched:ceo_name::STRING AS ceo_name
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name, 'region', t.region)),
+         ARRAY_CONSTRUCT('CEO name')
+     ) OVER (PARTITION BY t.region)) e;
+```
+
+**Example: Fixed batch sizes**
+
+```sql
+-- Process in batches of 100 rows
+WITH numbered AS (
+    SELECT *, CEIL(ROW_NUMBER() OVER (ORDER BY company_name) / 100.0) AS batch_id
+    FROM companies
+)
+SELECT
+    e.input:company_name::STRING AS company_name,
+    e.enriched:ceo_name::STRING AS ceo_name
+FROM numbered t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name)),
+         ARRAY_CONSTRUCT('CEO name')
+     ) OVER (PARTITION BY t.batch_id)) e;
+```
+
+**Example: Incremental processing by date**
+
+```sql
+-- Only process today's new records
+SELECT
+    e.input:company_name::STRING AS company_name,
+    e.enriched:ceo_name::STRING AS ceo_name
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name)),
+         ARRAY_CONSTRUCT('CEO name')
+     ) OVER (PARTITION BY DATE_TRUNC('day', t.created_at))) e
+WHERE t.created_at >= CURRENT_DATE;
 ```
 
 ### 4. Cache Results
@@ -573,8 +575,12 @@ Store enriched results in a table to avoid re-processing:
 
 ```sql
 CREATE TABLE enriched_cache AS
-SELECT company_name, parallel_enrich(...) AS data
-FROM companies;
+SELECT e.input, e.enriched
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name)),
+         ARRAY_CONSTRUCT('CEO name', 'Founding year')
+     ) OVER (PARTITION BY 1)) e;
 ```
 
 ## Cleanup

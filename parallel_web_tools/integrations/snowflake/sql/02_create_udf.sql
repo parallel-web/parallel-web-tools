@@ -1,117 +1,161 @@
 -- =============================================================================
--- Parallel Enrichment UDFs for Snowflake
+-- Parallel Enrichment UDTF for Snowflake
 -- =============================================================================
--- This script creates the parallel_enrich() UDF for data enrichment.
+-- Batched table function that processes all rows in a partition via single API call.
 --
 -- Prerequisites:
 -- - Run 01_setup.sql first to create network rule, secret, and integration
 -- - PARALLEL_DEVELOPER role or ACCOUNTADMIN
--- - SNOWFLAKE.PYPI_REPOSITORY_USER role granted (for PyPI package access)
 --
 -- Usage:
--- After running this script, you can use parallel_enrich() in SQL queries:
---
---   SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
---       OBJECT_CONSTRUCT('company_name', 'Google'),
---       ARRAY_CONSTRUCT('CEO name', 'Founding year')
---   ) AS enriched_data;
+--   SELECT
+--       e.input:company_name::STRING AS company_name,
+--       e.input:website::STRING AS website,
+--       e.enriched:ceo_name::STRING AS ceo_name,
+--       e.enriched:founding_year::STRING AS founding_year
+--   FROM my_table t,
+--        TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+--            TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name, 'website', t.website)),
+--            ARRAY_CONSTRUCT('CEO name', 'Founding year')
+--        ) OVER (PARTITION BY 1)) e;
 -- =============================================================================
 
 USE DATABASE PARALLEL_INTEGRATION;
 USE SCHEMA ENRICHMENT;
 
 -- =============================================================================
--- Internal UDF (with API key parameter)
+-- Batched UDTF (all rows in partition processed in single API call)
 -- =============================================================================
--- This is the internal implementation using parallel-web-tools from PyPI.
--- It shares the same core enrichment logic as BigQuery and Spark integrations.
 
-CREATE OR REPLACE FUNCTION parallel_enrich_internal(
-    input_data OBJECT,
+CREATE OR REPLACE FUNCTION parallel_enrich(
+    input_json VARCHAR,
     output_columns ARRAY,
-    processor VARCHAR,
-    api_key_override VARCHAR
+    processor VARCHAR
 )
-RETURNS VARIANT
+RETURNS TABLE (input VARIANT, enriched VARIANT)
 LANGUAGE PYTHON
 RUNTIME_VERSION = '3.12'
 ARTIFACT_REPOSITORY = snowflake.snowpark.pypi_shared_repository
-PACKAGES = ('parallel-web-tools')
-HANDLER = 'enrich'
+PACKAGES = ('parallel-web-tools', 'pandas')
+HANDLER = 'EnrichHandler'
 EXTERNAL_ACCESS_INTEGRATIONS = (parallel_api_access_integration)
 SECRETS = ('api_key' = parallel_api_key)
 AS $$
+import json
 import _snowflake
 from parallel_web_tools.core import enrich_batch
 
 
-def enrich(input_data: dict, output_columns: list, processor: str, api_key_override: str) -> dict:
-    # Get API key from secret or override
-    if api_key_override:
-        api_key = api_key_override
-    else:
-        api_key = _snowflake.get_generic_secret_string("api_key")
+class EnrichHandler:
+    def __init__(self):
+        self.api_key = _snowflake.get_generic_secret_string("api_key")
+        self.rows = []
+        self.output_columns = []
+        self.processor = "lite-fast"
 
-    if not api_key:
-        return {"error": "No API key provided"}
+    def process(self, input_json, output_columns, processor):
+        self.output_columns = list(output_columns) if output_columns else []
+        self.processor = processor if processor else "lite-fast"
+        try:
+            self.rows.append(json.loads(input_json) if input_json else {})
+        except:
+            self.rows.append({})
 
-    try:
-        # Use shared core enrichment logic (same as BigQuery/Spark)
-        results = enrich_batch(
-            inputs=[input_data],
-            output_columns=list(output_columns),
-            api_key=api_key,
-            processor=processor,
-            timeout=300,
-            include_basis=True,
-            source="snowflake",
-        )
+    def end_partition(self):
+        if not self.rows:
+            return
 
-        if results and len(results) > 0:
-            return results[0]
-        return {"error": "No results received"}
+        if not self.api_key:
+            for row in self.rows:
+                yield (row, {"error": "No API key provided"})
+            return
 
-    except Exception as e:
-        return {"error": f"Enrichment failed: {str(e)}"}
+        try:
+            results = enrich_batch(
+                inputs=self.rows,
+                output_columns=self.output_columns,
+                api_key=self.api_key,
+                processor=self.processor,
+                timeout=600,
+                poll_interval=2,
+                include_basis=True,
+                source="snowflake",
+            )
+            for row, r in zip(self.rows, results):
+                yield (row, r)
+        except Exception as e:
+            for row in self.rows:
+                yield (row, {"error": str(e)})
 $$;
 
--- =============================================================================
--- Public UDF Wrappers
--- =============================================================================
--- These are the user-facing functions that call the internal implementation.
-
--- Wrapper 1: Default processor (lite-fast)
+-- Default processor version
 CREATE OR REPLACE FUNCTION parallel_enrich(
-    input_data OBJECT,
+    input_json VARCHAR,
     output_columns ARRAY
 )
-RETURNS VARIANT
-LANGUAGE SQL
+RETURNS TABLE (input VARIANT, enriched VARIANT)
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.12'
+ARTIFACT_REPOSITORY = snowflake.snowpark.pypi_shared_repository
+PACKAGES = ('parallel-web-tools', 'pandas')
+HANDLER = 'EnrichHandler'
+EXTERNAL_ACCESS_INTEGRATIONS = (parallel_api_access_integration)
+SECRETS = ('api_key' = parallel_api_key)
 AS $$
-    parallel_enrich_internal(input_data, output_columns, 'lite-fast', '')
-$$;
+import json
+import _snowflake
+from parallel_web_tools.core import enrich_batch
 
--- Wrapper 2: Custom processor
-CREATE OR REPLACE FUNCTION parallel_enrich(
-    input_data OBJECT,
-    output_columns ARRAY,
-    processor VARCHAR
-)
-RETURNS VARIANT
-LANGUAGE SQL
-AS $$
-    parallel_enrich_internal(input_data, output_columns, processor, '')
+
+class EnrichHandler:
+    def __init__(self):
+        self.api_key = _snowflake.get_generic_secret_string("api_key")
+        self.rows = []
+        self.output_columns = []
+
+    def process(self, input_json, output_columns):
+        self.output_columns = list(output_columns) if output_columns else []
+        try:
+            self.rows.append(json.loads(input_json) if input_json else {})
+        except:
+            self.rows.append({})
+
+    def end_partition(self):
+        if not self.rows:
+            return
+
+        if not self.api_key:
+            for row in self.rows:
+                yield (row, {"error": "No API key provided"})
+            return
+
+        try:
+            results = enrich_batch(
+                inputs=self.rows,
+                output_columns=self.output_columns,
+                api_key=self.api_key,
+                processor="lite-fast",
+                timeout=600,
+                poll_interval=2,
+                include_basis=True,
+                source="snowflake",
+            )
+            for row, r in zip(self.rows, results):
+                yield (row, r)
+        except Exception as e:
+            for row in self.rows:
+                yield (row, {"error": str(e)})
 $$;
 
 -- =============================================================================
 -- Grant permissions
 -- =============================================================================
 
-GRANT USAGE ON FUNCTION parallel_enrich(OBJECT, ARRAY) TO ROLE PARALLEL_USER;
-GRANT USAGE ON FUNCTION parallel_enrich(OBJECT, ARRAY, VARCHAR) TO ROLE PARALLEL_USER;
+GRANT USAGE ON FUNCTION parallel_enrich(VARCHAR, ARRAY, VARCHAR) TO ROLE PARALLEL_USER;
+GRANT USAGE ON FUNCTION parallel_enrich(VARCHAR, ARRAY) TO ROLE PARALLEL_USER;
 
 -- =============================================================================
 -- Verification
 -- =============================================================================
 
-SELECT 'parallel_enrich() UDF created successfully' AS status;
+SELECT 'parallel_enrich() UDTF created (batched via end_partition)' AS status;

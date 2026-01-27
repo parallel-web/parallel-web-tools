@@ -89,7 +89,7 @@ def enrich_batch(
     api_key: str | None = None,
     processor: str = "lite-fast",
     timeout: int = 600,
-    poll_interval: int = 10,
+    poll_interval: int = 5,
     include_basis: bool = True,
     source: ClientSource = "python",
 ) -> list[dict[str, Any]]:
