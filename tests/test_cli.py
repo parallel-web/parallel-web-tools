@@ -688,3 +688,26 @@ class TestCLIExtrasAndStandaloneMode:
         assert "csv" in commands.AVAILABLE_SOURCE_TYPES
         assert "duckdb" in commands.AVAILABLE_SOURCE_TYPES
         assert "bigquery" in commands.AVAILABLE_SOURCE_TYPES
+
+
+class TestUpdateCommand:
+    """Tests for the update command."""
+
+    def test_update_shows_pip_message_when_not_standalone(self, runner):
+        """Update command should show pip instructions when not in standalone mode."""
+        result = runner.invoke(main, ["update"])
+        assert result.exit_code == 0
+        assert "only available for standalone CLI" in result.output
+        assert "pip install --upgrade" in result.output
+
+    def test_update_check_shows_pip_message_when_not_standalone(self, runner):
+        """Update --check should also show pip instructions when not in standalone mode."""
+        result = runner.invoke(main, ["update", "--check"])
+        assert result.exit_code == 0
+        assert "only available for standalone CLI" in result.output
+
+    def test_update_command_exists_in_help(self, runner):
+        """Update command should appear in CLI help."""
+        result = runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "update" in result.output
