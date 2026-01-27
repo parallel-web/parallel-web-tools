@@ -44,9 +44,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      - name: Build binary
-        run: uv run python scripts/build.py --skip-deps
-
       - name: Get version
         id: version
         shell: bash
@@ -54,36 +51,36 @@ jobs:
           VERSION=$(grep '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Rename binary (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mv dist/parallel-cli dist/parallel-cli-${{ matrix.platform }}
+      - name: Build binary
+        run: uv run python scripts/build.py --skip-deps
 
-      - name: Rename binary (Windows)
-        if: runner.os == 'Windows'
+      - name: List build output
+        shell: bash
         run: |
-          mv dist/parallel-cli.exe dist/parallel-cli-${{ matrix.platform }}.exe
+          echo "Build output:"
+          ls -la dist/
+          echo ""
+          echo "Archive contents:"
+          if [ -f "dist/parallel-cli-${{ matrix.platform }}.zip" ]; then
+            unzip -l "dist/parallel-cli-${{ matrix.platform }}.zip" | head -20
+          fi
 
-      - name: Generate checksum (Unix)
-        if: runner.os != 'Windows'
+      - name: Verify checksum file exists
+        shell: bash
         run: |
-          cd dist
-          shasum -a 256 parallel-cli-${{ matrix.platform }} | cut -d' ' -f1 > parallel-cli-${{ matrix.platform }}.sha256
-
-      - name: Generate checksum (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cd dist
-          $hash = (Get-FileHash -Algorithm SHA256 parallel-cli-${{ matrix.platform }}.exe).Hash.ToLower()
-          "$hash" | Out-File -FilePath parallel-cli-${{ matrix.platform }}.exe.sha256 -NoNewline
+          if [ ! -f "dist/parallel-cli-${{ matrix.platform }}.zip.sha256" ]; then
+            echo "Error: Checksum file not found"
+            exit 1
+          fi
+          echo "Checksum: $(cat dist/parallel-cli-${{ matrix.platform }}.zip.sha256)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.platform }}
           path: |
-            dist/parallel-cli-${{ matrix.platform }}*
+            dist/parallel-cli-${{ matrix.platform }}.zip
+            dist/parallel-cli-${{ matrix.platform }}.zip.sha256
           retention-days: 1
 
   release:
@@ -99,7 +96,9 @@ jobs:
           merge-multiple: true
 
       - name: List artifacts
-        run: ls -la artifacts/
+        run: |
+          echo "Downloaded artifacts:"
+          ls -la artifacts/
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2

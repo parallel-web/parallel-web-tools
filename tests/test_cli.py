@@ -621,3 +621,70 @@ class TestSuggestFromIntent:
 
                 # Verify the call was made
                 assert mock_client.post.called
+
+
+class TestCLIExtrasAndStandaloneMode:
+    """Tests for CLI extras detection and standalone mode behavior.
+
+    The standalone CLI (PyInstaller binary) has limited features:
+    - No YAML config file support (requires pyyaml)
+    - No interactive planner (requires questionary)
+    - Only CSV source type (no DuckDB/BigQuery)
+
+    These tests verify the graceful degradation when extras aren't available.
+    """
+
+    def test_cli_extras_available_when_installed(self):
+        """CLI extras should be available when pyyaml and questionary are installed."""
+        from parallel_web_tools.cli import commands
+
+        # In test environment, extras are installed
+        assert commands._CLI_EXTRAS_AVAILABLE is True
+
+    def test_enrich_plan_registered_when_extras_available(self, runner):
+        """enrich plan command should be available when CLI extras are installed."""
+        result = runner.invoke(main, ["enrich", "--help"])
+        assert result.exit_code == 0
+        assert "plan" in result.output
+
+    def test_enrich_run_yaml_config_works_when_extras_available(self, runner, tmp_path):
+        """YAML config should work when CLI extras are installed."""
+        import yaml
+
+        config_file = tmp_path / "config.yaml"
+        config = {
+            "source_type": "csv",
+            "source": "input.csv",
+            "target": "output.csv",
+            "source_columns": [{"name": "company", "description": "Company name"}],
+            "enriched_columns": [{"name": "ceo", "description": "CEO name"}],
+        }
+        with open(config_file, "w") as f:
+            yaml.dump(config, f)
+
+        # Should not show "YAML config files require the CLI extras" error
+        result = runner.invoke(main, ["enrich", "run", str(config_file)])
+        assert "YAML config files require the CLI extras" not in result.output
+
+    def test_enrich_run_yaml_error_when_extras_missing(self, runner, tmp_path):
+        """Should show helpful error when trying YAML config without extras."""
+        from parallel_web_tools.cli import commands
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("source_type: csv")
+
+        # Patch the flag to simulate missing extras
+        with mock.patch.object(commands, "_CLI_EXTRAS_AVAILABLE", False):
+            result = runner.invoke(main, ["enrich", "run", str(config_file)])
+            assert "YAML config files require the CLI extras" in result.output
+            assert "pip install parallel-web-tools" in result.output
+
+    def test_source_types_include_duckdb_bigquery_when_not_standalone(self, runner):
+        """Non-standalone CLI should support duckdb and bigquery source types."""
+        from parallel_web_tools.cli import commands
+
+        # When not in standalone mode, all source types are available
+        assert commands._STANDALONE_MODE is False
+        assert "csv" in commands.AVAILABLE_SOURCE_TYPES
+        assert "duckdb" in commands.AVAILABLE_SOURCE_TYPES
+        assert "bigquery" in commands.AVAILABLE_SOURCE_TYPES
