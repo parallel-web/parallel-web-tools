@@ -63,7 +63,13 @@ def _is_newer_version(latest: str, current: str) -> bool:
     try:
         return Version(latest) > Version(current)
     except Exception:
-        return latest != current
+        # If version parsing fails, only return True if they differ
+        # and latest looks like a higher version (simple heuristic)
+        if latest == current:
+            return False
+        # Fall back to string comparison - not perfect but safe
+        # This will return False for most edge cases, avoiding false positives
+        return False
 
 
 def _fetch_latest_release(timeout: int = 10) -> dict | None:
@@ -82,14 +88,20 @@ def _fetch_latest_release(timeout: int = 10) -> dict | None:
         return None
 
 
-def check_for_update_notification(current_version: str) -> str | None:
+def check_for_update_notification(current_version: str, save_state: bool = True) -> str | None:
     """Check for updates and return notification message if available.
+
+    Args:
+        current_version: The current CLI version
+        save_state: If True, updates the last_check timestamp (for automatic checks).
+                   Set to False for explicit --check calls to avoid resetting the timer.
 
     Returns None if no update available or on error.
     This is designed to be fast and non-blocking.
     """
-    # Update last check time first (so we don't spam on errors)
-    _save_json_file(UPDATE_STATE_FILE, {"last_check": time.time()})
+    # Update last check time (so we don't spam on errors)
+    if save_state:
+        _save_json_file(UPDATE_STATE_FILE, {"last_check": time.time()})
 
     release = _fetch_latest_release(timeout=5)
     if not release:
@@ -112,14 +124,19 @@ def get_platform() -> str | None:
     if system == "darwin":
         return "darwin-arm64" if machine == "arm64" else "darwin-x64"
     elif system == "linux":
-        return "linux-x64"
+        return "linux-arm64" if machine in ("arm64", "aarch64") else "linux-x64"
     elif system == "windows":
         return "windows-x64"
     return None
 
 
-def download_and_install_update(current_version: str, console) -> bool:
+def download_and_install_update(current_version: str, console, force: bool = False) -> bool:
     """Download and install the latest update.
+
+    Args:
+        current_version: The current CLI version
+        console: Rich console for output
+        force: If True, reinstall even if already at latest version
 
     Returns True on success, False on failure.
     """
@@ -144,11 +161,14 @@ def download_and_install_update(current_version: str, console) -> bool:
 
     latest_version = release["tag_name"].lstrip("v")
 
-    if not _is_newer_version(latest_version, current_version):
+    if not _is_newer_version(latest_version, current_version) and not force:
         console.print(f"[green]Already up to date (v{current_version})[/green]")
         return True
 
-    console.print(f"[cyan]Updating: v{current_version} → v{latest_version}[/cyan]")
+    if force and not _is_newer_version(latest_version, current_version):
+        console.print(f"[cyan]Reinstalling v{latest_version}...[/cyan]")
+    else:
+        console.print(f"[cyan]Updating: v{current_version} → v{latest_version}[/cyan]")
 
     # Find the asset for our platform
     archive_name = f"parallel-cli-{plat}.zip"

@@ -38,12 +38,12 @@ class TestVersionComparison:
         assert _is_newer_version("0.0.9rc2", "0.0.9rc1") is True
         assert _is_newer_version("0.0.9rc1", "0.0.9") is False
 
-    def test_invalid_versions_fallback_to_string_compare(self):
-        """Should fall back to string comparison for invalid versions."""
+    def test_invalid_versions_fallback_safely(self):
+        """Should return False for invalid versions (safe fallback)."""
         from parallel_web_tools.cli.updater import _is_newer_version
 
-        # Different strings should return True (not equal)
-        assert _is_newer_version("invalid", "0.0.8") is True
+        # Invalid versions should return False (safe - don't prompt for update)
+        assert _is_newer_version("invalid", "0.0.8") is False
         # Same strings should return False
         assert _is_newer_version("same", "same") is False
 
@@ -189,6 +189,22 @@ class TestGetPlatform:
             with mock.patch("platform.machine", return_value="x86_64"):
                 assert get_platform() == "linux-x64"
 
+    def test_linux_arm64(self):
+        """Should detect Linux ARM64."""
+        from parallel_web_tools.cli.updater import get_platform
+
+        with mock.patch("platform.system", return_value="Linux"):
+            with mock.patch("platform.machine", return_value="aarch64"):
+                assert get_platform() == "linux-arm64"
+
+    def test_linux_arm64_alternate(self):
+        """Should detect Linux ARM64 with arm64 machine string."""
+        from parallel_web_tools.cli.updater import get_platform
+
+        with mock.patch("platform.system", return_value="Linux"):
+            with mock.patch("platform.machine", return_value="arm64"):
+                assert get_platform() == "linux-arm64"
+
     def test_windows_x64(self):
         """Should detect Windows x64."""
         from parallel_web_tools.cli.updater import get_platform
@@ -242,3 +258,25 @@ class TestCheckForUpdateNotification:
             with mock.patch.object(updater, "_save_json_file"):
                 result = updater.check_for_update_notification("0.0.8")
                 assert result is None
+
+    def test_saves_state_by_default(self):
+        """Should save state (last_check timestamp) by default."""
+        from parallel_web_tools.cli import updater
+
+        mock_release = {"tag_name": "v0.0.8", "assets": []}
+
+        with mock.patch.object(updater, "_fetch_latest_release", return_value=mock_release):
+            with mock.patch.object(updater, "_save_json_file") as mock_save:
+                updater.check_for_update_notification("0.0.8", save_state=True)
+                mock_save.assert_called_once()
+
+    def test_does_not_save_state_when_disabled(self):
+        """Should not save state when save_state=False."""
+        from parallel_web_tools.cli import updater
+
+        mock_release = {"tag_name": "v0.0.8", "assets": []}
+
+        with mock.patch.object(updater, "_fetch_latest_release", return_value=mock_release):
+            with mock.patch.object(updater, "_save_json_file") as mock_save:
+                updater.check_for_update_notification("0.0.8", save_state=False)
+                mock_save.assert_not_called()

@@ -289,20 +289,18 @@ def _check_for_update_notification():
 
     Only runs in standalone mode, respects config, and rate-limits to once per day.
     """
-    if not _STANDALONE_MODE:
-        return
-
     # Import here to avoid slowing down startup when not needed
     from parallel_web_tools.cli.updater import (
         check_for_update_notification,
         should_check_for_updates,
     )
 
+    # should_check_for_updates() handles standalone mode check, config check, and rate limiting
     if not should_check_for_updates():
         return
 
     try:
-        notification = check_for_update_notification(__version__)
+        notification = check_for_update_notification(__version__, save_state=True)
         if notification:
             console.print(f"\n[dim]{notification}[/dim]")
     except Exception:
@@ -370,7 +368,8 @@ def logout_cmd():
 
 @main.command(name="update")
 @click.option("--check", is_flag=True, help="Check for updates without installing")
-def update_cmd(check: bool):
+@click.option("--force", is_flag=True, help="Reinstall even if already at latest version")
+def update_cmd(check: bool, force: bool):
     """Update to the latest version (standalone CLI only)."""
     from parallel_web_tools.cli.updater import (
         check_for_update_notification,
@@ -384,14 +383,15 @@ def update_cmd(check: bool):
         return
 
     if check:
-        notification = check_for_update_notification(__version__)
+        # Don't save state for explicit --check (doesn't reset 24h timer)
+        notification = check_for_update_notification(__version__, save_state=False)
         if notification:
             console.print(f"[cyan]{notification}[/cyan]")
         else:
             console.print(f"[green]Already up to date (v{__version__})[/green]")
         return
 
-    if not download_and_install_update(__version__, console):
+    if not download_and_install_update(__version__, console, force=force):
         raise click.Abort()
 
 
