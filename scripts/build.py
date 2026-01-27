@@ -6,7 +6,8 @@ Usage:
     python scripts/build.py          # Build using current environment
     uv run scripts/build.py          # Build using uv (recommended)
 
-This creates a standalone executable in dist/parallel-cli
+This creates a standalone executable in dist/parallel-cli/
+The output is a folder (onedir mode) for fast startup times.
 """
 
 import hashlib
@@ -95,6 +96,15 @@ def calculate_checksum(file_path: Path) -> str:
     return sha256.hexdigest()
 
 
+def get_folder_size(folder: Path) -> int:
+    """Get total size of a folder in bytes."""
+    total = 0
+    for f in folder.rglob("*"):
+        if f.is_file():
+            total += f.stat().st_size
+    return total
+
+
 def build(skip_deps: bool = False):
     """Build the standalone executable."""
     project_root = Path(__file__).parent.parent
@@ -143,33 +153,51 @@ def build(skip_deps: bool = False):
         print("Build failed!")
         sys.exit(1)
 
-    # Check output
-    exe_path = dist_dir / "parallel-cli"
-    if platform.system() == "Windows":
-        exe_path = dist_dir / "parallel-cli.exe"
+    # Check output - onedir mode creates a folder
+    app_dir = dist_dir / "parallel-cli"
+    exe_name = "parallel-cli.exe" if platform.system() == "Windows" else "parallel-cli"
+    exe_path = app_dir / exe_name
 
     if not exe_path.exists():
         print(f"Error: Expected output not found at {exe_path}")
         sys.exit(1)
 
-    # Calculate checksum
-    checksum = calculate_checksum(exe_path)
-    file_size = exe_path.stat().st_size / (1024 * 1024)  # MB
+    # Calculate folder size
+    folder_size = get_folder_size(app_dir) / (1024 * 1024)  # MB
+
+    # Create zip archive for distribution
+    archive_name = f"parallel-cli-{platform_str}"
+    print(f"\nCreating archive: {archive_name}.zip")
+    archive_path = shutil.make_archive(
+        str(dist_dir / archive_name),
+        "zip",
+        root_dir=dist_dir,
+        base_dir="parallel-cli",
+    )
+    archive_path = Path(archive_path)
+
+    # Calculate checksum of the archive
+    checksum = calculate_checksum(archive_path)
+    archive_size = archive_path.stat().st_size / (1024 * 1024)  # MB
 
     print("\n" + "=" * 50)
     print("Build successful!")
     print("=" * 50)
-    print(f"Output: {exe_path}")
-    print(f"Size: {file_size:.1f} MB")
+    print(f"Output folder: {app_dir}")
+    print(f"Folder size: {folder_size:.1f} MB")
+    print(f"Archive: {archive_path}")
+    print(f"Archive size: {archive_size:.1f} MB")
     print(f"SHA256: {checksum}")
 
     # Create manifest
     manifest = {
         "version": version,
+        "format": "zip",
         "platforms": {
             platform_str: {
+                "archive": archive_path.name,
                 "checksum": checksum,
-                "size": exe_path.stat().st_size,
+                "size": archive_path.stat().st_size,
             }
         },
     }
@@ -178,10 +206,16 @@ def build(skip_deps: bool = False):
     manifest_path.write_text(json.dumps(manifest, indent=2))
     print(f"Manifest: {manifest_path}")
 
+    # Create checksum file for the archive
+    checksum_file = archive_path.with_suffix(".zip.sha256")
+    checksum_file.write_text(checksum)
+    print(f"Checksum file: {checksum_file}")
+
     # Create platform-specific directory structure for releases
     release_dir = dist_dir / version / platform_str
     release_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy(exe_path, release_dir / "parallel-cli")
+    shutil.copy(archive_path, release_dir / archive_path.name)
+    shutil.copy(checksum_file, release_dir / checksum_file.name)
 
     print(f"\nRelease files: {release_dir}")
     print("\nTo test the build:")

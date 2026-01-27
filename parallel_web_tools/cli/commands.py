@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from parallel_web_tools import __version__
-from parallel_web_tools.cli.planner import create_config_interactive, save_config
 from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     JSON_SCHEMA_TYPE_MAP,
@@ -25,10 +24,26 @@ from parallel_web_tools.core import (
     get_research_status,
     logout,
     poll_research,
-    run_enrichment,
     run_enrichment_from_dict,
     run_research,
 )
+
+# Standalone CLI (PyInstaller) has limited features to reduce bundle size
+# YAML config and interactive planner require: pip install parallel-web-tools[cli]
+_STANDALONE_MODE = getattr(sys, "frozen", False)
+
+# CLI extras (yaml config, interactive planner) are optional
+# Available with: pip install parallel-web-tools[cli]
+_CLI_EXTRAS_AVAILABLE = False
+if not _STANDALONE_MODE:
+    try:
+        from parallel_web_tools.cli.planner import create_config_interactive, save_config
+        from parallel_web_tools.core import run_enrichment
+
+        _CLI_EXTRAS_AVAILABLE = True
+    except ImportError:
+        # CLI extras not installed (pyyaml, questionary)
+        pass
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,9 +52,11 @@ console = Console()
 load_dotenv(".env.local")
 
 # Source types available for enrich run/plan
-# BigQuery requires sqlalchemy-bigquery driver which isn't in standalone CLI
-if getattr(sys, "frozen", False):
-    AVAILABLE_SOURCE_TYPES = ["csv", "duckdb"]
+# Standalone CLI only supports CSV to minimize bundle size
+# DuckDB requires: pip install parallel-web-tools[duckdb]
+# BigQuery requires: pip install parallel-web-tools[bigquery]
+if _STANDALONE_MODE:
+    AVAILABLE_SOURCE_TYPES = ["csv"]
 else:
     AVAILABLE_SOURCE_TYPES = ["csv", "duckdb", "bigquery"]
 
@@ -586,12 +603,20 @@ def enrich_run(
             console.print("[bold red]Error: Provide a config file or CLI arguments.[/bold red]")
             raise click.Abort()
 
+        # YAML config files require CLI extras (pyyaml)
+        if config_file and not _CLI_EXTRAS_AVAILABLE:
+            console.print("[bold red]Error: YAML config files require the CLI extras.[/bold red]")
+            console.print("\nUse CLI arguments instead:")
+            console.print("  parallel-cli enrich run --source-type csv --source data.csv ...")
+            console.print("\nOr install CLI extras: [cyan]pip install parallel-web-tools\\[cli][/cyan]")
+            raise click.Abort()
+
         if has_cli_args:
             validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
 
         if config_file:
             console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
-            run_enrichment(config_file)
+            run_enrichment(config_file)  # type: ignore[name-defined]
         else:
             # After validation, these are guaranteed non-None
             assert source_type is not None
@@ -638,7 +663,9 @@ def enrich_run(
             os.unlink(temp_csv_path)
 
 
-@enrich.command(name="plan")
+# Plan command - only registered when not running as frozen executable (standalone CLI)
+# Standalone CLI doesn't bundle planner dependencies (questionary, duckdb, pyyaml)
+@click.command(name="plan")
 @click.option("-o", "--output", default="config.yaml", help="Output YAML file path", show_default=True)
 @click.option("--source-type", type=click.Choice(AVAILABLE_SOURCE_TYPES), help="Data source type")
 @click.option("--source", help="Source file path or table name")
@@ -657,7 +684,7 @@ def enrich_plan(
     intent: str | None,
     processor: str | None,
 ):
-    """Create an enrichment configuration file."""
+    """Create an enrichment configuration file interactively or from CLI arguments."""
     base_args = [source_type, source, target, source_columns]
     has_cli_args = any(arg is not None for arg in base_args) or enriched_columns or intent
 
@@ -690,15 +717,21 @@ def enrich_plan(
             processor=final_processor,
         )
 
-        save_config(config, output)
+        save_config(config, output)  # type: ignore[name-defined]
         console.print(f"[bold green]Configuration saved to {output}[/bold green]")
     else:
         try:
-            config = create_config_interactive()
-            save_config(config, output)
+            config = create_config_interactive()  # type: ignore[name-defined]
+            save_config(config, output)  # type: ignore[name-defined]
         except KeyboardInterrupt:
             console.print("\n[yellow]Configuration creation cancelled.[/yellow]")
             raise click.Abort() from None
+
+
+# Only register plan command when CLI extras are available
+# Requires: pip install parallel-web-tools[cli]
+if _CLI_EXTRAS_AVAILABLE:
+    enrich.add_command(enrich_plan)
 
 
 @enrich.command(name="suggest")

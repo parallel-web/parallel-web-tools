@@ -2,7 +2,7 @@
 #
 # Parallel CLI Installer
 #
-# Installs the standalone parallel-cli binary (includes bundled Python runtime).
+# Installs the standalone parallel-cli (includes bundled Python runtime).
 # Automatically detects your platform (macOS/Linux, x64/arm64) and downloads
 # the appropriate pre-built binary.
 #
@@ -16,7 +16,8 @@
 set -e
 
 VERSION="${1:-latest}"
-INSTALL_DIR="${HOME}/.local/bin"
+INSTALL_DIR="${HOME}/.local/share/parallel-cli"
+BIN_DIR="${HOME}/.local/bin"
 REPO="parallel-web/parallel-web-tools"
 BINARY_NAME="parallel-cli"
 GITHUB_RELEASES="https://github.com/${REPO}/releases"
@@ -52,6 +53,12 @@ elif command -v wget >/dev/null 2>&1; then
     DOWNLOADER="wget"
 else
     print_error "Either curl or wget is required but neither is installed"
+    exit 1
+fi
+
+# Check for unzip
+if ! command -v unzip >/dev/null 2>&1; then
+    print_error "unzip is required but not installed"
     exit 1
 fi
 
@@ -148,22 +155,22 @@ setup_path() {
             ;;
         *)
             print_warning "Unknown shell: $shell_name"
-            print_warning "Add ${INSTALL_DIR} to your PATH manually"
+            print_warning "Add ${BIN_DIR} to your PATH manually"
             return
             ;;
     esac
 
     # Check if already in PATH
-    if [[ ":$PATH:" == *":${INSTALL_DIR}:"* ]]; then
+    if [[ ":$PATH:" == *":${BIN_DIR}:"* ]]; then
         return
     fi
 
-    print_status "Adding ${INSTALL_DIR} to PATH in ${rc_file}..."
+    print_status "Adding ${BIN_DIR} to PATH in ${rc_file}..."
 
     if [ "$shell_name" = "fish" ]; then
-        echo "set -gx PATH ${INSTALL_DIR} \$PATH" >> "$rc_file"
+        echo "set -gx PATH ${BIN_DIR} \$PATH" >> "$rc_file"
     else
-        echo "export PATH=\"${INSTALL_DIR}:\$PATH\"" >> "$rc_file"
+        echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "$rc_file"
     fi
 
     print_warning "Restart your shell or run: source ${rc_file}"
@@ -172,9 +179,9 @@ setup_path() {
 # Main
 main() {
     echo ""
-    echo "╔════════════════════════════════════════════╗"
-    echo "║         Parallel CLI Installer             ║"
-    echo "╚════════════════════════════════════════════╝"
+    echo "========================================"
+    echo "       Parallel CLI Installer           "
+    echo "========================================"
     echo ""
 
     # Detect platform
@@ -189,27 +196,22 @@ main() {
     fi
     print_status "Installing version: ${VERSION}"
 
-    # Build download URLs
-    local binary_url="${GITHUB_RELEASES}/download/${VERSION}/${BINARY_NAME}-${platform}"
-    local checksum_url="${binary_url}.sha256"
+    # Build download URLs - now downloading a zip archive
+    local archive_name="${BINARY_NAME}-${platform}.zip"
+    local archive_url="${GITHUB_RELEASES}/download/${VERSION}/${archive_name}"
+    local checksum_url="${archive_url}.sha256"
 
-    # Windows binary has .exe extension
-    if [[ "$platform" == windows-* ]]; then
-        binary_url="${binary_url}.exe"
-        checksum_url="${binary_url}.sha256"
-    fi
-
-    # Create install directory and temp directory
-    mkdir -p "$INSTALL_DIR"
+    # Create directories
+    mkdir -p "$BIN_DIR"
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    local tmp_file="${tmp_dir}/${BINARY_NAME}"
+    local tmp_archive="${tmp_dir}/${archive_name}"
 
-    # Download binary
-    print_status "Downloading ${BINARY_NAME}..."
-    if ! download "$binary_url" "$tmp_file" 2>/dev/null; then
-        print_error "Failed to download binary"
-        print_error "URL: ${binary_url}"
+    # Download archive
+    print_status "Downloading ${archive_name}..."
+    if ! download "$archive_url" "$tmp_archive" 2>/dev/null; then
+        print_error "Failed to download archive"
+        print_error "URL: ${archive_url}"
         print_error ""
         print_error "This could mean:"
         print_error "  - The release doesn't exist yet"
@@ -229,9 +231,9 @@ main() {
         local actual_checksum
 
         if [ "$(uname -s)" = "Darwin" ]; then
-            actual_checksum=$(shasum -a 256 "$tmp_file" | cut -d' ' -f1)
+            actual_checksum=$(shasum -a 256 "$tmp_archive" | cut -d' ' -f1)
         else
-            actual_checksum=$(sha256sum "$tmp_file" | cut -d' ' -f1)
+            actual_checksum=$(sha256sum "$tmp_archive" | cut -d' ' -f1)
         fi
 
         if [ "$actual_checksum" != "$expected_checksum" ]; then
@@ -246,19 +248,33 @@ main() {
         print_warning "Checksum file not available, skipping verification"
     fi
 
-    # Install binary
-    local install_path="${INSTALL_DIR}/${BINARY_NAME}"
-    mv "$tmp_file" "$install_path"
-    chmod +x "$install_path"
+    # Remove old installation if exists
+    if [ -d "$INSTALL_DIR" ]; then
+        print_status "Removing previous installation..."
+        rm -rf "$INSTALL_DIR"
+    fi
+
+    # Extract archive
+    print_status "Extracting archive..."
+    unzip -q "$tmp_archive" -d "$tmp_dir"
+
+    # Move to install directory
+    mv "${tmp_dir}/parallel-cli" "$INSTALL_DIR"
     rm -rf "$tmp_dir"
 
-    print_success "Installed to ${install_path}"
+    # Create symlink in bin directory
+    local symlink_path="${BIN_DIR}/${BINARY_NAME}"
+    rm -f "$symlink_path"
+    ln -s "${INSTALL_DIR}/${BINARY_NAME}" "$symlink_path"
+
+    print_success "Installed to ${INSTALL_DIR}"
+    print_success "Symlinked to ${symlink_path}"
 
     # Setup PATH
     setup_path
 
     # Verify installation
-    export PATH="${INSTALL_DIR}:$PATH"
+    export PATH="${BIN_DIR}:$PATH"
     if command -v "${BINARY_NAME}" >/dev/null 2>&1; then
         echo ""
         print_success "Installation complete!"
