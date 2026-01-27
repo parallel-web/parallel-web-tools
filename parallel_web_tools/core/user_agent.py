@@ -41,11 +41,11 @@ def get_user_agent(source: ClientSource = "python") -> str:
     """Generate a User-Agent string for Parallel API requests.
 
     The User-Agent format is:
-        parallel-tools/{version} ({source}) Python/{py_version} {system}/{release}
+        parallel-web-tools/{version} ({source}) Python/{py_version} {system}/{release}
 
     Examples:
-        parallel-tools/0.0.8 (cli) Python/3.11.5 Darwin/23.0.0
-        parallel-tools/0.0.8 (duckdb) Python/3.11.5 Linux/5.15.0
+        parallel-web-tools/0.0.8 (cli) Python/3.11.5 Darwin/23.0.0
+        parallel-web-tools/0.0.8 (duckdb) Python/3.11.5 Linux/5.15.0
 
     Args:
         source: The source of the API request. One of:
@@ -63,7 +63,7 @@ def get_user_agent(source: ClientSource = "python") -> str:
     system = platform.system()
     release = platform.release()
 
-    return f"parallel-tools/{_get_version()} ({source}) Python/{py_version} {system}/{release}"
+    return f"parallel-web-tools/{_get_version()} ({source}) Python/{py_version} {system}/{release}"
 
 
 def get_default_headers(source: ClientSource = "python") -> dict[str, str]:

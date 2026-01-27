@@ -54,9 +54,9 @@ class TestGetUserAgent:
     def test_includes_version(self):
         """User agent should include package version."""
         ua = get_user_agent()
-        assert ua.startswith("parallel-tools/")
+        assert ua.startswith("parallel-web-tools/")
         # Version format: X.X.X
-        assert re.search(r"parallel-tools/\d+\.\d+\.\d+", ua)
+        assert re.search(r"parallel-web-tools/\d+\.\d+\.\d+", ua)
 
     def test_includes_python_version(self):
         """User agent should include Python version."""
@@ -78,7 +78,7 @@ class TestGetDefaultHeaders:
         """Should return dict with User-Agent header."""
         headers = get_default_headers()
         assert "User-Agent" in headers
-        assert headers["User-Agent"].startswith("parallel-tools/")
+        assert headers["User-Agent"].startswith("parallel-web-tools/")
 
     def test_source_is_passed_through(self):
         """Source should be passed through to user agent."""
