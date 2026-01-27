@@ -47,6 +47,10 @@ if not _STANDALONE_MODE:
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suppress noisy HTTP request logging from httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 console = Console()
 
 load_dotenv(".env.local")
@@ -413,40 +417,31 @@ def config_cmd(key: str | None, value: str | None):
         console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
         return
 
-    # Map of config keys to getter/setter
-    config_keys = {
-        "auto-update-check": {
-            "get": is_auto_update_check_enabled,
-            "set": lambda v: set_auto_update_check(v.lower() in ("on", "true", "1", "yes")),
-            "format": lambda v: "on" if v else "off",
-        },
-    }
+    valid_keys = ["auto-update-check"]
 
+    def format_bool(v: bool) -> str:
+        return "on" if v else "off"
+
+    def parse_bool(v: str) -> bool:
+        return v.lower() in ("on", "true", "1", "yes")
+
+    # Show all settings
     if key is None:
-        # Show all settings
         console.print("[bold]Configuration:[/bold]")
-        for k, funcs in config_keys.items():
-            val = funcs["get"]()
-            formatted = funcs["format"](val)
-            console.print(f"  {k}: [cyan]{formatted}[/cyan]")
+        console.print(f"  auto-update-check: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
         return
 
-    if key not in config_keys:
+    if key not in valid_keys:
         console.print(f"[red]Unknown config key: {key}[/red]")
-        console.print(f"\nAvailable keys: {', '.join(config_keys.keys())}")
+        console.print(f"\nAvailable keys: {', '.join(valid_keys)}")
         raise click.Abort()
 
+    # Show or set the value
     if value is None:
-        # Show specific setting
-        val = config_keys[key]["get"]()
-        formatted = config_keys[key]["format"](val)
-        console.print(f"{key}: [cyan]{formatted}[/cyan]")
+        console.print(f"{key}: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
     else:
-        # Set value
-        config_keys[key]["set"](value)
-        val = config_keys[key]["get"]()
-        formatted = config_keys[key]["format"](val)
-        console.print(f"[green]Set {key} = {formatted}[/green]")
+        set_auto_update_check(parse_bool(value))
+        console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
 
 
 # =============================================================================

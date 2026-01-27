@@ -14,113 +14,91 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 UPDATE_STATE_FILE = CONFIG_DIR / "update-state.json"
 
 
-def _load_config() -> dict:
-    """Load config from file."""
-    if CONFIG_FILE.exists():
+def _load_json_file(path: Path) -> dict:
+    """Load JSON from file, returning empty dict on any error."""
+    if path.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
+            return json.loads(path.read_text())
         except Exception:
             pass
     return {}
 
 
-def _save_config(config: dict) -> None:
-    """Save config to file."""
+def _save_json_file(path: Path, data: dict, indent: int | None = None) -> None:
+    """Save JSON to file, creating parent directories as needed."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(config, indent=2))
-
-
-def _load_update_state() -> dict:
-    """Load update state from file."""
-    if UPDATE_STATE_FILE.exists():
-        try:
-            return json.loads(UPDATE_STATE_FILE.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def _save_update_state(state: dict) -> None:
-    """Save update state to file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    UPDATE_STATE_FILE.write_text(json.dumps(state))
+    path.write_text(json.dumps(data, indent=indent))
 
 
 def is_auto_update_check_enabled() -> bool:
-    """Check if auto-update check is enabled in config."""
-    config = _load_config()
-    # Default to True if not set
-    return config.get("auto_update_check", True)
+    """Check if auto-update check is enabled in config (default: True)."""
+    return _load_json_file(CONFIG_FILE).get("auto_update_check", True)
 
 
 def set_auto_update_check(enabled: bool) -> None:
     """Enable or disable auto-update check."""
-    config = _load_config()
+    config = _load_json_file(CONFIG_FILE)
     config["auto_update_check"] = enabled
-    _save_config(config)
+    _save_json_file(CONFIG_FILE, config, indent=2)
 
 
 def should_check_for_updates() -> bool:
     """Check if we should check for updates now.
 
-    Returns True if:
-    - Running in standalone mode
-    - Auto-update check is enabled
-    - Enough time has passed since last check
+    Returns True if running in standalone mode, auto-update is enabled,
+    and enough time has passed since last check.
     """
-    # Only run in standalone mode
     if not getattr(sys, "frozen", False):
         return False
-
-    # Check if enabled in config
     if not is_auto_update_check_enabled():
         return False
-
-    # Check time since last check
-    state = _load_update_state()
-    last_check = state.get("last_check", 0)
+    last_check = _load_json_file(UPDATE_STATE_FILE).get("last_check", 0)
     return (time.time() - last_check) > UPDATE_CHECK_INTERVAL
+
+
+def _is_newer_version(latest: str, current: str) -> bool:
+    """Check if latest version is newer than current version."""
+    from packaging.version import Version
+
+    try:
+        return Version(latest) > Version(current)
+    except Exception:
+        return latest != current
+
+
+def _fetch_latest_release(timeout: int = 10) -> dict | None:
+    """Fetch latest release info from GitHub. Returns None on error."""
+    import httpx
+
+    try:
+        resp = httpx.get(
+            "https://api.github.com/repos/parallel-web/parallel-web-tools/releases/latest",
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return None
 
 
 def check_for_update_notification(current_version: str) -> str | None:
     """Check for updates and return notification message if available.
 
     Returns None if no update available or on error.
-    Returns a notification string if update is available.
-
     This is designed to be fast and non-blocking.
     """
-    import httpx
-    from packaging.version import Version
-
     # Update last check time first (so we don't spam on errors)
-    state = _load_update_state()
-    state["last_check"] = time.time()
-    _save_update_state(state)
+    _save_json_file(UPDATE_STATE_FILE, {"last_check": time.time()})
 
-    try:
-        # Use a short timeout to avoid blocking
-        resp = httpx.get(
-            "https://api.github.com/repos/parallel-web/parallel-web-tools/releases/latest",
-            timeout=5,
-            follow_redirects=True,
-        )
-        resp.raise_for_status()
-        release = resp.json()
-    except Exception:
+    release = _fetch_latest_release(timeout=5)
+    if not release:
         return None
 
     latest_version = release["tag_name"].lstrip("v")
+    if not _is_newer_version(latest_version, current_version):
+        return None
 
-    # Compare versions
-    try:
-        if Version(latest_version) <= Version(current_version):
-            return None
-    except Exception:
-        if latest_version == current_version:
-            return None
-
-    # Return notification message
     return f"Update available: v{current_version} → v{latest_version}. Run `parallel-cli update` to install."
 
 
@@ -152,38 +130,23 @@ def download_and_install_update(current_version: str, console) -> bool:
     import zipfile
 
     import httpx
-    from packaging.version import Version
 
     plat = get_platform()
     if not plat:
         console.print("[red]Unsupported platform[/red]")
         return False
 
-    # Fetch latest release info
     console.print("[dim]Checking for updates...[/dim]")
-    try:
-        resp = httpx.get(
-            "https://api.github.com/repos/parallel-web/parallel-web-tools/releases/latest",
-            timeout=10,
-            follow_redirects=True,
-        )
-        resp.raise_for_status()
-        release = resp.json()
-    except Exception as e:
-        console.print(f"[red]Failed to check for updates: {e}[/red]")
+    release = _fetch_latest_release(timeout=10)
+    if not release:
+        console.print("[red]Failed to check for updates[/red]")
         return False
 
     latest_version = release["tag_name"].lstrip("v")
 
-    # Compare versions
-    try:
-        if Version(latest_version) <= Version(current_version):
-            console.print(f"[green]Already up to date (v{current_version})[/green]")
-            return True
-    except Exception:
-        if latest_version == current_version:
-            console.print(f"[green]Already up to date (v{current_version})[/green]")
-            return True
+    if not _is_newer_version(latest_version, current_version):
+        console.print(f"[green]Already up to date (v{current_version})[/green]")
+        return True
 
     console.print(f"[cyan]Updating: v{current_version} → v{latest_version}[/cyan]")
 
