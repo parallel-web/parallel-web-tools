@@ -48,6 +48,10 @@ if not _STANDALONE_MODE:
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suppress noisy HTTP request logging from httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 console = Console()
 
 load_dotenv(".env.local")
@@ -285,11 +289,41 @@ def suggest_from_intent(
 # =============================================================================
 
 
+def _check_for_update_notification():
+    """Check for updates and print notification if available.
+
+    Only runs in standalone mode, respects config, and rate-limits to once per day.
+    """
+    # Import here to avoid slowing down startup when not needed
+    from parallel_web_tools.cli.updater import (
+        check_for_update_notification,
+        should_check_for_updates,
+    )
+
+    # should_check_for_updates() handles standalone mode check, config check, and rate limiting
+    if not should_check_for_updates():
+        return
+
+    try:
+        notification = check_for_update_notification(__version__, save_state=True)
+        if notification:
+            console.print(f"\n[dim]{notification}[/dim]")
+    except Exception:
+        # Silently ignore errors - don't disrupt user's workflow
+        pass
+
+
 @click.group()
 @click.version_option(version=__version__, prog_name="parallel-cli")
 def main():
     """Parallel CLI - AI-powered data enrichment and search."""
     pass
+
+
+@main.result_callback()
+def _after_command(*args, **kwargs):
+    """Run after any command completes."""
+    _check_for_update_notification()
 
 
 # =============================================================================
@@ -335,6 +369,84 @@ def logout_cmd():
         console.print("[green]Logged out successfully[/green]")
     else:
         console.print("[yellow]No stored credentials found[/yellow]")
+
+
+@main.command(name="update")
+@click.option("--check", is_flag=True, help="Check for updates without installing")
+@click.option("--force", is_flag=True, help="Reinstall even if already at latest version")
+def update_cmd(check: bool, force: bool):
+    """Update to the latest version (standalone CLI only)."""
+    from parallel_web_tools.cli.updater import (
+        check_for_update_notification,
+        download_and_install_update,
+    )
+
+    if not _STANDALONE_MODE:
+        console.print("[yellow]Update command is only available for standalone CLI.[/yellow]")
+        console.print("\nTo update via pip:")
+        console.print("  [cyan]pip install --upgrade parallel-web-tools[/cyan]")
+        return
+
+    if check:
+        # Don't save state for explicit --check (doesn't reset 24h timer)
+        notification = check_for_update_notification(__version__, save_state=False)
+        if notification:
+            console.print(f"[cyan]{notification}[/cyan]")
+        else:
+            console.print(f"[green]Already up to date (v{__version__})[/green]")
+        return
+
+    if not download_and_install_update(__version__, console, force=force):
+        raise click.Abort()
+
+
+@main.command(name="config")
+@click.argument("key", required=False)
+@click.argument("value", required=False)
+def config_cmd(key: str | None, value: str | None):
+    """View or set CLI configuration (standalone CLI only).
+
+    \b
+    Examples:
+      parallel-cli config                     # Show all settings
+      parallel-cli config auto-update-check   # Show specific setting
+      parallel-cli config auto-update-check on   # Enable auto-update check
+      parallel-cli config auto-update-check off  # Disable auto-update check
+    """
+    from parallel_web_tools.cli.updater import (
+        is_auto_update_check_enabled,
+        set_auto_update_check,
+    )
+
+    if not _STANDALONE_MODE:
+        console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
+        return
+
+    valid_keys = ["auto-update-check"]
+
+    def format_bool(v: bool) -> str:
+        return "on" if v else "off"
+
+    def parse_bool(v: str) -> bool:
+        return v.lower() in ("on", "true", "1", "yes")
+
+    # Show all settings
+    if key is None:
+        console.print("[bold]Configuration:[/bold]")
+        console.print(f"  auto-update-check: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
+        return
+
+    if key not in valid_keys:
+        console.print(f"[red]Unknown config key: {key}[/red]")
+        console.print(f"\nAvailable keys: {', '.join(valid_keys)}")
+        raise click.Abort()
+
+    # Show or set the value
+    if value is None:
+        console.print(f"{key}: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
+    else:
+        set_auto_update_check(parse_bool(value))
+        console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
 
 
 # =============================================================================
