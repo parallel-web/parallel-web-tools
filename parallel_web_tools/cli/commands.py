@@ -280,11 +280,43 @@ def suggest_from_intent(
 # =============================================================================
 
 
+def _check_for_update_notification():
+    """Check for updates and print notification if available.
+
+    Only runs in standalone mode, respects config, and rate-limits to once per day.
+    """
+    if not _STANDALONE_MODE:
+        return
+
+    # Import here to avoid slowing down startup when not needed
+    from parallel_web_tools.cli.updater import (
+        check_for_update_notification,
+        should_check_for_updates,
+    )
+
+    if not should_check_for_updates():
+        return
+
+    try:
+        notification = check_for_update_notification(__version__)
+        if notification:
+            console.print(f"\n[dim]{notification}[/dim]")
+    except Exception:
+        # Silently ignore errors - don't disrupt user's workflow
+        pass
+
+
 @click.group()
 @click.version_option(version=__version__, prog_name="parallel-cli")
 def main():
     """Parallel CLI - AI-powered data enrichment and search."""
     pass
+
+
+@main.result_callback()
+def _after_command(*args, **kwargs):
+    """Run after any command completes."""
+    _check_for_update_notification()
 
 
 # =============================================================================
@@ -336,13 +368,10 @@ def logout_cmd():
 @click.option("--check", is_flag=True, help="Check for updates without installing")
 def update_cmd(check: bool):
     """Update to the latest version (standalone CLI only)."""
-    import hashlib
-    import platform
-    import shutil
-    import zipfile
-    from pathlib import Path
-
-    from packaging.version import Version
+    from parallel_web_tools.cli.updater import (
+        check_for_update_notification,
+        download_and_install_update,
+    )
 
     if not _STANDALONE_MODE:
         console.print("[yellow]Update command is only available for standalone CLI.[/yellow]")
@@ -350,146 +379,74 @@ def update_cmd(check: bool):
         console.print("  [cyan]pip install --upgrade parallel-web-tools[/cyan]")
         return
 
-    # Determine platform
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-
-    if system == "darwin":
-        plat = "darwin-arm64" if machine == "arm64" else "darwin-x64"
-    elif system == "linux":
-        plat = "linux-x64"
-    elif system == "windows":
-        plat = "windows-x64"
-    else:
-        console.print(f"[red]Unsupported platform: {system}[/red]")
-        raise click.Abort()
-
-    # Fetch latest release info from GitHub
-    console.print("[dim]Checking for updates...[/dim]")
-    try:
-        resp = httpx.get(
-            "https://api.github.com/repos/parallel-web/parallel-web-tools/releases/latest",
-            timeout=10,
-            follow_redirects=True,
-        )
-        resp.raise_for_status()
-        release = resp.json()
-    except Exception as e:
-        console.print(f"[red]Failed to check for updates: {e}[/red]")
-        raise click.Abort() from None
-
-    latest_version = release["tag_name"].lstrip("v")
-    current_version = __version__
-
-    # Compare versions
-    try:
-        if Version(latest_version) <= Version(current_version):
-            console.print(f"[green]Already up to date (v{current_version})[/green]")
-            return
-    except Exception:
-        # If version parsing fails, do string comparison
-        if latest_version == current_version:
-            console.print(f"[green]Already up to date (v{current_version})[/green]")
-            return
-
-    console.print(f"[cyan]Update available: v{current_version} → v{latest_version}[/cyan]")
-
     if check:
-        console.print("\nRun [cyan]parallel-cli update[/cyan] to install")
+        notification = check_for_update_notification(__version__)
+        if notification:
+            console.print(f"[cyan]{notification}[/cyan]")
+        else:
+            console.print(f"[green]Already up to date (v{__version__})[/green]")
         return
 
-    # Find the asset for our platform
-    archive_name = f"parallel-cli-{plat}.zip"
-    checksum_name = f"{archive_name}.sha256"
-
-    archive_url = None
-    checksum_url = None
-    for asset in release["assets"]:
-        if asset["name"] == archive_name:
-            archive_url = asset["browser_download_url"]
-        elif asset["name"] == checksum_name:
-            checksum_url = asset["browser_download_url"]
-
-    if not archive_url:
-        console.print(f"[red]No release found for platform: {plat}[/red]")
+    if not download_and_install_update(__version__, console):
         raise click.Abort()
 
-    # Download to temp directory
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        archive_path = tmp_path / archive_name
 
-        # Download archive
-        console.print(f"[dim]Downloading {archive_name}...[/dim]")
-        try:
-            with httpx.stream("GET", archive_url, timeout=60, follow_redirects=True) as resp:
-                resp.raise_for_status()
-                with open(archive_path, "wb") as f:
-                    for chunk in resp.iter_bytes():
-                        f.write(chunk)
-        except Exception as e:
-            console.print(f"[red]Failed to download update: {e}[/red]")
-            raise click.Abort() from None
+@main.command(name="config")
+@click.argument("key", required=False)
+@click.argument("value", required=False)
+def config_cmd(key: str | None, value: str | None):
+    """View or set CLI configuration (standalone CLI only).
 
-        # Verify checksum if available
-        if checksum_url:
-            try:
-                resp = httpx.get(checksum_url, timeout=10, follow_redirects=True)
-                expected_checksum = resp.text.strip()
+    \b
+    Examples:
+      parallel-cli config                     # Show all settings
+      parallel-cli config auto-update-check   # Show specific setting
+      parallel-cli config auto-update-check on   # Enable auto-update check
+      parallel-cli config auto-update-check off  # Disable auto-update check
+    """
+    from parallel_web_tools.cli.updater import (
+        is_auto_update_check_enabled,
+        set_auto_update_check,
+    )
 
-                with open(archive_path, "rb") as f:
-                    actual_checksum = hashlib.sha256(f.read()).hexdigest()
+    if not _STANDALONE_MODE:
+        console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
+        return
 
-                if actual_checksum != expected_checksum:
-                    console.print("[red]Checksum verification failed[/red]")
-                    raise click.Abort()
-            except click.Abort:
-                raise
-            except Exception:
-                console.print("[yellow]Warning: Could not verify checksum[/yellow]")
+    # Map of config keys to getter/setter
+    config_keys = {
+        "auto-update-check": {
+            "get": is_auto_update_check_enabled,
+            "set": lambda v: set_auto_update_check(v.lower() in ("on", "true", "1", "yes")),
+            "format": lambda v: "on" if v else "off",
+        },
+    }
 
-        # Extract archive
-        console.print("[dim]Installing update...[/dim]")
-        extract_dir = tmp_path / "extracted"
-        with zipfile.ZipFile(archive_path, "r") as zf:
-            zf.extractall(extract_dir)
+    if key is None:
+        # Show all settings
+        console.print("[bold]Configuration:[/bold]")
+        for k, funcs in config_keys.items():
+            val = funcs["get"]()
+            formatted = funcs["format"](val)
+            console.print(f"  {k}: [cyan]{formatted}[/cyan]")
+        return
 
-        # Find the current executable location
-        current_exe = Path(sys.executable)
-        install_dir = current_exe.parent
+    if key not in config_keys:
+        console.print(f"[red]Unknown config key: {key}[/red]")
+        console.print(f"\nAvailable keys: {', '.join(config_keys.keys())}")
+        raise click.Abort()
 
-        # The archive contains a parallel-cli folder
-        new_cli_dir = extract_dir / "parallel-cli"
-        if not new_cli_dir.exists():
-            console.print("[red]Invalid archive structure[/red]")
-            raise click.Abort()
-
-        # Replace the installation
-        # On Windows, we can't replace a running executable directly
-        if system == "windows":
-            # Rename current to .old, copy new, delete .old on next run
-            backup_dir = install_dir.parent / "parallel-cli.old"
-            if backup_dir.exists():
-                shutil.rmtree(backup_dir)
-            shutil.move(str(install_dir), str(backup_dir))
-            shutil.copytree(str(new_cli_dir), str(install_dir))
-            console.print(f"[green]Updated to v{latest_version}[/green]")
-            console.print("[dim]Please restart the CLI to use the new version[/dim]")
-        else:
-            # On Unix, we can replace files while running
-            for item in new_cli_dir.iterdir():
-                dest = install_dir / item.name
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest)
-                    else:
-                        dest.unlink()
-                if item.is_dir():
-                    shutil.copytree(str(item), str(dest))
-                else:
-                    shutil.copy2(str(item), str(dest))
-
-            console.print(f"[green]Updated to v{latest_version}[/green]")
+    if value is None:
+        # Show specific setting
+        val = config_keys[key]["get"]()
+        formatted = config_keys[key]["format"](val)
+        console.print(f"{key}: [cyan]{formatted}[/cyan]")
+    else:
+        # Set value
+        config_keys[key]["set"](value)
+        val = config_keys[key]["get"]()
+        formatted = config_keys[key]["format"](val)
+        console.print(f"[green]Set {key} = {formatted}[/green]")
 
 
 # =============================================================================

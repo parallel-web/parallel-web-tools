@@ -270,6 +270,15 @@ main() {
     print_success "Installed to ${INSTALL_DIR}"
     print_success "Symlinked to ${symlink_path}"
 
+    # Initialize config with auto-update check enabled
+    local config_dir="${HOME}/.parallel-cli"
+    local config_file="${config_dir}/config.json"
+    if [ ! -f "$config_file" ]; then
+        mkdir -p "$config_dir"
+        echo '{"auto_update_check": true}' > "$config_file"
+        print_status "Auto-update check enabled (disable with: parallel-cli config auto-update-check off)"
+    fi
+
     # Setup PATH
     setup_path
 

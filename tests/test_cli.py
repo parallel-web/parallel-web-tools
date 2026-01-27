@@ -711,3 +711,19 @@ class TestUpdateCommand:
         result = runner.invoke(main, ["--help"])
         assert result.exit_code == 0
         assert "update" in result.output
+
+
+class TestConfigCommand:
+    """Tests for the config command."""
+
+    def test_config_shows_standalone_message_when_not_standalone(self, runner):
+        """Config command should show standalone-only message when not in standalone mode."""
+        result = runner.invoke(main, ["config"])
+        assert result.exit_code == 0
+        assert "only available for standalone CLI" in result.output
+
+    def test_config_command_exists_in_help(self, runner):
+        """Config command should appear in CLI help."""
+        result = runner.invoke(main, ["--help"])
+        assert result.exit_code == 0
+        assert "config" in result.output
