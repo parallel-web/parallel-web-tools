@@ -30,7 +30,7 @@ USE SCHEMA ENRICHMENT;
 CREATE OR REPLACE FUNCTION parallel_enrich(
     input_json VARCHAR,
     output_columns ARRAY,
-    processor VARCHAR
+    processor VARCHAR DEFAULT 'lite-fast'
 )
 RETURNS TABLE (input VARIANT, enriched VARIANT)
 LANGUAGE PYTHON
@@ -44,32 +44,6 @@ AS $$
 import json
 import _snowflake
 from parallel_web_tools.core import enrich_batch
-
-
-def run_enrichment(rows, output_columns, api_key, processor):
-    """Shared enrichment logic for all UDTF variants."""
-    if not rows:
-        return
-    if not api_key:
-        for row in rows:
-            yield (row, {"error": "No API key provided"})
-        return
-    try:
-        results = enrich_batch(
-            inputs=rows,
-            output_columns=output_columns,
-            api_key=api_key,
-            processor=processor,
-            timeout=1800,
-            poll_interval=2,
-            include_basis=True,
-            source="snowflake",
-        )
-        for row, r in zip(rows, results):
-            yield (row, r)
-    except Exception as e:
-        for row in rows:
-            yield (row, {"error": str(e)})
 
 
 class EnrichHandler:
@@ -88,69 +62,28 @@ class EnrichHandler:
             self.rows.append({})
 
     def end_partition(self):
-        yield from run_enrichment(self.rows, self.output_columns, self.api_key, self.processor)
-$$;
-
--- Default processor version (uses lite-fast)
-CREATE OR REPLACE FUNCTION parallel_enrich(
-    input_json VARCHAR,
-    output_columns ARRAY
-)
-RETURNS TABLE (input VARIANT, enriched VARIANT)
-LANGUAGE PYTHON
-RUNTIME_VERSION = '3.12'
-ARTIFACT_REPOSITORY = snowflake.snowpark.pypi_shared_repository
-PACKAGES = ('parallel-web-tools')
-HANDLER = 'EnrichHandler'
-EXTERNAL_ACCESS_INTEGRATIONS = (parallel_api_access_integration)
-SECRETS = ('api_key' = parallel_api_key)
-AS $$
-import json
-import _snowflake
-from parallel_web_tools.core import enrich_batch
-
-
-def run_enrichment(rows, output_columns, api_key, processor):
-    """Shared enrichment logic for all UDTF variants."""
-    if not rows:
-        return
-    if not api_key:
-        for row in rows:
-            yield (row, {"error": "No API key provided"})
-        return
-    try:
-        results = enrich_batch(
-            inputs=rows,
-            output_columns=output_columns,
-            api_key=api_key,
-            processor=processor,
-            timeout=1800,
-            poll_interval=2,
-            include_basis=True,
-            source="snowflake",
-        )
-        for row, r in zip(rows, results):
-            yield (row, r)
-    except Exception as e:
-        for row in rows:
-            yield (row, {"error": str(e)})
-
-
-class EnrichHandler:
-    def __init__(self):
-        self.api_key = _snowflake.get_generic_secret_string("api_key")
-        self.rows = []
-        self.output_columns = []
-
-    def process(self, input_json, output_columns):
-        self.output_columns = list(output_columns) if output_columns else []
+        if not self.rows:
+            return
+        if not self.api_key:
+            for row in self.rows:
+                yield (row, {"error": "No API key provided"})
+            return
         try:
-            self.rows.append(json.loads(input_json) if input_json else {})
-        except:
-            self.rows.append({})
-
-    def end_partition(self):
-        yield from run_enrichment(self.rows, self.output_columns, self.api_key, "lite-fast")
+            results = enrich_batch(
+                inputs=self.rows,
+                output_columns=self.output_columns,
+                api_key=self.api_key,
+                processor=self.processor,
+                timeout=1800,
+                poll_interval=2,
+                include_basis=True,
+                source="snowflake",
+            )
+            for row, r in zip(self.rows, results):
+                yield (row, r)
+        except Exception as e:
+            for row in self.rows:
+                yield (row, {"error": str(e)})
 $$;
 
 -- =============================================================================
@@ -158,7 +91,6 @@ $$;
 -- =============================================================================
 
 GRANT USAGE ON FUNCTION parallel_enrich(VARCHAR, ARRAY, VARCHAR) TO ROLE PARALLEL_USER;
-GRANT USAGE ON FUNCTION parallel_enrich(VARCHAR, ARRAY) TO ROLE PARALLEL_USER;
 
 -- =============================================================================
 -- Verification
