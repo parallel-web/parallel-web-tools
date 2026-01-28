@@ -458,12 +458,19 @@ def config_cmd(key: str | None, value: str | None):
 @click.argument("objective", required=False)
 @click.option("-q", "--query", multiple=True, help="Keyword search query (can be repeated)")
 @click.option(
-    "--mode", type=click.Choice(["one-shot", "agentic"]), default="one-shot", help="Search mode", show_default=True
+    "--mode", type=click.Choice(["one-shot", "agentic"]), default="agentic", help="Search mode", show_default=True
 )
 @click.option("--max-results", type=int, default=10, help="Maximum results", show_default=True)
 @click.option("--include-domains", multiple=True, help="Only search these domains (comma-separated or repeated)")
 @click.option("--exclude-domains", multiple=True, help="Exclude these domains (comma-separated or repeated)")
 @click.option("--after-date", help="Only results after this date (YYYY-MM-DD)")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
+@click.option(
+    "--excerpt-max-chars-total", type=int, default=60000, help="Max total characters for excerpts", show_default=True
+)
+@click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
+@click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
+@click.option("--disable-cache-fallback", is_flag=True, help="Return error instead of stale cached content")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def search(
@@ -474,6 +481,11 @@ def search(
     include_domains: tuple[str, ...],
     exclude_domains: tuple[str, ...],
     after_date: str | None,
+    excerpt_max_chars_per_result: int | None,
+    excerpt_max_chars_total: int | None,
+    max_age_seconds: int | None,
+    timeout_seconds: float | None,
+    disable_cache_fallback: bool,
     output_file: str | None,
     output_json: bool,
 ):
@@ -505,6 +517,23 @@ def search(
             source_policy["after_date"] = after_date
         if source_policy:
             search_kwargs["source_policy"] = source_policy
+
+        # Excerpt settings (max_chars_total has a default, so always set)
+        excerpts_settings: dict[str, Any] = {"max_chars_total": excerpt_max_chars_total}
+        if excerpt_max_chars_per_result is not None:
+            excerpts_settings["max_chars_per_result"] = excerpt_max_chars_per_result
+        search_kwargs["excerpts"] = excerpts_settings
+
+        # Fetch policy
+        fetch_policy: dict[str, Any] = {}
+        if max_age_seconds is not None:
+            fetch_policy["max_age_seconds"] = max_age_seconds
+        if timeout_seconds is not None:
+            fetch_policy["timeout_seconds"] = timeout_seconds
+        if disable_cache_fallback:
+            fetch_policy["disable_cache_fallback"] = True
+        if fetch_policy:
+            search_kwargs["fetch_policy"] = fetch_policy
 
         if not output_json:
             console.print("[dim]Searching...[/dim]\n")
@@ -549,7 +578,13 @@ def search(
 @click.option("--objective", help="Focus extraction on a specific goal")
 @click.option("-q", "--query", multiple=True, help="Keywords to prioritize (can be repeated)")
 @click.option("--full-content", is_flag=True, help="Include complete page content")
+@click.option("--full-content-max-chars", type=int, help="Max characters per result for full content")
 @click.option("--no-excerpts", is_flag=True, help="Exclude excerpts from output")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
+@click.option("--excerpt-max-chars-total", type=int, help="Max total characters for excerpts across all URLs")
+@click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
+@click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
+@click.option("--disable-cache-fallback", is_flag=True, help="Return error instead of stale cached content")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def extract(
@@ -557,7 +592,13 @@ def extract(
     objective: str | None,
     query: tuple[str, ...],
     full_content: bool,
+    full_content_max_chars: int | None,
     no_excerpts: bool,
+    excerpt_max_chars_per_result: int | None,
+    excerpt_max_chars_total: int | None,
+    max_age_seconds: int | None,
+    timeout_seconds: float | None,
+    disable_cache_fallback: bool,
     output_file: str | None,
     output_json: bool,
 ):
@@ -573,9 +614,37 @@ def extract(
         extract_kwargs: dict[str, Any] = {
             "urls": list(urls),
             "betas": ["search-extract-2025-10-10"],
-            "excerpts": not no_excerpts,
-            "full_content": full_content,
         }
+
+        # Excerpt settings - can be bool or object with settings
+        if no_excerpts:
+            extract_kwargs["excerpts"] = False
+        elif excerpt_max_chars_per_result is not None or excerpt_max_chars_total is not None:
+            excerpts_settings: dict[str, Any] = {}
+            if excerpt_max_chars_per_result is not None:
+                excerpts_settings["max_chars_per_result"] = excerpt_max_chars_per_result
+            if excerpt_max_chars_total is not None:
+                excerpts_settings["max_chars_total"] = excerpt_max_chars_total
+            extract_kwargs["excerpts"] = excerpts_settings
+        else:
+            extract_kwargs["excerpts"] = True
+
+        # Full content settings - can be bool or object with settings
+        if full_content_max_chars is not None:
+            extract_kwargs["full_content"] = {"max_chars_per_result": full_content_max_chars}
+        else:
+            extract_kwargs["full_content"] = full_content
+
+        # Fetch policy
+        fetch_policy: dict[str, Any] = {}
+        if max_age_seconds is not None:
+            fetch_policy["max_age_seconds"] = max_age_seconds
+        if timeout_seconds is not None:
+            fetch_policy["timeout_seconds"] = timeout_seconds
+        if disable_cache_fallback:
+            fetch_policy["disable_cache_fallback"] = True
+        if fetch_policy:
+            extract_kwargs["fetch_policy"] = fetch_policy
 
         if objective:
             extract_kwargs["objective"] = objective
