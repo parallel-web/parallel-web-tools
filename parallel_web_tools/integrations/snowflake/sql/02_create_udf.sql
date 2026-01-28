@@ -36,7 +36,7 @@ RETURNS TABLE (input VARIANT, enriched VARIANT)
 LANGUAGE PYTHON
 RUNTIME_VERSION = '3.12'
 ARTIFACT_REPOSITORY = snowflake.snowpark.pypi_shared_repository
-PACKAGES = ('parallel-web-tools', 'pandas')
+PACKAGES = ('parallel-web-tools')
 HANDLER = 'EnrichHandler'
 EXTERNAL_ACCESS_INTEGRATIONS = (parallel_api_access_integration)
 SECRETS = ('api_key' = parallel_api_key)
@@ -100,7 +100,7 @@ RETURNS TABLE (input VARIANT, enriched VARIANT)
 LANGUAGE PYTHON
 RUNTIME_VERSION = '3.12'
 ARTIFACT_REPOSITORY = snowflake.snowpark.pypi_shared_repository
-PACKAGES = ('parallel-web-tools', 'pandas')
+PACKAGES = ('parallel-web-tools')
 HANDLER = 'EnrichHandler'
 EXTERNAL_ACCESS_INTEGRATIONS = (parallel_api_access_integration)
 SECRETS = ('api_key' = parallel_api_key)
