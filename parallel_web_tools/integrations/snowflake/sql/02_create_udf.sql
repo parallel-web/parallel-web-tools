@@ -46,6 +46,32 @@ import _snowflake
 from parallel_web_tools.core import enrich_batch
 
 
+def run_enrichment(rows, output_columns, api_key, processor):
+    """Shared enrichment logic for all UDTF variants."""
+    if not rows:
+        return
+    if not api_key:
+        for row in rows:
+            yield (row, {"error": "No API key provided"})
+        return
+    try:
+        results = enrich_batch(
+            inputs=rows,
+            output_columns=output_columns,
+            api_key=api_key,
+            processor=processor,
+            timeout=1800,
+            poll_interval=2,
+            include_basis=True,
+            source="snowflake",
+        )
+        for row, r in zip(rows, results):
+            yield (row, r)
+    except Exception as e:
+        for row in rows:
+            yield (row, {"error": str(e)})
+
+
 class EnrichHandler:
     def __init__(self):
         self.api_key = _snowflake.get_generic_secret_string("api_key")
@@ -62,33 +88,10 @@ class EnrichHandler:
             self.rows.append({})
 
     def end_partition(self):
-        if not self.rows:
-            return
-
-        if not self.api_key:
-            for row in self.rows:
-                yield (row, {"error": "No API key provided"})
-            return
-
-        try:
-            results = enrich_batch(
-                inputs=self.rows,
-                output_columns=self.output_columns,
-                api_key=self.api_key,
-                processor=self.processor,
-                timeout=1800,
-                poll_interval=2,
-                include_basis=True,
-                source="snowflake",
-            )
-            for row, r in zip(self.rows, results):
-                yield (row, r)
-        except Exception as e:
-            for row in self.rows:
-                yield (row, {"error": str(e)})
+        yield from run_enrichment(self.rows, self.output_columns, self.api_key, self.processor)
 $$;
 
--- Default processor version
+-- Default processor version (uses lite-fast)
 CREATE OR REPLACE FUNCTION parallel_enrich(
     input_json VARCHAR,
     output_columns ARRAY
@@ -107,6 +110,32 @@ import _snowflake
 from parallel_web_tools.core import enrich_batch
 
 
+def run_enrichment(rows, output_columns, api_key, processor):
+    """Shared enrichment logic for all UDTF variants."""
+    if not rows:
+        return
+    if not api_key:
+        for row in rows:
+            yield (row, {"error": "No API key provided"})
+        return
+    try:
+        results = enrich_batch(
+            inputs=rows,
+            output_columns=output_columns,
+            api_key=api_key,
+            processor=processor,
+            timeout=1800,
+            poll_interval=2,
+            include_basis=True,
+            source="snowflake",
+        )
+        for row, r in zip(rows, results):
+            yield (row, r)
+    except Exception as e:
+        for row in rows:
+            yield (row, {"error": str(e)})
+
+
 class EnrichHandler:
     def __init__(self):
         self.api_key = _snowflake.get_generic_secret_string("api_key")
@@ -121,30 +150,7 @@ class EnrichHandler:
             self.rows.append({})
 
     def end_partition(self):
-        if not self.rows:
-            return
-
-        if not self.api_key:
-            for row in self.rows:
-                yield (row, {"error": "No API key provided"})
-            return
-
-        try:
-            results = enrich_batch(
-                inputs=self.rows,
-                output_columns=self.output_columns,
-                api_key=self.api_key,
-                processor="lite-fast",
-                timeout=1800,
-                poll_interval=2,
-                include_basis=True,
-                source="snowflake",
-            )
-            for row, r in zip(self.rows, results):
-                yield (row, r)
-        except Exception as e:
-            for row in self.rows:
-                yield (row, {"error": str(e)})
+        yield from run_enrichment(self.rows, self.output_columns, self.api_key, "lite-fast")
 $$;
 
 -- =============================================================================
