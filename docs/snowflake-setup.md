@@ -359,10 +359,10 @@ pip install "snowflake-connector-python[secure-local-storage]"
 
 ### Timeout Errors
 
-For complex enrichments, the 5-minute timeout may not be enough. Consider:
+For very large batches, the 30-minute timeout may not be enough. Consider:
 - Using `lite-fast` processor for faster results
-- Processing fewer rows per query
-- Breaking large enrichments into batches
+- Using `PARTITION BY` to split into smaller batches
+- Processing fewer rows per partition
 
 ## API Reference
 
