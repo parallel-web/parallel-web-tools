@@ -228,10 +228,27 @@ FROM companies t,
      ) OVER (PARTITION BY 1)) e;
 ```
 
+**Sample output:**
+
+| company_name | website | ceo_name | founding_year |
+|--------------|---------|----------|---------------|
+| Google | google.com | Sundar Pichai | 1998 |
+| Anthropic | anthropic.com | Dario Amodei | 2021 |
+| Apple | apple.com | Tim Cook | 1976 |
+
 **Key points:**
 - `TO_JSON(OBJECT_CONSTRUCT(...))` creates the input
 - `PARTITION BY 1` batches all rows into single API call
 - Returns `input` (original data) and `enriched` (results)
+
+The raw `enriched` VARIANT column contains:
+```json
+{
+  "ceo_name": "Sundar Pichai",
+  "founding_year": "1998",
+  "basis": [{"field": "ceo_name", "citations": [...], "confidence": "high"}]
+}
+```
 
 ### Custom Processor
 
