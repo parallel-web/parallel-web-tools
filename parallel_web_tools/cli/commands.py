@@ -996,24 +996,23 @@ def enrich_deploy(
             console.print("\n[bold green]Deployment complete![/bold green]")
             console.print("\n[cyan]Example query:[/cyan]")
             console.print("""
--- Basic usage (returns JSON with enriched fields and basis/citations)
-SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
-    OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
-    ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
-) AS enriched_data;
-
--- Parsing the JSON result into columns
+WITH companies AS (
+    SELECT * FROM (VALUES
+        ('Google', 'google.com'),
+        ('Anthropic', 'anthropic.com'),
+        ('Apple', 'apple.com')
+    ) AS t(company_name, website)
+)
 SELECT
-    data:ceo_name::STRING AS ceo_name,
-    data:founding_year::STRING AS founding_year,
-    data:brief_description::STRING AS description,
-    data:basis AS basis
-FROM (
-    SELECT PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
-        OBJECT_CONSTRUCT('company_name', 'Google', 'website', 'google.com'),
-        ARRAY_CONSTRUCT('CEO name', 'Founding year', 'Brief description')
-    ) AS data
-);
+    e.input:company_name::STRING AS company_name,
+    e.input:website::STRING AS website,
+    e.enriched:ceo_name::STRING AS ceo_name,
+    e.enriched:founding_year::STRING AS founding_year
+FROM companies t,
+     TABLE(PARALLEL_INTEGRATION.ENRICHMENT.parallel_enrich(
+         TO_JSON(OBJECT_CONSTRUCT('company_name', t.company_name, 'website', t.website)),
+         ARRAY_CONSTRUCT('CEO name', 'Founding year')
+     ) OVER (PARTITION BY 1)) e;
 """)
         except Exception as e:
             console.print(f"[bold red]Deployment failed: {e}[/bold red]")
