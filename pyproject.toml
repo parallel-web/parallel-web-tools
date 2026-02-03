@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-web-tools"
-version = "0.0.11"
+version = "0.0.12"
 description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
 readme = "README.md"
 requires-python = ">=3.12"
