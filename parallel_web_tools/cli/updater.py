@@ -255,6 +255,12 @@ def download_and_install_update(current_version: str, console, force: bool = Fal
                     else:
                         shutil.copy2(str(item), str(dest))
 
+                # zipfile.extractall() doesn't preserve Unix permissions, so we
+                # need to set the executable bit (equivalent to chmod +x)
+                main_exe = install_dir / "parallel-cli"
+                if main_exe.exists():
+                    main_exe.chmod(main_exe.stat().st_mode | 0o111)
+
                 console.print(f"[green]Updated to v{latest_version}[/green]")
 
             return True

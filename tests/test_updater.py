@@ -280,3 +280,87 @@ class TestCheckForUpdateNotification:
             with mock.patch.object(updater, "_save_json_file") as mock_save:
                 updater.check_for_update_notification("0.0.8", save_state=False)
                 mock_save.assert_not_called()
+
+
+class TestDownloadAndInstallUpdate:
+    """Tests for the download and install update functionality."""
+
+    def test_sets_executable_permission_on_unix(self, tmp_path):
+        """Should set executable permission on the binary after update on Unix."""
+        import stat
+        import zipfile
+
+        from parallel_web_tools.cli import updater
+
+        # Create a mock install directory with a non-executable "parallel-cli" file
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        exe_file = install_dir / "parallel-cli"
+        exe_file.write_text("#!/bin/bash\necho 'test'")
+        # Remove executable permissions
+        exe_file.chmod(0o644)
+
+        # Verify it's not executable initially
+        assert not (exe_file.stat().st_mode & stat.S_IXUSR)
+
+        # Create a mock zip archive with a parallel-cli folder structure
+        archive_dir = tmp_path / "archive"
+        archive_dir.mkdir()
+        cli_dir = archive_dir / "parallel-cli"
+        cli_dir.mkdir()
+        new_exe = cli_dir / "parallel-cli"
+        new_exe.write_text("#!/bin/bash\necho 'updated'")
+        # zipfile doesn't preserve permissions, so this will be non-executable
+        new_exe.chmod(0o644)
+
+        zip_path = tmp_path / "parallel-cli-darwin-arm64.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.write(new_exe, "parallel-cli/parallel-cli")
+
+        # Create mock release data
+        mock_release = {
+            "tag_name": "v99.0.0",
+            "assets": [{"name": "parallel-cli-darwin-arm64.zip", "browser_download_url": f"file://{zip_path}"}],
+        }
+
+        # Mock the console
+        class MockConsole:
+            def print(self, *args, **kwargs):
+                pass
+
+        # Mock httpx to return our local zip file
+        class MockResponse:
+            def __init__(self, path):
+                self.path = path
+                self._content = open(path, "rb").read()
+
+            def raise_for_status(self):
+                pass
+
+            def iter_bytes(self):
+                yield self._content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        def mock_stream(method, url, **kwargs):
+            return MockResponse(zip_path)
+
+        with mock.patch.object(updater, "_fetch_latest_release", return_value=mock_release):
+            with mock.patch.object(updater, "get_platform", return_value="darwin-arm64"):
+                with mock.patch("sys.executable", str(exe_file)):
+                    with mock.patch("platform.system", return_value="Darwin"):
+                        with mock.patch("httpx.stream", mock_stream):
+                            result = updater.download_and_install_update("0.0.1", MockConsole(), force=False)
+
+        # The update should succeed
+        assert result is True
+
+        # The executable should now have the executable bit set
+        mode = exe_file.stat().st_mode
+        assert mode & stat.S_IXUSR, "User execute bit should be set"
+        assert mode & stat.S_IXGRP, "Group execute bit should be set"
+        assert mode & stat.S_IXOTH, "Other execute bit should be set"
