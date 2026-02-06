@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from parallel_web_tools.cli.commands import main
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
+    _serialize_output,
     create_research_task,
     get_research_result,
     get_research_status,
@@ -26,17 +27,9 @@ def runner():
 @pytest.fixture
 def mock_parallel_client():
     """Create a mock Parallel client."""
-    with mock.patch("parallel.Parallel") as mock_cls:
-        mock_client = mock.MagicMock()
-        mock_cls.return_value = mock_client
+    mock_client = mock.MagicMock()
+    with mock.patch("parallel_web_tools.core.research.create_client", return_value=mock_client):
         yield mock_client
-
-
-@pytest.fixture
-def mock_api_key():
-    """Mock the API key resolution."""
-    with mock.patch("parallel_web_tools.core.research.resolve_api_key", return_value="test-key"):
-        yield
 
 
 # =============================================================================
@@ -47,7 +40,7 @@ def mock_api_key():
 class TestCreateResearchTask:
     """Tests for create_research_task function."""
 
-    def test_create_task_basic(self, mock_parallel_client, mock_api_key):
+    def test_create_task_basic(self, mock_parallel_client):
         """Should create a task and return metadata."""
         mock_task = mock.MagicMock()
         mock_task.run_id = "trun_123"
@@ -61,7 +54,7 @@ class TestCreateResearchTask:
         assert "result_url" in result
         mock_parallel_client.task_run.create.assert_called_once()
 
-    def test_create_task_truncates_query(self, mock_parallel_client, mock_api_key):
+    def test_create_task_truncates_query(self, mock_parallel_client):
         """Should truncate query to 15000 chars."""
         mock_task = mock.MagicMock()
         mock_task.run_id = "trun_123"
@@ -77,7 +70,7 @@ class TestCreateResearchTask:
 class TestGetResearchStatus:
     """Tests for get_research_status function."""
 
-    def test_get_status(self, mock_parallel_client, mock_api_key):
+    def test_get_status(self, mock_parallel_client):
         """Should retrieve task status."""
         mock_status = mock.MagicMock()
         mock_status.status = "running"
@@ -93,7 +86,7 @@ class TestGetResearchStatus:
 class TestGetResearchResult:
     """Tests for get_research_result function."""
 
-    def test_get_result_basic(self, mock_parallel_client, mock_api_key):
+    def test_get_result_basic(self, mock_parallel_client):
         """Should retrieve completed task result."""
         mock_output = mock.MagicMock()
         mock_output.model_dump.return_value = {"content": {"text": "Research findings"}, "basis": []}
@@ -113,7 +106,7 @@ class TestGetResearchResult:
 class TestRunResearch:
     """Tests for run_research function."""
 
-    def test_run_research_success(self, mock_parallel_client, mock_api_key):
+    def test_run_research_success(self, mock_parallel_client):
         """Should create task and poll until completion."""
         # Mock task creation
         mock_task = mock.MagicMock()
@@ -146,7 +139,7 @@ class TestRunResearch:
         assert result["status"] == "completed"
         assert "output" in result
 
-    def test_run_research_timeout(self, mock_parallel_client, mock_api_key):
+    def test_run_research_timeout(self, mock_parallel_client):
         """Should raise TimeoutError when task doesn't complete."""
         mock_task = mock.MagicMock()
         mock_task.run_id = "trun_123"
@@ -164,7 +157,7 @@ class TestRunResearch:
                 with pytest.raises(TimeoutError):
                     run_research("What is AI?", timeout=10, poll_interval=1)
 
-    def test_run_research_failed(self, mock_parallel_client, mock_api_key):
+    def test_run_research_failed(self, mock_parallel_client):
         """Should raise RuntimeError when task fails."""
         mock_task = mock.MagicMock()
         mock_task.run_id = "trun_123"
@@ -179,7 +172,7 @@ class TestRunResearch:
             with pytest.raises(RuntimeError, match="failed"):
                 run_research("What is AI?", poll_interval=1)
 
-    def test_run_research_on_status_callback(self, mock_parallel_client, mock_api_key):
+    def test_run_research_on_status_callback(self, mock_parallel_client):
         """Should call on_status callback during polling."""
         mock_task = mock.MagicMock()
         mock_task.run_id = "trun_123"
@@ -210,7 +203,7 @@ class TestRunResearch:
 class TestPollResearch:
     """Tests for poll_research function."""
 
-    def test_poll_existing_task(self, mock_parallel_client, mock_api_key):
+    def test_poll_existing_task(self, mock_parallel_client):
         """Should poll existing task until completion."""
         mock_status = mock.MagicMock()
         mock_status.status = "completed"
@@ -610,3 +603,92 @@ class TestResearchOutputFile:
             data = json.loads(json_file.read_text())
             assert data["output"]["content_file"] == "report.md"
             assert "content" not in data["output"]
+
+
+class TestSerializeOutput:
+    """Tests for _serialize_output function."""
+
+    def test_none_returns_empty_dict(self):
+        """Should return empty dict for None."""
+        assert _serialize_output(None) == {}
+
+    def test_dict_returns_as_is(self):
+        """Should return dict directly."""
+        data = {"key": "value"}
+        assert _serialize_output(data) == data
+
+    def test_model_dump(self):
+        """Should use model_dump() for Pydantic-like objects."""
+        obj = mock.MagicMock()
+        obj.model_dump.return_value = {"field": "value"}
+        assert _serialize_output(obj) == {"field": "value"}
+
+    def test_to_dict(self):
+        """Should use to_dict() when model_dump not available."""
+        obj = mock.MagicMock(spec=[])
+        obj.to_dict = mock.MagicMock(return_value={"key": "val"})
+        assert _serialize_output(obj) == {"key": "val"}
+
+    def test_dunder_dict_fallback(self):
+        """Should use __dict__ when no serialization methods available."""
+
+        class Simple:
+            def __init__(self):
+                self.x = 1
+                self.y = 2
+
+        obj = Simple()
+        result = _serialize_output(obj)
+        assert result["x"] == 1
+        assert result["y"] == 2
+
+    def test_raw_fallback(self):
+        """Should wrap in {raw: str(obj)} for other types."""
+        assert _serialize_output(42) == {"raw": "42"}
+        assert _serialize_output("text") == {"raw": "text"}
+
+
+class TestRunResearchCancelled:
+    """Tests for research cancellation handling."""
+
+    def test_run_research_cancelled(self, mock_parallel_client):
+        """Should raise RuntimeError when task is cancelled."""
+        mock_task = mock.MagicMock()
+        mock_task.run_id = "trun_cancel"
+        mock_parallel_client.task_run.create.return_value = mock_task
+
+        mock_status = mock.MagicMock()
+        mock_status.status = "cancelled"
+        mock_status.error = None
+        mock_parallel_client.task_run.retrieve.return_value = mock_status
+
+        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+            with pytest.raises(RuntimeError, match="cancelled"):
+                run_research("What is AI?", poll_interval=1)
+
+
+class TestPollResearchStatuses:
+    """Tests for poll_research with various statuses."""
+
+    def test_poll_calls_on_status(self, mock_parallel_client):
+        """Should call on_status callback with 'polling' first."""
+        mock_status = mock.MagicMock()
+        mock_status.status = "completed"
+        mock_parallel_client.task_run.retrieve.return_value = mock_status
+
+        mock_output = mock.MagicMock()
+        mock_output.model_dump.return_value = {"content": "result"}
+        mock_result = mock.MagicMock()
+        mock_result.output = mock_output
+        mock_parallel_client.task_run.result.return_value = mock_result
+
+        statuses = []
+
+        def on_status(status, run_id):
+            statuses.append(status)
+
+        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+            poll_research("trun_poll", on_status=on_status, poll_interval=1)
+
+        assert statuses[0] == "polling"
+        assert "completed" in statuses

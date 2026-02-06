@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import platform
 import sys
+import threading
 from enum import Enum
 from importlib.metadata import version
 from typing import Literal
@@ -79,7 +80,7 @@ def get_default_headers(source: ClientSource = "python") -> dict[str, str]:
 
 
 # Thread-local storage for source context
-_source_context: ClientSource = "python"
+_source_context: threading.local = threading.local()
 
 
 def set_source_context(source: ClientSource) -> None:
@@ -91,8 +92,7 @@ def set_source_context(source: ClientSource) -> None:
     Args:
         source: The source identifier to set.
     """
-    global _source_context
-    _source_context = source
+    _source_context.source = source
 
 
 def get_source_context() -> ClientSource:
@@ -101,4 +101,4 @@ def get_source_context() -> ClientSource:
     Returns:
         The source identifier for the current context.
     """
-    return _source_context
+    return getattr(_source_context, "source", "python")

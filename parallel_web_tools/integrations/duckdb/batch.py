@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from parallel_web_tools.core import EnrichmentResult, build_output_schema, enrich_batch
+from parallel_web_tools.core.sql_utils import quote_identifier
 
 if TYPE_CHECKING:
     DuckDBEnrichmentResult = EnrichmentResult[duckdb.DuckDBPyRelation]
@@ -105,7 +106,7 @@ def enrich_table(
     if source_table.strip().upper().startswith("SELECT"):
         query = source_table
     else:
-        query = f"SELECT {select_cols} FROM {source_table}"
+        query = f"SELECT {select_cols} FROM {quote_identifier(source_table)}"
 
     rows = conn.execute(query).fetchall()
     col_names = [desc[0] for desc in conn.description]
@@ -117,7 +118,7 @@ def enrich_table(
         empty_cols = ", ".join(f"NULL::VARCHAR AS {name}" for name in prop_names)
         if include_basis:
             empty_cols += ", NULL::VARCHAR AS _basis"
-        empty_query = f"SELECT {select_cols}, {empty_cols} FROM {source_table} WHERE 1=0"
+        empty_query = f"SELECT {select_cols}, {empty_cols} FROM {quote_identifier(source_table)} WHERE 1=0"
         rel = conn.sql(empty_query)
 
         return EnrichmentResult(
@@ -195,20 +196,22 @@ def enrich_table(
 
     # Build column definitions
     col_defs = ", ".join(f'"{name}" VARCHAR' for name in all_col_names)
-    conn.execute(f"CREATE TEMP TABLE {temp_table} ({col_defs})")
+    temp_quoted = quote_identifier(temp_table)
+    conn.execute(f"CREATE TEMP TABLE {temp_quoted} ({col_defs})")
 
     # Insert data
     if enriched_rows:
         placeholders = ", ".join(["?"] * len(all_col_names))
-        insert_sql = f"INSERT INTO {temp_table} VALUES ({placeholders})"
+        insert_sql = f"INSERT INTO {temp_quoted} VALUES ({placeholders})"
         conn.executemany(insert_sql, enriched_rows)
 
     # Create result relation or table
     if result_table:
-        conn.execute(f"CREATE TABLE {result_table} AS SELECT * FROM {temp_table}")
-        rel = conn.sql(f"SELECT * FROM {result_table}")
+        result_quoted = quote_identifier(result_table)
+        conn.execute(f"CREATE TABLE {result_quoted} AS SELECT * FROM {temp_quoted}")
+        rel = conn.sql(f"SELECT * FROM {result_quoted}")
     else:
-        rel = conn.sql(f"SELECT * FROM {temp_table}")
+        rel = conn.sql(f"SELECT * FROM {temp_quoted}")
 
     elapsed = time.time() - start_time
 

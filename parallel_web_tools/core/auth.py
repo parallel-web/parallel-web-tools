@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import html
 import http.server
 import json
 import os
@@ -13,14 +14,10 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from parallel import AsyncParallel, Parallel
 
 from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
-
-if TYPE_CHECKING:
-    pass
 
 # OAuth Configuration
 OAUTH_PROVIDER_HOST = "platform.parallel.ai"
@@ -95,7 +92,7 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
                 f"""
                 <html><body style="font-family: system-ui; text-align: center; padding: 50px;">
                 <h1>Authentication Failed</h1>
-                <p>{OAuthCallbackHandler.error}</p>
+                <p>{html.escape(OAuthCallbackHandler.error)}</p>
                 </body></html>
             """.encode()
             )
@@ -230,11 +227,33 @@ def get_api_key(force_login: bool = False) -> str:
     return access_token
 
 
+def create_client(
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> Parallel:
+    """Create a configured Parallel client, resolving the API key if not provided.
+
+    Unlike get_client(), this uses resolve_api_key() which raises ValueError
+    instead of triggering interactive OAuth if no key is found.
+
+    Args:
+        api_key: Optional API key. Resolved from env/stored credentials if not provided.
+        source: Source identifier for User-Agent (cli, duckdb, bigquery, etc.)
+
+    Returns:
+        A configured Parallel client.
+    """
+    return Parallel(
+        api_key=resolve_api_key(api_key),
+        default_headers=get_default_headers(source),
+    )
+
+
 def get_client(
     force_login: bool = False,
     source: ClientSource = "python",
 ) -> Parallel:
-    """Get a configured Parallel client with User-Agent header.
+    """Get a configured Parallel client with interactive OAuth fallback.
 
     Args:
         force_login: Force a new OAuth login flow.
@@ -279,7 +298,7 @@ def logout() -> bool:
     return False
 
 
-def get_auth_status() -> dict:
+def get_auth_status() -> dict[str, str | bool | None]:
     """Get current authentication status."""
     api_key = os.environ.get("PARALLEL_API_KEY")
     if api_key:

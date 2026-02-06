@@ -4,14 +4,18 @@ import json
 import os
 from unittest import mock
 
+import pytest
+
 from parallel_web_tools.core.auth import (
     _generate_code_challenge,
     _generate_code_verifier,
     _load_stored_token,
     _save_token,
+    create_client,
     get_api_key,
     get_auth_status,
     logout,
+    resolve_api_key,
 )
 
 
@@ -179,3 +183,67 @@ class TestLogout:
         with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
             result = logout()
             assert result is False
+
+
+class TestCreateClient:
+    """Tests for create_client function."""
+
+    def test_creates_client_with_explicit_key(self):
+        """Should create Parallel client with explicit API key."""
+        with mock.patch("parallel_web_tools.core.auth.Parallel") as mock_parallel:
+            create_client(api_key="test-key-123", source="cli")
+
+            mock_parallel.assert_called_once()
+            call_kwargs = mock_parallel.call_args.kwargs
+            assert call_kwargs["api_key"] == "test-key-123"
+            assert "User-Agent" in call_kwargs["default_headers"]
+            assert "(cli)" in call_kwargs["default_headers"]["User-Agent"]
+
+    def test_creates_client_with_env_key(self):
+        """Should resolve API key from environment when not explicit."""
+        with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "env-key"}):
+            with mock.patch("parallel_web_tools.core.auth.Parallel") as mock_parallel:
+                create_client(source="duckdb")
+
+                call_kwargs = mock_parallel.call_args.kwargs
+                assert call_kwargs["api_key"] == "env-key"
+
+    def test_raises_without_key(self, tmp_path):
+        """Should raise ValueError when no API key is available."""
+        token_file = tmp_path / "nonexistent.json"
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("PARALLEL_API_KEY", None)
+            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+                with pytest.raises(ValueError, match="Parallel API key required"):
+                    create_client()
+
+    def test_default_source_is_python(self):
+        """Should default to python source."""
+        with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}):
+            with mock.patch("parallel_web_tools.core.auth.Parallel") as mock_parallel:
+                create_client()
+
+                call_kwargs = mock_parallel.call_args.kwargs
+                assert "(python)" in call_kwargs["default_headers"]["User-Agent"]
+
+
+class TestResolveApiKeyInAuth:
+    """Additional tests for resolve_api_key edge cases."""
+
+    def test_empty_string_key_is_falsy(self):
+        """Empty string api_key should fall through to env var."""
+        with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "env-key"}):
+            result = resolve_api_key(api_key="")
+            assert result == "env-key"
+
+    def test_stored_token_used_as_fallback(self, tmp_path):
+        """Should use stored OAuth token when no env var."""
+        token_file = tmp_path / "creds.json"
+        token_file.write_text(json.dumps({"access_token": "stored-token"}))
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("PARALLEL_API_KEY", None)
+            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+                result = resolve_api_key()
+                assert result == "stored-token"

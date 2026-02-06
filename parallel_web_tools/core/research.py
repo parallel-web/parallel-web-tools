@@ -12,8 +12,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from parallel_web_tools.core.auth import resolve_api_key
-from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
+from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.user_agent import ClientSource
 
 # Base URL for viewing results
 PLATFORM_BASE = "https://platform.parallel.ai"
@@ -88,12 +88,7 @@ def create_research_task(
     Returns:
         Dict with run_id, result_url, and other task metadata.
     """
-    from parallel import Parallel
-
-    client = Parallel(
-        api_key=resolve_api_key(api_key),
-        default_headers=get_default_headers(source),
-    )
+    client = create_client(api_key, source)
 
     task = client.task_run.create(
         input=query[:15000],
@@ -123,12 +118,7 @@ def get_research_status(
     Returns:
         Dict with status and other task info.
     """
-    from parallel import Parallel
-
-    client = Parallel(
-        api_key=resolve_api_key(api_key),
-        default_headers=get_default_headers(source),
-    )
+    client = create_client(api_key, source)
     status = client.task_run.retrieve(run_id=run_id)
 
     return {
@@ -153,12 +143,7 @@ def get_research_result(
     Returns:
         Dict with output data and metadata.
     """
-    from parallel import Parallel
-
-    client = Parallel(
-        api_key=resolve_api_key(api_key),
-        default_headers=get_default_headers(source),
-    )
+    client = create_client(api_key, source)
     result = client.task_run.result(run_id=run_id)
 
     output = result.output if hasattr(result, "output") else {}
@@ -257,12 +242,7 @@ def run_research(
         TimeoutError: If the task doesn't complete within timeout.
         RuntimeError: If the task fails or is cancelled.
     """
-    from parallel import Parallel
-
-    client = Parallel(
-        api_key=resolve_api_key(api_key),
-        default_headers=get_default_headers(source),
-    )
+    client = create_client(api_key, source)
 
     task = client.task_run.create(
         input=query[:15000],
@@ -300,12 +280,7 @@ def poll_research(
     Returns:
         Dict with content and metadata.
     """
-    from parallel import Parallel
-
-    client = Parallel(
-        api_key=resolve_api_key(api_key),
-        default_headers=get_default_headers(source),
-    )
+    client = create_client(api_key, source)
     result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"
 
     if on_status:
