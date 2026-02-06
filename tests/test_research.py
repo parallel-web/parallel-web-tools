@@ -6,7 +6,7 @@ from unittest import mock
 import pytest
 from click.testing import CliRunner
 
-from parallel_web_tools.cli.commands import main
+from parallel_web_tools.cli.commands import _extract_executive_summary, main
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
     _serialize_output,
@@ -692,3 +692,139 @@ class TestPollResearchStatuses:
 
         assert statuses[0] == "polling"
         assert "completed" in statuses
+
+
+class TestExtractExecutiveSummary:
+    """Tests for _extract_executive_summary function."""
+
+    def test_markdown_string_with_summary_before_heading(self):
+        """Should extract text before the first ## heading."""
+        content = "# Report Title\n\nThis is the executive summary.\n\n## Section 1\n\nDetails here."
+        result = _extract_executive_summary(content)
+        assert result == "This is the executive summary."
+
+    def test_markdown_string_no_title(self):
+        """Should extract text before the first ## heading when no title."""
+        content = "This is the summary paragraph.\n\nMore summary text.\n\n## Details\n\nSection content."
+        result = _extract_executive_summary(content)
+        assert result == "This is the summary paragraph.\n\nMore summary text."
+
+    def test_markdown_string_no_headings(self):
+        """Should return all content when no ## headings exist."""
+        content = "# Title\n\nThis is a short report with no subsections but enough text to be a summary."
+        result = _extract_executive_summary(content)
+        assert result is not None
+        assert "short report" in result
+
+    def test_markdown_string_empty(self):
+        """Should return None for empty string."""
+        assert _extract_executive_summary("") is None
+
+    def test_markdown_string_too_short(self):
+        """Should return None when summary is too short."""
+        content = "# Title\n\nShort.\n\n## Section\n\nDetails."
+        assert _extract_executive_summary(content) is None
+
+    def test_dict_with_text_key(self):
+        """Should extract summary from dict with text key."""
+        content = {
+            "text": "# Title\n\nThe executive summary here is long enough to be meaningful.\n\n## Section\n\nBody."
+        }
+        result = _extract_executive_summary(content)
+        assert result is not None
+        assert "executive summary" in result
+
+    def test_dict_with_summary_key(self):
+        """Should extract summary from dict with summary key."""
+        content = {"summary": "This is the summary.", "key_findings": ["a", "b"]}
+        result = _extract_executive_summary(content)
+        assert result == "This is the summary."
+
+    def test_dict_with_executive_summary_key(self):
+        """Should extract from executive_summary key."""
+        content = {"executive_summary": "Executive overview here.", "details": "..."}
+        result = _extract_executive_summary(content)
+        assert result == "Executive overview here."
+
+    def test_none_content(self):
+        """Should return None for None content."""
+        assert _extract_executive_summary(None) is None
+
+    def test_non_string_non_dict(self):
+        """Should return None for unsupported types."""
+        assert _extract_executive_summary(42) is None
+        assert _extract_executive_summary([1, 2, 3]) is None
+
+
+class TestResearchOutputExecutiveSummary:
+    """Tests that the executive summary is printed to console."""
+
+    def test_research_run_prints_executive_summary(self, runner):
+        """Should print executive summary when research completes."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_123",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
+                "status": "completed",
+                "output": {
+                    "content": "# Deep Research Report\n\nThis is the executive summary of the research findings.\n\n## Section 1\n\nDetailed analysis here."
+                },
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            assert "Research Complete" in result.output
+            assert "Executive Summary" in result.output
+            assert "executive summary of the research" in result.output
+
+    def test_research_poll_prints_executive_summary(self, runner):
+        """Should print executive summary when polling completes."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
+            mock_poll.return_value = {
+                "run_id": "trun_456",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_456",
+                "status": "completed",
+                "output": {
+                    "content": "# Report\n\nHere is a substantial executive summary with enough content.\n\n## Analysis\n\nBody text."
+                },
+            }
+
+            result = runner.invoke(main, ["research", "poll", "trun_456", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            assert "Executive Summary" in result.output
+            assert "substantial executive summary" in result.output
+
+    def test_no_summary_when_content_missing(self, runner):
+        """Should not crash when content is missing."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_789",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_789",
+                "status": "completed",
+                "output": {"other_field": "value"},
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            assert "Research Complete" in result.output
+            assert "Executive Summary" not in result.output
+
+    def test_no_summary_for_json_output(self, runner):
+        """Should not print summary panel when --json is used."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_json",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_json",
+                "status": "completed",
+                "output": {
+                    "content": "# Report\n\nThis is a long executive summary for testing.\n\n## Section\n\nBody."
+                },
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1", "--json"])
+
+            assert result.exit_code == 0
+            assert "Executive Summary" not in result.output
