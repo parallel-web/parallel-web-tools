@@ -2,18 +2,27 @@
 
 import json
 import os
+import sys
 from unittest import mock
 
 import pytest
 from click.testing import CliRunner
 
 from parallel_web_tools.cli.commands import (
+    EXIT_API_ERROR,
+    EXIT_AUTH_ERROR,
+    EXIT_BAD_INPUT,
+    EXIT_TIMEOUT,
+    _content_to_markdown,
+    _handle_error,
     build_config_from_args,
     main,
     parse_columns,
     parse_comma_separated,
     parse_inline_data,
     suggest_from_intent,
+    validate_enrich_args,
+    write_json_output,
 )
 
 
@@ -263,8 +272,8 @@ class TestLogoutCommand:
             assert "No stored credentials" in result.output or "no" in result.output.lower()
 
 
-class TestSearchCommand:
-    """Tests for the search command."""
+class TestSearchCommandHelp:
+    """Tests for the search command help and validation."""
 
     def test_search_help(self, runner):
         """Should show search help."""
@@ -287,15 +296,9 @@ class TestSearchCommand:
         assert result.exit_code != 0
         assert "objective" in result.output.lower() or "query" in result.output.lower()
 
-    @pytest.mark.skip(reason="Requires mocking Parallel SDK which is imported lazily")
-    def test_search_with_json_output(self, runner):
-        """Should output JSON format."""
-        # This test would require API integration
-        pass
 
-
-class TestExtractCommand:
-    """Tests for the extract command."""
+class TestExtractCommandHelp:
+    """Tests for the extract command help."""
 
     def test_extract_help(self, runner):
         """Should show extract help."""
@@ -303,12 +306,6 @@ class TestExtractCommand:
         assert result.exit_code == 0
         assert "Extract content" in result.output
         assert "--json" in result.output
-
-    @pytest.mark.skip(reason="Requires mocking Parallel SDK which is imported lazily")
-    def test_extract_with_json_output(self, runner):
-        """Should output JSON format."""
-        # This test would require API integration
-        pass
 
 
 class TestFetchCommand:
@@ -727,3 +724,504 @@ class TestConfigCommand:
         result = runner.invoke(main, ["--help"])
         assert result.exit_code == 0
         assert "config" in result.output
+
+    def test_config_show_all_in_standalone(self, runner):
+        """Config command should show all settings in standalone mode."""
+        from parallel_web_tools.cli import commands
+
+        with mock.patch.object(commands, "_STANDALONE_MODE", True):
+            with mock.patch("parallel_web_tools.cli.updater.is_auto_update_check_enabled", return_value=True):
+                result = runner.invoke(main, ["config"])
+                assert result.exit_code == 0
+                assert "auto-update-check" in result.output
+                assert "on" in result.output
+
+    def test_config_get_specific_key_in_standalone(self, runner):
+        """Config command should show a specific key value in standalone mode."""
+        from parallel_web_tools.cli import commands
+
+        with mock.patch.object(commands, "_STANDALONE_MODE", True):
+            with mock.patch("parallel_web_tools.cli.updater.is_auto_update_check_enabled", return_value=False):
+                result = runner.invoke(main, ["config", "auto-update-check"])
+                assert result.exit_code == 0
+                assert "off" in result.output
+
+    def test_config_set_key_in_standalone(self, runner):
+        """Config command should set a key value in standalone mode."""
+        from parallel_web_tools.cli import commands
+
+        with mock.patch.object(commands, "_STANDALONE_MODE", True):
+            with mock.patch("parallel_web_tools.cli.updater.set_auto_update_check") as mock_set:
+                with mock.patch("parallel_web_tools.cli.updater.is_auto_update_check_enabled", return_value=True):
+                    result = runner.invoke(main, ["config", "auto-update-check", "on"])
+                    assert result.exit_code == 0
+                    assert "Set" in result.output
+                    mock_set.assert_called_once_with(True)
+
+    def test_config_invalid_key_in_standalone(self, runner):
+        """Config command should reject invalid keys in standalone mode."""
+        from parallel_web_tools.cli import commands
+
+        with mock.patch.object(commands, "_STANDALONE_MODE", True):
+            result = runner.invoke(main, ["config", "invalid-key"])
+            assert result.exit_code != 0
+            assert "Unknown config key" in result.output
+
+
+class TestHandleError:
+    """Tests for the _handle_error helper function."""
+
+    def test_handle_error_console_output(self):
+        """Should print rich error and exit with given code."""
+        with pytest.raises(SystemExit) as exc_info:
+            _handle_error(ValueError("something broke"), exit_code=EXIT_BAD_INPUT, prefix="Validation")
+
+        assert exc_info.value.code == EXIT_BAD_INPUT
+
+    def test_handle_error_json_output(self, capsys):
+        """Should output JSON error and exit."""
+        with pytest.raises(SystemExit) as exc_info:
+            _handle_error(RuntimeError("api down"), output_json=True, exit_code=EXIT_API_ERROR)
+
+        assert exc_info.value.code == EXIT_API_ERROR
+        output = json.loads(capsys.readouterr().out)
+        assert output["error"]["message"] == "api down"
+        assert output["error"]["type"] == "RuntimeError"
+
+    def test_handle_error_default_exit_code(self):
+        """Should default to EXIT_API_ERROR."""
+        with pytest.raises(SystemExit) as exc_info:
+            _handle_error(Exception("test"))
+
+        assert exc_info.value.code == EXIT_API_ERROR
+
+
+class TestWriteJsonOutput:
+    """Tests for write_json_output helper function."""
+
+    def test_write_to_file(self, tmp_path):
+        """Should write JSON to file."""
+        output_file = tmp_path / "output.json"
+        data = {"key": "value", "count": 42}
+
+        write_json_output(data, str(output_file), output_json=False)
+
+        assert output_file.exists()
+        loaded = json.loads(output_file.read_text())
+        assert loaded == data
+
+    def test_write_to_stdout(self, capsys):
+        """Should print JSON to stdout when output_json is True."""
+        data = {"results": [1, 2, 3]}
+
+        write_json_output(data, None, output_json=True)
+
+        output = json.loads(capsys.readouterr().out)
+        assert output == data
+
+    def test_write_to_both(self, tmp_path, capsys):
+        """Should write to file AND stdout when both specified."""
+        output_file = tmp_path / "output.json"
+        data = {"result": "ok"}
+
+        write_json_output(data, str(output_file), output_json=True)
+
+        # File should be written
+        assert output_file.exists()
+        file_data = json.loads(output_file.read_text())
+        assert file_data == data
+
+        # stdout should contain the JSON data
+        captured = capsys.readouterr().out
+        assert '"result"' in captured
+        assert '"ok"' in captured
+
+    def test_write_neither(self, tmp_path, capsys):
+        """Should do nothing when no output_file and output_json is False."""
+        data = {"result": "ok"}
+
+        write_json_output(data, None, output_json=False)
+
+        assert capsys.readouterr().out == ""
+
+
+class TestContentToMarkdown:
+    """Tests for _content_to_markdown function."""
+
+    def test_none_returns_empty(self):
+        """Should return empty string for None."""
+        assert _content_to_markdown(None) == ""
+
+    def test_string_returned_as_is(self):
+        """Should return strings unchanged."""
+        assert _content_to_markdown("hello world") == "hello world"
+
+    def test_dict_with_text_key(self):
+        """Should extract text from {text: '...'} structure."""
+        assert _content_to_markdown({"text": "the content"}) == "the content"
+
+    def test_dict_with_multiple_keys(self):
+        """Should convert dict keys to markdown headings."""
+        result = _content_to_markdown({"summary": "A summary.", "conclusion": "Done."})
+        assert "# Summary" in result
+        assert "A summary." in result
+        assert "# Conclusion" in result
+        assert "Done." in result
+
+    def test_dict_with_list_values(self):
+        """Should convert list values to bullet points."""
+        result = _content_to_markdown({"findings": ["item 1", "item 2"]})
+        assert "# Findings" in result
+        assert "- item 1" in result
+        assert "- item 2" in result
+
+    def test_dict_with_nested_dict(self):
+        """Should recursively convert nested dicts."""
+        result = _content_to_markdown({"section": {"sub_topic": "content here"}})
+        assert "# Section" in result
+        assert "## Sub Topic" in result
+        assert "content here" in result
+
+    def test_list_of_strings(self):
+        """Should convert list of strings to bullet points."""
+        result = _content_to_markdown(["a", "b", "c"])
+        assert "- a" in result
+        assert "- b" in result
+        assert "- c" in result
+
+    def test_list_of_dicts(self):
+        """Should recursively process list of dicts."""
+        result = _content_to_markdown([{"name": "Alice"}, {"name": "Bob"}])
+        assert "Name" in result
+        assert "Alice" in result
+        assert "Bob" in result
+
+    def test_non_string_non_dict_non_list(self):
+        """Should convert other types to string."""
+        assert _content_to_markdown(42) == "42"
+        assert _content_to_markdown(True) == "True"
+
+    def test_heading_level_capped_at_6(self):
+        """Should not exceed 6 levels of headings."""
+        # Deeply nested
+        result = _content_to_markdown({"a": {"b": {"c": {"d": {"e": {"f": {"g": "deep"}}}}}}})
+        # The deepest heading should still be ######
+        assert "#######" not in result
+
+    def test_key_underscores_converted_to_spaces_and_titled(self):
+        """Should convert underscored keys to title case."""
+        result = _content_to_markdown({"key_findings_summary": "text"})
+        assert "# Key Findings Summary" in result
+
+    def test_dict_with_non_string_value(self):
+        """Should convert non-string/non-dict/non-list values to strings."""
+        result = _content_to_markdown({"count": 42})
+        assert "42" in result
+
+    def test_dict_list_with_nested_dicts(self):
+        """Should handle list of dicts inside a dict."""
+        content = {
+            "sources": [
+                {"url": "https://example.com", "title": "Example"},
+            ]
+        }
+        result = _content_to_markdown(content)
+        assert "# Sources" in result
+        assert "example.com" in result
+
+
+class TestValidateEnrichArgs:
+    """Tests for validate_enrich_args function."""
+
+    def test_valid_args_with_enriched_columns(self):
+        """Should not raise with all required args and enriched_columns."""
+        validate_enrich_args("csv", "input.csv", "output.csv", "[]", "[]", None)
+
+    def test_valid_args_with_intent(self):
+        """Should not raise with all required args and intent."""
+        validate_enrich_args("csv", "input.csv", "output.csv", "[]", None, "Find CEO")
+
+    def test_both_enriched_and_intent_raises(self):
+        """Should raise when both enriched_columns and intent are provided."""
+        import click
+
+        with pytest.raises(click.UsageError, match="not both"):
+            validate_enrich_args("csv", "input.csv", "output.csv", "[]", "[]", "intent")
+
+    def test_missing_source_type(self):
+        """Should raise when source_type is missing."""
+        import click
+
+        with pytest.raises(click.UsageError, match="--source-type"):
+            validate_enrich_args(None, "input.csv", "output.csv", "[]", "[]", None)
+
+    def test_no_output_spec_raises(self):
+        """Should raise when neither enriched_columns nor intent provided."""
+        import click
+
+        with pytest.raises(click.UsageError, match="--enriched-columns OR --intent"):
+            validate_enrich_args("csv", "input.csv", "output.csv", "[]", None, None)
+
+    def test_all_none_does_not_raise(self):
+        """Should not raise when all args are None (no partial args)."""
+        validate_enrich_args(None, None, None, None, None, None)
+
+
+class TestSearchCommandMocked:
+    """Tests for the search command with mocked Parallel SDK."""
+
+    def test_search_successful_json_output(self, runner):
+        """Should output JSON for successful search."""
+        mock_search_result = mock.MagicMock()
+        mock_search_result.search_id = "search_123"
+        mock_search_result.results = [
+            mock.MagicMock(
+                url="https://example.com",
+                title="Example",
+                publish_date="2024-01-01",
+                excerpts=["An excerpt"],
+            )
+        ]
+        mock_search_result.warnings = []
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.search.return_value = mock_search_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["search", "test query", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["search_id"] == "search_123"
+        assert output["status"] == "ok"
+        assert len(output["results"]) == 1
+        assert output["results"][0]["url"] == "https://example.com"
+
+    def test_search_api_error_json_mode(self, runner):
+        """Should output JSON error when API fails in --json mode."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.search.side_effect = RuntimeError("API unavailable")
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["search", "test query", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == EXIT_API_ERROR
+        output = json.loads(result.output)
+        assert output["error"]["message"] == "API unavailable"
+        assert output["error"]["type"] == "RuntimeError"
+
+    def test_search_api_error_console_mode(self, runner):
+        """Should output formatted error when API fails in console mode."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.search.side_effect = RuntimeError("API unavailable")
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["search", "test query"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == EXIT_API_ERROR
+        assert "API unavailable" in result.output
+
+
+class TestExtractCommandMocked:
+    """Tests for the extract command with mocked Parallel SDK."""
+
+    def test_extract_api_error_json_mode(self, runner):
+        """Should output JSON error when extract API fails in --json mode."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.extract.side_effect = ConnectionError("Network error")
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == EXIT_API_ERROR
+        output = json.loads(result.output)
+        assert output["error"]["type"] == "ConnectionError"
+        assert "Network error" in output["error"]["message"]
+
+    def test_extract_successful_json_output(self, runner):
+        """Should output structured JSON for successful extraction."""
+        mock_extract_result = mock.MagicMock()
+        mock_extract_result.extract_id = "ext_123"
+        mock_page = mock.MagicMock()
+        mock_page.url = "https://example.com"
+        mock_page.title = "Example Page"
+        mock_page.excerpts = ["Some excerpt"]
+        mock_page.full_content = None
+        mock_extract_result.results = [mock_page]
+        mock_extract_result.errors = []
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.extract.return_value = mock_extract_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["extract_id"] == "ext_123"
+        assert output["status"] == "ok"
+        assert len(output["results"]) == 1
+        assert output["results"][0]["url"] == "https://example.com"
+
+
+class TestEnrichDeploySnowflake:
+    """Tests for the enrich deploy command Snowflake path."""
+
+    def test_deploy_snowflake_missing_account(self, runner):
+        """Should error without --account for Snowflake."""
+        result = runner.invoke(main, ["enrich", "deploy", "--system", "snowflake", "--user", "testuser"])
+        assert result.exit_code != 0
+        assert "account" in result.output.lower()
+
+    def test_deploy_snowflake_missing_user(self, runner):
+        """Should error without --user for Snowflake."""
+        result = runner.invoke(
+            main,
+            ["enrich", "deploy", "--system", "snowflake", "--account", "abc123.us-east-1"],
+        )
+        assert result.exit_code != 0
+        assert "user" in result.output.lower()
+
+
+class TestOutputResearchResultJsonPath:
+    """Tests for _output_research_result JSON output path."""
+
+    def test_json_output_to_stdout(self, runner):
+        """Should output JSON to stdout via research run --json."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_json",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_json",
+                "status": "completed",
+                "output": {"content": {"text": "findings"}, "basis": []},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "--poll-interval", "1", "--json"],
+            )
+
+        assert result.exit_code == 0
+        # Extract JSON from mixed output (console + JSON)
+        lines = result.output.strip().split("\n")
+        json_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("{"):
+                json_start = i
+                break
+
+        assert json_start is not None
+        json_text = "\n".join(lines[json_start:])
+        output = json.loads(json_text)
+        assert output["run_id"] == "trun_json"
+        assert output["status"] == "completed"
+
+    def test_json_output_with_file_replaces_content(self, runner, tmp_path):
+        """JSON output should reference content_file when output file is set."""
+        output_base = tmp_path / "report"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_both",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_both",
+                "status": "completed",
+                "output": {"content": "text content", "basis": []},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "-o", str(output_base), "--poll-interval", "1", "--json"],
+            )
+
+        assert result.exit_code == 0
+
+        # JSON file should have content_file reference instead of content
+        json_file = tmp_path / "report.json"
+        data = json.loads(json_file.read_text())
+        assert "content" not in data["output"]
+        assert data["output"]["content_file"] == "report.md"
+
+
+class TestExitCodes:
+    """Tests for distinct CLI exit codes."""
+
+    def test_exit_code_values(self):
+        """Exit codes should have distinct expected values."""
+        assert EXIT_BAD_INPUT == 2
+        assert EXIT_AUTH_ERROR == 3
+        assert EXIT_API_ERROR == 4
+        assert EXIT_TIMEOUT == 5
+
+    def test_research_timeout_exit_code(self, runner):
+        """Research run should exit with EXIT_TIMEOUT on timeout."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.side_effect = TimeoutError("timed out after 10s")
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "--poll-interval", "1", "--timeout", "10"],
+            )
+
+        assert result.exit_code == EXIT_TIMEOUT
+
+    def test_research_timeout_json_output(self, runner):
+        """Research timeout should output JSON error in --json mode."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.side_effect = TimeoutError("timed out")
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "--poll-interval", "1", "--json"],
+            )
+
+        assert result.exit_code == EXIT_TIMEOUT
+        # Parse JSON from output
+        lines = result.output.strip().split("\n")
+        json_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("{"):
+                json_start = i
+                break
+        assert json_start is not None
+        json_text = "\n".join(lines[json_start:])
+        output = json.loads(json_text)
+        assert output["error"]["type"] == "TimeoutError"
+
+    def test_login_failure_exit_code(self, runner):
+        """Login failure should exit with EXIT_AUTH_ERROR."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key") as mock_key:
+            mock_key.side_effect = Exception("auth failed")
+
+            result = runner.invoke(main, ["login"])
+
+        assert result.exit_code == EXIT_AUTH_ERROR

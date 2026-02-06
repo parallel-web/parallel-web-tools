@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine.base import Connection
 
 from parallel_web_tools.core import InputSchema, parse_input_and_output_models, run_tasks
+from parallel_web_tools.core.sql_utils import validate_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,11 @@ def split_bq_name(fqtn: str) -> tuple[str | None, str | None, str]:
 
 def fetch_all(conn: Connection, table: str) -> list[dict[str, Any]]:
     """Fetch all rows from BigQuery table."""
-    query = text(f"SELECT * FROM {table}")
+    # Validate table name to prevent SQL injection.
+    # BigQuery table names are dotted identifiers (project.dataset.table)
+    # which validate_table_name allows.
+    validate_table_name(table)
+    query = text(f"SELECT * FROM `{table}`")
     rows = conn.execute(query).mappings().all()
     return [dict(row) for row in rows]
 

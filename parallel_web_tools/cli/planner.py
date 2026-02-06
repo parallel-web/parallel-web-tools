@@ -128,7 +128,8 @@ def get_duckdb_columns(db_path: str, table_name: str) -> list[str]:
     try:
         with duckdb.connect(db_path) as con:
             result = con.execute(
-                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'"
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                [table_name],
             ).fetchall()
             return [row[0] for row in result]
     except Exception as e:

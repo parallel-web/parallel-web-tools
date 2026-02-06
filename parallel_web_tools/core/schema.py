@@ -11,8 +11,6 @@ from pydantic import BaseModel, Field, create_model
 class ParseError(Exception):
     """Raised when schema parsing fails."""
 
-    pass
-
 
 @dataclass
 class Column:

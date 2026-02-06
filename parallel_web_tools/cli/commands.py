@@ -67,8 +67,38 @@ else:
 
 
 # =============================================================================
+# Exit Codes
+# =============================================================================
+
+EXIT_OK = 0
+EXIT_BAD_INPUT = 2  # Invalid arguments or input data
+EXIT_AUTH_ERROR = 3  # Authentication/authorization failure
+EXIT_API_ERROR = 4  # API call failed
+EXIT_TIMEOUT = 5  # Operation timed out
+
+
+# =============================================================================
 # Output Helpers
 # =============================================================================
+
+
+def _handle_error(
+    error: Exception,
+    output_json: bool = False,
+    exit_code: int = EXIT_API_ERROR,
+    prefix: str = "Error",
+) -> None:
+    """Handle an error with appropriate output format and exit code.
+
+    In --json mode, outputs structured JSON to stdout. Otherwise, prints a
+    Rich-formatted error message.
+    """
+    if output_json:
+        error_data = {"error": {"message": str(error), "type": type(error).__name__}}
+        print(json.dumps(error_data, indent=2))
+    else:
+        console.print(f"[bold red]{prefix}: {error}[/bold red]")
+    sys.exit(exit_code)
 
 
 def parse_comma_separated(values: tuple[str, ...]) -> list[str]:
@@ -132,11 +162,10 @@ def validate_enrich_args(
 ) -> None:
     """Validate enrichment CLI arguments.
 
-    Raises click.Abort with appropriate error messages for invalid combinations.
+    Raises click.UsageError for invalid argument combinations.
     """
     if enriched_columns and intent:
-        console.print("[bold red]Error: Use either --enriched-columns OR --intent, not both.[/bold red]")
-        raise click.Abort()
+        raise click.UsageError("Use either --enriched-columns OR --intent, not both.")
 
     base_args = [source_type, source, target, source_columns]
     has_base = all(arg is not None for arg in base_args)
@@ -154,11 +183,9 @@ def validate_enrich_args(
                 ]
                 if not v
             ]
-            console.print(f"[bold red]Error: Missing required options: {', '.join(missing)}[/bold red]")
-            raise click.Abort()
+            raise click.UsageError(f"Missing required options: {', '.join(missing)}")
         if not has_output_spec:
-            console.print("[bold red]Error: Provide --enriched-columns OR --intent.[/bold red]")
-            raise click.Abort()
+            raise click.UsageError("Provide --enriched-columns OR --intent.")
 
 
 def build_config_from_args(
@@ -273,8 +300,8 @@ def suggest_from_intent(
                 recommended = processor_data.get("recommended_processors", [])
                 if recommended:
                     processor = recommended[0]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Processor suggestion failed, using default '%s': %s", processor, e)
 
     return {
         "enriched_columns": enriched_columns,
@@ -358,8 +385,7 @@ def login():
         get_api_key(force_login=True)
         console.print("\n[bold green]Authentication successful![/bold green]")
     except Exception as e:
-        console.print(f"[bold red]Authentication failed: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, exit_code=EXIT_AUTH_ERROR, prefix="Authentication failed")
 
 
 @main.command(name="logout")
@@ -437,9 +463,7 @@ def config_cmd(key: str | None, value: str | None):
         return
 
     if key not in valid_keys:
-        console.print(f"[red]Unknown config key: {key}[/red]")
-        console.print(f"\nAvailable keys: {', '.join(valid_keys)}")
-        raise click.Abort()
+        raise click.UsageError(f"Unknown config key: {key}. Available keys: {', '.join(valid_keys)}")
 
     # Show or set the value
     if value is None:
@@ -489,10 +513,14 @@ def search(
     output_file: str | None,
     output_json: bool,
 ):
-    """Search the web using Parallel's AI-powered search."""
+    """Search the web using Parallel's AI-powered search.
+
+    OBJECTIVE is a natural language description of what you're looking for. You can
+    also pass specific keyword queries with --query. At least one of OBJECTIVE or
+    --query is required.
+    """
     if not objective and not query:
-        console.print("[bold red]Error: Provide an objective or at least one --query.[/bold red]")
-        raise click.Abort()
+        raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
     try:
         from parallel import Parallel
@@ -542,6 +570,7 @@ def search(
 
         output_data = {
             "search_id": result.search_id,
+            "status": "ok",
             "results": [
                 {"url": r.url, "title": r.title, "publish_date": r.publish_date, "excerpts": r.excerpts}
                 for r in result.results
@@ -564,8 +593,7 @@ def search(
                 console.print()
 
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
 
 
 # =============================================================================
@@ -613,7 +641,6 @@ def extract(
 
         extract_kwargs: dict[str, Any] = {
             "urls": list(urls),
-            "betas": ["search-extract-2025-10-10"],
         }
 
         # Excerpt settings - can be bool or object with settings
@@ -676,7 +703,12 @@ def extract(
                     }
                 )
 
-        output_data = {"extract_id": result.extract_id, "results": results_list, "errors": errors_list}
+        output_data = {
+            "extract_id": result.extract_id,
+            "status": "ok",
+            "results": results_list,
+            "errors": errors_list,
+        }
 
         write_json_output(output_data, output_file, output_json)
 
@@ -704,8 +736,7 @@ def extract(
                     console.print()
 
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
 
 
 # Add fetch as an alias for extract
@@ -767,11 +798,9 @@ def enrich_run(
         # Handle inline data - creates a temp CSV and infers source columns
         if inline_data:
             if source:
-                console.print("[bold red]Error: Use --data OR --source, not both.[/bold red]")
-                raise click.Abort()
+                raise click.UsageError("Use --data OR --source, not both.")
             if source_type and source_type != "csv":
-                console.print("[bold red]Error: --data only works with CSV output (--source-type csv).[/bold red]")
-                raise click.Abort()
+                raise click.UsageError("--data only works with CSV output (--source-type csv).")
 
             temp_csv_path, inferred_cols = parse_inline_data(inline_data)
             source = temp_csv_path
@@ -786,12 +815,10 @@ def enrich_run(
         has_cli_args = any(arg is not None for arg in base_args) or enriched_columns or intent
 
         if config_file and has_cli_args:
-            console.print("[bold red]Error: Provide either a config file OR CLI arguments, not both.[/bold red]")
-            raise click.Abort()
+            raise click.UsageError("Provide either a config file OR CLI arguments, not both.")
 
         if not config_file and not has_cli_args:
-            console.print("[bold red]Error: Provide a config file or CLI arguments.[/bold red]")
-            raise click.Abort()
+            raise click.UsageError("Provide a config file or CLI arguments.")
 
         # YAML config files require CLI extras (pyyaml)
         if config_file and not _CLI_EXTRAS_AVAILABLE:
@@ -842,11 +869,9 @@ def enrich_run(
         console.print("\n[bold green]Enrichment complete![/bold green]")
 
     except FileNotFoundError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, exit_code=EXIT_BAD_INPUT)
     except Exception as e:
-        console.print(f"[bold red]Error during enrichment: {e}[/bold red]")
-        raise
+        _handle_error(e, prefix="Error during enrichment")
     finally:
         # Clean up temp file if we created one
         if temp_csv_path and os.path.exists(temp_csv_path):
@@ -959,8 +984,7 @@ def enrich_suggest(intent: str, source_columns: str | None, output_json: bool):
             console.print(json.dumps(result["enriched_columns"]))
 
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
 
 
 # Deploy command - only registered when not running as frozen executable (standalone CLI)
@@ -999,15 +1023,12 @@ def enrich_deploy(
 
     # Validate required parameters FIRST (before triggering OAuth)
     if system == "bigquery" and not project:
-        console.print("[bold red]Error: --project is required for BigQuery deployment.[/bold red]")
-        raise click.Abort()
+        raise click.UsageError("--project is required for BigQuery deployment.")
     if system == "snowflake":
         if not account:
-            console.print("[bold red]Error: --account is required for Snowflake deployment.[/bold red]")
-            raise click.Abort()
+            raise click.UsageError("--account is required for Snowflake deployment.")
         if not user:
-            console.print("[bold red]Error: --user is required for Snowflake deployment.[/bold red]")
-            raise click.Abort()
+            raise click.UsageError("--user is required for Snowflake deployment.")
 
     # Now resolve API key (may trigger OAuth flow if needed)
     if not api_key:
@@ -1037,8 +1058,7 @@ def enrich_deploy(
             console.print("\n[cyan]Example query:[/cyan]")
             console.print(result["example_query"])
         except Exception as e:
-            console.print(f"[bold red]Deployment failed: {e}[/bold red]")
-            raise click.Abort() from None
+            _handle_error(e, prefix="Deployment failed")
 
     elif system == "snowflake":
         assert account is not None and user is not None  # Validated above
@@ -1084,8 +1104,7 @@ FROM companies t,
      ) OVER (PARTITION BY 1)) e;
 """)
         except Exception as e:
-            console.print(f"[bold red]Deployment failed: {e}[/bold red]")
-            raise click.Abort() from None
+            _handle_error(e, prefix="Deployment failed")
 
 
 # Only register deploy command when not running as frozen executable (PyInstaller)
@@ -1148,8 +1167,7 @@ def research_run(
         with open(input_file) as f:
             query = f.read().strip()
     elif not query:
-        console.print("[bold red]Error: Provide a query or use --input-file[/bold red]")
-        raise click.Abort()
+        raise click.UsageError("Provide a QUERY argument or use --input-file.")
 
     if len(query) > 15000:
         console.print(f"[yellow]Warning: Query truncated from {len(query)} to 15,000 characters[/yellow]")
@@ -1194,15 +1212,17 @@ def research_run(
             _output_research_result(result, output_file, output_json)
 
     except TimeoutError as e:
-        console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
-        console.print("[dim]The task is still running. Use 'parallel-cli research poll <run_id>' to resume.[/dim]")
-        raise click.Abort() from None
+        if output_json:
+            error_data = {"error": {"message": str(e), "type": "TimeoutError"}}
+            print(json.dumps(error_data, indent=2))
+        else:
+            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+            console.print("[dim]The task is still running. Use 'parallel-cli research poll <run_id>' to resume.[/dim]")
+        sys.exit(EXIT_TIMEOUT)
     except RuntimeError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
 
 
 @research.command(name="status")
@@ -1236,8 +1256,7 @@ def research_status(run_id: str, output_json: bool):
                 console.print("\n[dim]Use 'parallel-cli research poll <run_id>' to retrieve results[/dim]")
 
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
 
 
 @research.command(name="poll")
@@ -1277,14 +1296,16 @@ def research_poll(
         _output_research_result(result, output_file, output_json)
 
     except TimeoutError as e:
-        console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
-        raise click.Abort() from None
+        if output_json:
+            error_data = {"error": {"message": str(e), "type": "TimeoutError"}}
+            print(json.dumps(error_data, indent=2))
+        else:
+            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+        sys.exit(EXIT_TIMEOUT)
     except RuntimeError as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
     except Exception as e:
-        console.print(f"[bold red]Error: {e}[/bold red]")
-        raise click.Abort() from None
+        _handle_error(e, output_json=output_json)
 
 
 @research.command(name="processors")

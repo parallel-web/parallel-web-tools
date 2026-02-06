@@ -310,19 +310,16 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event_1, event_2]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):  # Skip sleeps
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[
-                            {"company_name": "Google"},
-                            {"company_name": "Microsoft"},
-                        ],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):  # Skip sleeps
+                result = enrich_batch(
+                    inputs=[
+                        {"company_name": "Google"},
+                        {"company_name": "Microsoft"},
+                    ],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert len(result) == 2
         assert result[0]["ceo_name"] == "Sundar Pichai"
@@ -356,16 +353,13 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Apple"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Apple"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert result[0]["ceo_name"] == "Tim Cook"
 
@@ -397,16 +391,13 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Apple"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Apple"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert result[0]["result"] == "plain text response"
 
@@ -438,16 +429,13 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Apple"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Apple"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert result[0]["result"] == "12345"
 
@@ -479,17 +467,14 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Test"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                        include_basis=True,
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Test"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    include_basis=True,
+                )
 
         assert "basis" in result[0]
         assert result[0]["basis"][0]["field"] == "ceo_name"
@@ -522,17 +507,14 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Test"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                        include_basis=False,
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Test"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    include_basis=False,
+                )
 
         assert "basis" not in result[0]
 
@@ -560,16 +542,13 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Test"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Test"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert "error" in result[0]
         assert "API error" in result[0]["error"]
@@ -599,16 +578,13 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "A"}, {"company_name": "B"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "A"}, {"company_name": "B"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert result[0]["ceo_name"] == "Test"
         assert result[1]["error"] == "No result"
@@ -624,16 +600,13 @@ class TestEnrichBatch:
         mock_add_response.run_ids = []
         mock_client.beta.task_group.add_runs.return_value = mock_add_response
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Test"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Test"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert len(result) == 1
         assert "error" in result[0]
@@ -641,8 +614,8 @@ class TestEnrichBatch:
 
     def test_exception_handling(self):
         """Should return errors for all inputs on exception."""
-        with mock.patch("parallel_web_tools.core.batch.resolve_api_key") as mock_resolve:
-            mock_resolve.side_effect = Exception("Connection failed")
+        with mock.patch("parallel_web_tools.core.batch.create_client") as mock_create:
+            mock_create.side_effect = Exception("Connection failed")
 
             result = enrich_batch(
                 inputs=[{"company_name": "A"}, {"company_name": "B"}],
@@ -679,17 +652,14 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    enrich_batch(
-                        inputs=[{"company_name": "Test"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                        processor="pro-fast",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                enrich_batch(
+                    inputs=[{"company_name": "Test"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                    processor="pro-fast",
+                )
 
         # Check that processor was passed correctly
         call_args = mock_client.beta.task_group.add_runs.call_args
@@ -721,16 +691,13 @@ class TestEnrichBatch:
         )
         mock_client.beta.task_group.get_runs.return_value = [event_other, event_valid]
 
-        with mock.patch("parallel.Parallel") as mock_parallel:
-            with mock.patch("parallel_web_tools.core.batch.resolve_api_key", return_value="test-key"):
-                with mock.patch("parallel_web_tools.core.batch.time.sleep"):
-                    mock_parallel.return_value = mock_client
-
-                    result = enrich_batch(
-                        inputs=[{"company_name": "Test"}],
-                        output_columns=["CEO name"],
-                        api_key="test-key",
-                    )
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                result = enrich_batch(
+                    inputs=[{"company_name": "Test"}],
+                    output_columns=["CEO name"],
+                    api_key="test-key",
+                )
 
         assert result[0]["ceo_name"] == "Test"
 
@@ -832,15 +799,14 @@ class TestRunTasks:
         )
         mock_client.beta.task_group.get_runs.return_value = [mock_event1, mock_event2]
 
-        with mock.patch("parallel_web_tools.core.auth.resolve_api_key", return_value="test-key"):
-            with mock.patch("parallel.Parallel", return_value=mock_client):
-                with mock.patch("time.sleep"):  # Speed up test
-                    input_data = [
-                        {"company": "Anthropic"},
-                        {"company": "OpenAI"},
-                    ]
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):  # Speed up test
+                input_data = [
+                    {"company": "Anthropic"},
+                    {"company": "OpenAI"},
+                ]
 
-                    results = run_tasks(input_data, InputModel, OutputModel, "lite-fast")
+                results = run_tasks(input_data, InputModel, OutputModel, "lite-fast")
 
         assert len(results) == 2
         assert results[0]["company"] == "Anthropic"

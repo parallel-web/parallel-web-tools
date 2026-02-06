@@ -1,6 +1,7 @@
 """Core functionality for Parallel Data."""
 
 from parallel_web_tools.core.auth import (
+    create_client,
     get_api_key,
     get_async_client,
     get_auth_status,
@@ -50,6 +51,7 @@ from parallel_web_tools.core.user_agent import (
 
 __all__ = [
     # Auth
+    "create_client",
     "get_api_key",
     "get_auth_status",
     "get_client",

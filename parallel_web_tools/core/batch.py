@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
-from parallel_web_tools.core.auth import resolve_api_key
-from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
+from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.user_agent import ClientSource
 
 
 def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
@@ -115,12 +118,7 @@ def enrich_batch(
         return []
 
     try:
-        from parallel import Parallel
-
-        client = Parallel(
-            api_key=resolve_api_key(api_key),
-            default_headers=get_default_headers(source),
-        )
+        client = create_client(api_key, source)
         output_schema = build_output_schema(output_columns)
         task_spec = TaskSpecParam(output_schema=JsonSchemaParam(type="json", json_schema=output_schema))
 
@@ -172,6 +170,8 @@ def enrich_batch(
         return [results_by_id.get(run_id, {"error": "No result"}) for run_id in run_ids]
 
     except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception(f"enrich_batch failed for {len(inputs)} inputs: {e}")
         return [{"error": str(e)}] * len(inputs)
 
 
@@ -203,30 +203,24 @@ def run_tasks(
     OutputModel,
     processor: str = "core-fast",
     source: ClientSource = "python",
+    timeout: int = 3600,
 ) -> list[Any]:
     """Run batch tasks using Pydantic models for schema.
 
     Uses the Parallel SDK's task group API with proper SSE handling.
-    """
-    import logging
-    import uuid
-    from datetime import UTC, datetime
 
-    from parallel import Parallel
+    Args:
+        timeout: Max seconds to wait for completion (default: 3600 = 1 hour).
+    """
     from parallel.types import JsonSchemaParam, TaskSpecParam
     from parallel.types.beta import BetaRunInputParam
-
-    from parallel_web_tools.core.auth import resolve_api_key
 
     logger = logging.getLogger(__name__)
 
     batch_id = str(uuid.uuid4())
     logger.info(f"Generated batch_id: {batch_id}")
 
-    client = Parallel(
-        api_key=resolve_api_key(None),
-        default_headers=get_default_headers(source),
-    )
+    client = create_client(source=source)
 
     # Build task spec from Pydantic models
     task_spec = TaskSpecParam(
@@ -254,9 +248,8 @@ def run_tasks(
         logger.info(f"Processing {i + len(batch)} entities. Created {total_created} Tasks.")
 
     # Wait for completion
-    import time
-
-    while True:
+    poll_start = time.time()
+    while time.time() - poll_start < timeout:
         status = client.beta.task_group.retrieve(taskgroup_id)
         status_counts = status.status.task_run_status_counts or {}
         logger.info(f"Status: {status_counts}")
@@ -266,6 +259,8 @@ def run_tasks(
             break
 
         time.sleep(2)
+    else:
+        logger.warning(f"Timed out after {timeout}s waiting for task group {taskgroup_id}")
 
     # Get results using SDK's streaming (handles SSE properly)
     results = []
