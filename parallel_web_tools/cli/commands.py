@@ -1317,6 +1317,51 @@ def research_processors():
     console.print("\n[dim]Use --processor/-p to select a processor[/dim]")
 
 
+def _extract_executive_summary(content: Any) -> str | None:
+    """Extract the executive summary from research content.
+
+    For markdown strings, the executive summary is the text before the first
+    ## heading. For dicts, checks for a 'summary' or 'executive_summary' key.
+    Returns None if no summary can be extracted.
+    """
+    if isinstance(content, str):
+        # Find text before the first ## heading
+        text = content.strip()
+        if not text:
+            return None
+
+        # Split on first ## heading (but not # which is the title)
+        import re
+
+        match = re.search(r"^##\s", text, re.MULTILINE)
+        if match:
+            summary = text[: match.start()].strip()
+        else:
+            summary = text
+
+        # Strip a leading # title line if present
+        lines = summary.split("\n")
+        if lines and lines[0].startswith("# "):
+            lines = lines[1:]
+            summary = "\n".join(lines).strip()
+
+        # Return if we have meaningful content (not just a title)
+        if summary and len(summary) > 20:
+            return summary
+
+    if isinstance(content, dict):
+        # Check for {text: "..."} structure
+        if "text" in content and len(content) == 1:
+            return _extract_executive_summary(content["text"])
+
+        for key in ("summary", "executive_summary"):
+            if key in content:
+                val = content[key]
+                return str(val) if val else None
+
+    return None
+
+
 def _content_to_markdown(content: Any, level: int = 1) -> str:
     """Convert structured content to markdown.
 
@@ -1434,12 +1479,20 @@ def _output_research_result(
         console.print(f"[dim]Task: {result.get('run_id')}[/dim]")
         console.print(f"[dim]URL: {result.get('result_url')}[/dim]\n")
 
-        # Show summary of output
+        # Show executive summary if available
         output = result.get("output", {})
-        if isinstance(output, dict):
-            console.print(f"[dim]Output contains {len(output)} fields[/dim]")
-            if not output_file:
-                console.print("[dim]Use --output to save full JSON to a file, or --json to print to stdout[/dim]")
+        content = output.get("content") if isinstance(output, dict) else None
+        summary = _extract_executive_summary(content) if content else None
+
+        if summary:
+            from rich.markdown import Markdown
+            from rich.panel import Panel
+
+            console.print(Panel(Markdown(summary), title="Executive Summary", border_style="cyan"))
+            console.print()
+
+        if not output_file:
+            console.print("[dim]Use --output to save full results to a file, or --json to print to stdout[/dim]")
 
 
 if __name__ == "__main__":
