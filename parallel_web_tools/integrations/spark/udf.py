@@ -12,13 +12,12 @@ The main function `parallel_enrich` allows you to enrich data directly in SQL:
     ) as enriched
     FROM companies
 
-This implementation uses pandas_udf with asyncio.gather to process all rows
-within a partition concurrently, rather than sequentially.
+This implementation uses pandas_udf with the Task Group API to process rows
+in batches, chunked to a maximum of 1000 rows per task group.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 import pandas as pd
@@ -26,62 +25,10 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import StringType
 
-from parallel_web_tools.core import build_output_schema, extract_basis
 from parallel_web_tools.core.auth import resolve_api_key
-from parallel_web_tools.core.user_agent import get_default_headers
+from parallel_web_tools.core.batch import enrich_batch
 
-
-async def _enrich_all_async(
-    items: list[dict[str, str]],
-    output_columns: list[str],
-    api_key: str,
-    processor: str = "lite-fast",
-    timeout: int = 300,
-    include_basis: bool = False,
-) -> list[str]:
-    """
-    Enrich all items concurrently using asyncio.gather.
-
-    Args:
-        items: List of input dictionaries to enrich.
-        output_columns: List of descriptions for columns to enrich.
-        api_key: Parallel API key.
-        processor: Parallel processor to use.
-        timeout: Timeout in seconds for each API call.
-        include_basis: Whether to include basis/citations in the response.
-
-    Returns:
-        List of JSON strings containing enrichment results (same order as inputs).
-    """
-    from parallel import AsyncParallel
-    from parallel.types import JsonSchemaParam, TaskSpecParam
-
-    client = AsyncParallel(api_key=api_key, default_headers=get_default_headers("spark"))
-    output_schema = build_output_schema(output_columns)
-    task_spec = TaskSpecParam(output_schema=JsonSchemaParam(type="json", json_schema=output_schema))
-
-    async def process_one(item: dict[str, str]) -> str:
-        try:
-            task_run = await client.task_run.create(
-                input=dict(item),
-                task_spec=task_spec,
-                processor=processor,
-            )
-            result = await client.task_run.result(task_run.run_id, api_timeout=timeout)
-            content = result.output.content
-            if isinstance(content, dict):
-                output_dict = content
-            else:
-                output_dict = {"result": str(content)}
-
-            if include_basis:
-                output_dict["_basis"] = extract_basis(result.output)
-
-            return json.dumps(output_dict)
-        except Exception as e:
-            return json.dumps({"error": str(e)})
-
-    return await asyncio.gather(*[process_one(item) for item in items])
+_MAX_CHUNK_SIZE = 1000
 
 
 def _parallel_enrich_partition(
@@ -93,7 +40,7 @@ def _parallel_enrich_partition(
     include_basis: bool = False,
 ) -> pd.Series:
     """
-    Enrich an entire partition of data concurrently.
+    Enrich an entire partition of data using the Task Group API.
 
     Args:
         input_data_series: Pandas Series of input dictionaries.
@@ -123,12 +70,34 @@ def _parallel_enrich_partition(
     if not valid_items:
         return pd.Series([None] * len(items))
 
-    # Run all enrichments concurrently
-    results = asyncio.run(_enrich_all_async(valid_items, output_columns, api_key, processor, timeout, include_basis))
+    # Process valid items in chunks of _MAX_CHUNK_SIZE via enrich_batch
+    all_results: list[dict] = []
+    for chunk_start in range(0, len(valid_items), _MAX_CHUNK_SIZE):
+        chunk = valid_items[chunk_start : chunk_start + _MAX_CHUNK_SIZE]
+        chunk_results = enrich_batch(
+            inputs=chunk,
+            output_columns=output_columns,
+            api_key=api_key,
+            processor=processor,
+            timeout=timeout,
+            include_basis=include_basis,
+            source="spark",
+        )
+        all_results.extend(chunk_results)
+
+    # Convert dicts to JSON strings, renaming "basis" -> "_basis"
+    json_results: list[str] = []
+    for result in all_results:
+        if isinstance(result, dict):
+            if "basis" in result:
+                result["_basis"] = result.pop("basis")
+            json_results.append(json.dumps(result))
+        else:
+            json_results.append(json.dumps({"result": str(result)}))
 
     # Map results back to original positions
     output: list[str | None] = [None] * len(items)
-    for i, result in zip(valid_indices, results, strict=True):
+    for i, result in zip(valid_indices, json_results, strict=True):
         output[i] = result
 
     return pd.Series(output)
@@ -144,8 +113,8 @@ def create_parallel_enrich_udf(
     Create a Spark pandas_udf for parallel_enrich with pre-configured parameters.
 
     This factory function creates a pandas UDF with the API key and other settings
-    baked in, so they don't need to be passed in SQL. The UDF processes all rows
-    in each partition concurrently using asyncio.gather.
+    baked in, so they don't need to be passed in SQL. The UDF processes rows
+    in batches using the Task Group API.
 
     Args:
         api_key: Parallel API key. Uses PARALLEL_API_KEY env var if not provided.
@@ -163,7 +132,7 @@ def create_parallel_enrich_udf(
     @pandas_udf(StringType())
     def _enrich(input_data: pd.Series, output_columns: pd.Series) -> pd.Series:
         """
-        Pandas UDF that processes all rows in the partition concurrently.
+        Pandas UDF that processes all rows in the partition using Task Group API.
 
         Args:
             input_data: Series of input dictionaries (map type in Spark).
@@ -208,8 +177,8 @@ def register_parallel_udfs(
             ) as enriched
         ''')
 
-    The UDF uses pandas_udf with asyncio.gather to process all rows within each
-    Spark partition concurrently, rather than sequentially.
+    The UDF uses pandas_udf with the Task Group API to process rows in batches,
+    chunked to a maximum of 1000 rows per task group.
 
     Args:
         spark: The SparkSession to register UDFs with.
