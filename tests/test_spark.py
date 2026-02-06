@@ -1,392 +1,9 @@
 """Tests for the Spark UDF integration module."""
 
-import asyncio
 import json
-from types import SimpleNamespace
 from unittest import mock
 
 import pandas as pd
-import pytest
-
-
-class TestEnrichAllAsync:
-    """Tests for the _enrich_all_async function."""
-
-    @pytest.fixture
-    def mock_async_client(self):
-        """Create a mock AsyncParallel client."""
-        client = mock.AsyncMock()
-        return client
-
-    def test_concurrent_processing(self):
-        """Should process all items concurrently using asyncio.gather."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        # Track the order of calls to verify concurrency
-        call_order = []
-
-        async def mock_create(input, task_spec, processor):
-            call_order.append(f"create_{input['company']}")
-            return SimpleNamespace(run_id=f"run_{input['company']}")
-
-        async def mock_result(run_id, api_timeout):
-            call_order.append(f"result_{run_id}")
-            company = run_id.replace("run_", "")
-            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            items = [
-                {"company": "Google"},
-                {"company": "Microsoft"},
-                {"company": "Apple"},
-            ]
-
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=items,
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                )
-            )
-
-        assert len(results) == 3
-        # Verify all creates happen before any results (concurrent execution)
-        # With asyncio.gather, all creates should be initiated together
-        assert json.loads(results[0])["ceo_name"] == "CEO of Google"
-        assert json.loads(results[1])["ceo_name"] == "CEO of Microsoft"
-        assert json.loads(results[2])["ceo_name"] == "CEO of Apple"
-
-    def test_error_handling_per_item(self):
-        """Should handle errors for individual items without failing others."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        async def mock_create(input, task_spec, processor):
-            if input.get("company") == "BadCompany":
-                raise ValueError("Invalid company")
-            return SimpleNamespace(run_id=f"run_{input['company']}")
-
-        async def mock_result(run_id, api_timeout):
-            company = run_id.replace("run_", "")
-            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            items = [
-                {"company": "Google"},
-                {"company": "BadCompany"},
-                {"company": "Apple"},
-            ]
-
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=items,
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                )
-            )
-
-        assert len(results) == 3
-        assert json.loads(results[0])["ceo_name"] == "CEO of Google"
-        assert "error" in json.loads(results[1])
-        assert "Invalid company" in json.loads(results[1])["error"]
-        assert json.loads(results[2])["ceo_name"] == "CEO of Apple"
-
-    def test_builds_correct_task_spec(self):
-        """Should build the correct task spec from output columns."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        captured_task_spec = None
-
-        async def mock_create(input, task_spec, processor):
-            nonlocal captured_task_spec
-            captured_task_spec = task_spec
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": "Test"}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Test"}],
-                    output_columns=["CEO name", "Founding year"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                )
-            )
-
-        assert captured_task_spec is not None
-        # The task_spec should have an output_schema with the columns
-        # TaskSpecParam is a TypedDict, so access as dict
-        output_schema = captured_task_spec["output_schema"]
-        schema = output_schema["json_schema"]
-        assert "ceo_name" in schema["properties"]
-        assert "founding_year" in schema["properties"]
-
-    def test_passes_processor_correctly(self):
-        """Should pass the processor parameter to each task run."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        captured_processor = None
-
-        async def mock_create(input, task_spec, processor):
-            nonlocal captured_processor
-            captured_processor = processor
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(output=SimpleNamespace(content={}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Test"}],
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="pro-fast",
-                    timeout=300,
-                )
-            )
-
-        assert captured_processor == "pro-fast"
-
-    def test_passes_timeout_correctly(self):
-        """Should pass the timeout parameter to task_run.result."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        captured_timeout = None
-
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            nonlocal captured_timeout
-            captured_timeout = api_timeout
-            return SimpleNamespace(output=SimpleNamespace(content={}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Test"}],
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=600,
-                )
-            )
-
-        assert captured_timeout == 600
-
-    def test_handles_dict_content(self):
-        """Should handle dict content in response."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(
-                output=SimpleNamespace(content={"ceo_name": "Sundar Pichai", "founding_year": "1998"})
-            )
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Google"}],
-                    output_columns=["CEO name", "Founding year"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                )
-            )
-
-        result = json.loads(results[0])
-        assert result["ceo_name"] == "Sundar Pichai"
-        assert result["founding_year"] == "1998"
-
-    def test_handles_non_dict_content(self):
-        """Should wrap non-dict content in a result key."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(output=SimpleNamespace(content="plain text response"))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Google"}],
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                )
-            )
-
-        result = json.loads(results[0])
-        assert result["result"] == "plain text response"
-
-    def test_include_basis_adds_citations(self):
-        """Should include _basis field when include_basis=True."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(
-                output=SimpleNamespace(
-                    content={"ceo_name": "Sundar Pichai"},
-                    basis=[
-                        SimpleNamespace(
-                            field="ceo_name",
-                            citations=[
-                                SimpleNamespace(
-                                    url="https://example.com/source",
-                                    excerpts=["Sundar Pichai is the CEO"],
-                                )
-                            ],
-                            reasoning="Found in Wikipedia article",
-                            confidence="high",
-                        )
-                    ],
-                )
-            )
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Google"}],
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                    include_basis=True,
-                )
-            )
-
-        result = json.loads(results[0])
-        assert result["ceo_name"] == "Sundar Pichai"
-        assert "_basis" in result
-        assert len(result["_basis"]) == 1
-        assert result["_basis"][0]["field"] == "ceo_name"
-        assert result["_basis"][0]["citations"][0]["url"] == "https://example.com/source"
-        assert result["_basis"][0]["reasoning"] == "Found in Wikipedia article"
-        assert result["_basis"][0]["confidence"] == "high"
-
-    def test_include_basis_false_excludes_citations(self):
-        """Should not include _basis field when include_basis=False."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(
-                output=SimpleNamespace(
-                    content={"ceo_name": "Sundar Pichai"},
-                    basis=[
-                        SimpleNamespace(
-                            field="ceo_name",
-                            citations=[SimpleNamespace(url="https://example.com", excerpts=[])],
-                        )
-                    ],
-                )
-            )
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Google"}],
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                    include_basis=False,
-                )
-            )
-
-        result = json.loads(results[0])
-        assert result["ceo_name"] == "Sundar Pichai"
-        assert "_basis" not in result
-
-    def test_include_basis_empty_basis(self):
-        """Should include empty _basis when include_basis=True but no basis in response."""
-        from parallel_web_tools.integrations.spark.udf import _enrich_all_async
-
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(
-                output=SimpleNamespace(
-                    content={"ceo_name": "Sundar Pichai"},
-                    basis=None,
-                )
-            )
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            results = asyncio.run(
-                _enrich_all_async(
-                    items=[{"company": "Google"}],
-                    output_columns=["CEO name"],
-                    api_key="test-key",
-                    processor="lite-fast",
-                    timeout=300,
-                    include_basis=True,
-                )
-            )
-
-        result = json.loads(results[0])
-        assert result["ceo_name"] == "Sundar Pichai"
-        assert "_basis" in result
-        assert result["_basis"] == []
 
 
 class TestParallelEnrichPartition:
@@ -424,22 +41,46 @@ class TestParallelEnrichPartition:
         assert result[1] is None
         assert result[2] is None
 
+    def test_basic_enrichment(self):
+        """Should enrich items via enrich_batch and return JSON strings."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        mock_results = [
+            {"ceo_name": "Sundar Pichai"},
+            {"ceo_name": "Satya Nadella"},
+            {"ceo_name": "Tim Cook"},
+        ]
+
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
+            result = _parallel_enrich_partition(
+                input_data_series=pd.Series(
+                    [
+                        {"company": "Google"},
+                        {"company": "Microsoft"},
+                        {"company": "Apple"},
+                    ]
+                ),
+                output_columns=["CEO name"],
+                api_key="test-key",
+                processor="lite-fast",
+                timeout=300,
+            )
+
+        assert len(result) == 3
+        assert json.loads(result[0])["ceo_name"] == "Sundar Pichai"
+        assert json.loads(result[1])["ceo_name"] == "Satya Nadella"
+        assert json.loads(result[2])["ceo_name"] == "Tim Cook"
+
     def test_mixed_none_and_valid_values(self):
         """Should handle partitions with mixed None and valid values."""
         from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
 
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id=f"run_{input['company']}")
+        mock_results = [
+            {"ceo_name": "CEO of Google"},
+            {"ceo_name": "CEO of Apple"},
+        ]
 
-        async def mock_result(run_id, api_timeout):
-            company = run_id.replace("run_", "")
-            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
             result = _parallel_enrich_partition(
                 input_data_series=pd.Series(
                     [
@@ -465,18 +106,13 @@ class TestParallelEnrichPartition:
         """Should preserve the order of results matching input order."""
         from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
 
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id=f"run_{input['company']}")
+        mock_results = [
+            {"ceo_name": "CEO of Alpha"},
+            {"ceo_name": "CEO of Beta"},
+            {"ceo_name": "CEO of Gamma"},
+        ]
 
-        async def mock_result(run_id, api_timeout):
-            company = run_id.replace("run_", "")
-            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": f"CEO of {company}"}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
             result = _parallel_enrich_partition(
                 input_data_series=pd.Series(
                     [
@@ -496,35 +132,87 @@ class TestParallelEnrichPartition:
         assert json.loads(result[1])["ceo_name"] == "CEO of Beta"
         assert json.loads(result[2])["ceo_name"] == "CEO of Gamma"
 
-    def test_include_basis_passed_through(self):
-        """Should pass include_basis parameter to async function."""
+    def test_chunking_large_batches(self):
+        """Should chunk >1000 rows into multiple enrich_batch calls."""
         from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
 
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id="run_1")
+        num_items = 2500
+        items = [{"company": f"Company_{i}"} for i in range(num_items)]
 
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(
-                output=SimpleNamespace(
-                    content={"ceo_name": "Test CEO"},
-                    basis=[
-                        SimpleNamespace(
-                            field="ceo_name",
-                            citations=[SimpleNamespace(url="https://test.com", excerpts=["test"])],
-                            reasoning="Test reasoning",
-                            confidence="high",
-                        )
-                    ],
-                )
+        def mock_enrich_batch(**kwargs):
+            return [{"ceo_name": f"CEO_{i}"} for i in range(len(kwargs["inputs"]))]
+
+        with mock.patch(
+            "parallel_web_tools.integrations.spark.udf.enrich_batch",
+            side_effect=mock_enrich_batch,
+        ) as mock_batch:
+            result = _parallel_enrich_partition(
+                input_data_series=pd.Series(items),
+                output_columns=["CEO name"],
+                api_key="test-key",
+                processor="lite-fast",
+                timeout=300,
             )
 
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
+        # 2500 items should produce 3 calls: 1000 + 1000 + 500
+        assert mock_batch.call_count == 3
+        assert len(mock_batch.call_args_list[0][1]["inputs"]) == 1000
+        assert len(mock_batch.call_args_list[1][1]["inputs"]) == 1000
+        assert len(mock_batch.call_args_list[2][1]["inputs"]) == 500
+        assert len(result) == num_items
 
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+    def test_error_results_preserved_as_json(self):
+        """Should preserve error dicts from enrich_batch as JSON strings."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        mock_results = [
+            {"ceo_name": "Success CEO"},
+            {"error": "API temporarily unavailable"},
+            {"ceo_name": "Another CEO"},
+        ]
+
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
             result = _parallel_enrich_partition(
-                input_data_series=pd.Series([{"company": "Test"}]),
+                input_data_series=pd.Series(
+                    [
+                        {"company": "A"},
+                        {"company": "B"},
+                        {"company": "C"},
+                    ]
+                ),
+                output_columns=["CEO name"],
+                api_key="test-key",
+                processor="lite-fast",
+                timeout=300,
+            )
+
+        assert len(result) == 3
+        assert json.loads(result[0])["ceo_name"] == "Success CEO"
+        assert "error" in json.loads(result[1])
+        assert "API temporarily unavailable" in json.loads(result[1])["error"]
+        assert json.loads(result[2])["ceo_name"] == "Another CEO"
+
+    def test_include_basis_renames_to_underscore(self):
+        """Should rename 'basis' to '_basis' in output."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        mock_results = [
+            {
+                "ceo_name": "Sundar Pichai",
+                "basis": [
+                    {
+                        "field": "ceo_name",
+                        "citations": [{"url": "https://example.com/source", "excerpts": ["Sundar Pichai is the CEO"]}],
+                        "reasoning": "Found in Wikipedia article",
+                        "confidence": "high",
+                    }
+                ],
+            }
+        ]
+
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
+            result = _parallel_enrich_partition(
+                input_data_series=pd.Series([{"company": "Google"}]),
                 output_columns=["CEO name"],
                 api_key="test-key",
                 processor="lite-fast",
@@ -532,11 +220,81 @@ class TestParallelEnrichPartition:
                 include_basis=True,
             )
 
-        assert len(result) == 1
         parsed = json.loads(result[0])
-        assert parsed["ceo_name"] == "Test CEO"
+        assert parsed["ceo_name"] == "Sundar Pichai"
         assert "_basis" in parsed
+        assert "basis" not in parsed
+        assert len(parsed["_basis"]) == 1
         assert parsed["_basis"][0]["field"] == "ceo_name"
+        assert parsed["_basis"][0]["citations"][0]["url"] == "https://example.com/source"
+        assert parsed["_basis"][0]["reasoning"] == "Found in Wikipedia article"
+        assert parsed["_basis"][0]["confidence"] == "high"
+
+    def test_include_basis_false_no_basis_key(self):
+        """Should not include basis when include_basis=False."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        mock_results = [{"ceo_name": "Sundar Pichai"}]
+
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
+            result = _parallel_enrich_partition(
+                input_data_series=pd.Series([{"company": "Google"}]),
+                output_columns=["CEO name"],
+                api_key="test-key",
+                processor="lite-fast",
+                timeout=300,
+                include_basis=False,
+            )
+
+        parsed = json.loads(result[0])
+        assert parsed["ceo_name"] == "Sundar Pichai"
+        assert "_basis" not in parsed
+        assert "basis" not in parsed
+
+    def test_non_dict_result_handling(self):
+        """Should wrap non-dict results in a result key."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        mock_results = ["plain text response"]
+
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
+            result = _parallel_enrich_partition(
+                input_data_series=pd.Series([{"company": "Google"}]),
+                output_columns=["CEO name"],
+                api_key="test-key",
+                processor="lite-fast",
+                timeout=300,
+            )
+
+        parsed = json.loads(result[0])
+        assert parsed["result"] == "plain text response"
+
+    def test_passes_parameters_to_enrich_batch(self):
+        """Should pass all parameters correctly to enrich_batch."""
+        from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
+
+        with mock.patch(
+            "parallel_web_tools.integrations.spark.udf.enrich_batch",
+            return_value=[{"ceo_name": "Test"}],
+        ) as mock_batch:
+            _parallel_enrich_partition(
+                input_data_series=pd.Series([{"company": "Test"}]),
+                output_columns=["CEO name"],
+                api_key="my-api-key",
+                processor="pro-fast",
+                timeout=600,
+                include_basis=True,
+            )
+
+        mock_batch.assert_called_once_with(
+            inputs=[{"company": "Test"}],
+            output_columns=["CEO name"],
+            api_key="my-api-key",
+            processor="pro-fast",
+            timeout=600,
+            include_basis=True,
+            source="spark",
+        )
 
 
 class TestCreateParallelEnrichUdf:
@@ -689,30 +447,16 @@ class TestIntegration:
     """Integration tests for the Spark UDF module."""
 
     def test_full_enrichment_flow(self):
-        """Test a complete enrichment flow with mocked API."""
+        """Test a complete enrichment flow with mocked enrich_batch."""
         from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
 
-        # Simulate what would happen in a real Spark partition
-        async def mock_create(input, task_spec, processor):
-            return SimpleNamespace(run_id=f"run_{hash(str(input))}")
+        mock_results = [
+            {"ceo_name": "Test CEO", "founding_year": "2000", "headquarters": "San Francisco"},
+            {"ceo_name": "Test CEO", "founding_year": "2000", "headquarters": "San Francisco"},
+            {"ceo_name": "Test CEO", "founding_year": "2000", "headquarters": "San Francisco"},
+        ]
 
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(
-                output=SimpleNamespace(
-                    content={
-                        "ceo_name": "Test CEO",
-                        "founding_year": "2000",
-                        "headquarters": "San Francisco",
-                    }
-                )
-            )
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
-            # Simulate a partition with multiple companies
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
             input_series = pd.Series(
                 [
                     {"company_name": "Company A", "website": "a.com"},
@@ -737,30 +481,20 @@ class TestIntegration:
             assert parsed["headquarters"] == "San Francisco"
 
     def test_error_resilience(self):
-        """Test that errors in one row don't affect others."""
+        """Test that error results from enrich_batch are preserved."""
         from parallel_web_tools.integrations.spark.udf import _parallel_enrich_partition
 
-        call_count = 0
+        mock_results = [
+            {"ceo_name": "Success"},
+            {"error": "API temporarily unavailable"},
+            {"ceo_name": "Success"},
+        ]
 
-        async def mock_create(input, task_spec, processor):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise RuntimeError("API temporarily unavailable")
-            return SimpleNamespace(run_id=f"run_{call_count}")
-
-        async def mock_result(run_id, api_timeout):
-            return SimpleNamespace(output=SimpleNamespace(content={"ceo_name": "Success"}))
-
-        mock_client = mock.AsyncMock()
-        mock_client.task_run.create = mock_create
-        mock_client.task_run.result = mock_result
-
-        with mock.patch("parallel.AsyncParallel", return_value=mock_client):
+        with mock.patch("parallel_web_tools.integrations.spark.udf.enrich_batch", return_value=mock_results):
             input_series = pd.Series(
                 [
                     {"company": "A"},
-                    {"company": "B"},  # This one will fail
+                    {"company": "B"},
                     {"company": "C"},
                 ]
             )
