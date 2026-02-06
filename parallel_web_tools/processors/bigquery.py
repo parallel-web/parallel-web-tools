@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine.base import Connection
 
 from parallel_web_tools.core import InputSchema, parse_input_and_output_models, run_tasks
+from parallel_web_tools.core.batch import create_task_group
 from parallel_web_tools.core.sql_utils import validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def fetch_all(conn: Connection, table: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def process_bigquery(schema: InputSchema):
+def process_bigquery(schema: InputSchema, no_wait: bool = False) -> dict[str, Any] | None:
     """Process BigQuery table and enrich data."""
     InputModel, OutputModel = parse_input_and_output_models(schema)
 
@@ -54,6 +55,9 @@ def process_bigquery(schema: InputSchema):
 
     with engine.begin() as conn:
         data = fetch_all(conn, schema.source)
+
+    if no_wait:
+        return create_task_group(data, InputModel, OutputModel, schema.processor)
 
     output_rows = run_tasks(data, InputModel, OutputModel, schema.processor)
     df = pl.DataFrame(output_rows)
@@ -73,3 +77,5 @@ def process_bigquery(schema: InputSchema):
             "chunksize": 10_000,  # tune
         },
     )
+
+    return None

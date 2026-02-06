@@ -11,9 +11,12 @@ from parallel_web_tools.core.auth import (
 )
 from parallel_web_tools.core.batch import (
     build_output_schema,
+    create_task_group,
     enrich_batch,
     enrich_single,
     extract_basis,
+    get_task_group_status,
+    poll_task_group,
     run_tasks,
 )
 from parallel_web_tools.core.research import (
@@ -77,9 +80,12 @@ __all__ = [
     "parse_input_and_output_models",
     # Batch
     "build_output_schema",
+    "create_task_group",
     "enrich_batch",
     "enrich_single",
     "extract_basis",
+    "get_task_group_status",
+    "poll_task_group",
     "run_tasks",
     # Runner
     "run_enrichment",

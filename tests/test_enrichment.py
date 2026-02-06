@@ -9,9 +9,12 @@ import pytest
 from parallel_web_tools.core.auth import resolve_api_key
 from parallel_web_tools.core.batch import (
     build_output_schema,
+    create_task_group,
     enrich_batch,
     enrich_single,
     extract_basis,
+    get_task_group_status,
+    poll_task_group,
     run_tasks,
 )
 
@@ -816,3 +819,202 @@ class TestRunTasks:
         # Check batch_id and timestamp are added
         assert "batch_id" in results[0]
         assert "insertion_timestamp" in results[0]
+
+
+class TestCreateTaskGroup:
+    """Tests for create_task_group function."""
+
+    def test_creates_task_group_and_returns_info(self):
+        """Should create a task group, add runs, and return info dict."""
+        from pydantic import BaseModel
+
+        class InputModel(BaseModel):
+            company: str
+
+        class OutputModel(BaseModel):
+            ceo: str
+
+        mock_client = mock.MagicMock()
+        mock_client.beta.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_abc")
+        mock_client.beta.task_group.add_runs.return_value = mock.MagicMock(run_ids=["run_1", "run_2"])
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            result = create_task_group(
+                [{"company": "A"}, {"company": "B"}],
+                InputModel,
+                OutputModel,
+                processor="core-fast",
+            )
+
+        assert result["taskgroup_id"] == "tgrp_abc"
+        assert result["num_runs"] == 2
+        assert "tgrp_abc" in result["url"]
+        assert "platform.parallel.ai" in result["url"]
+
+    def test_batches_large_inputs(self):
+        """Should add runs in batches of 100."""
+        from pydantic import BaseModel
+
+        class InputModel(BaseModel):
+            company: str
+
+        class OutputModel(BaseModel):
+            ceo: str
+
+        mock_client = mock.MagicMock()
+        mock_client.beta.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_batch")
+        mock_client.beta.task_group.add_runs.return_value = mock.MagicMock(run_ids=["r"] * 100)
+
+        input_data = [{"company": f"C{i}"} for i in range(250)]
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            result = create_task_group(input_data, InputModel, OutputModel)
+
+        # 250 items / 100 batch size = 3 calls
+        assert mock_client.beta.task_group.add_runs.call_count == 3
+        assert result["num_runs"] == 300  # 3 * 100 from mock
+
+
+class TestGetTaskGroupStatus:
+    """Tests for get_task_group_status function."""
+
+    def test_returns_status_info(self):
+        """Should return formatted status info."""
+        mock_client = mock.MagicMock()
+        mock_status = mock.MagicMock()
+        mock_status.status.task_run_status_counts = {"completed": 5, "failed": 1}
+        mock_status.status.is_active = False
+        mock_status.status.num_task_runs = 6
+        mock_client.beta.task_group.retrieve.return_value = mock_status
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            result = get_task_group_status("tgrp_test", api_key="test-key")
+
+        assert result["taskgroup_id"] == "tgrp_test"
+        assert result["status_counts"] == {"completed": 5, "failed": 1}
+        assert result["is_active"] is False
+        assert result["num_runs"] == 6
+        assert "tgrp_test" in result["url"]
+
+    def test_active_task_group(self):
+        """Should report is_active=True for running groups."""
+        mock_client = mock.MagicMock()
+        mock_status = mock.MagicMock()
+        mock_status.status.task_run_status_counts = {"completed": 2, "running": 3}
+        mock_status.status.is_active = True
+        mock_status.status.num_task_runs = 5
+        mock_client.beta.task_group.retrieve.return_value = mock_status
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            result = get_task_group_status("tgrp_active")
+
+        assert result["is_active"] is True
+
+
+class TestPollTaskGroup:
+    """Tests for poll_task_group function."""
+
+    def test_polls_until_complete_and_returns_results(self):
+        """Should poll until not active and return collected results."""
+        mock_client = mock.MagicMock()
+
+        # First retrieve: still active
+        active_status = mock.MagicMock()
+        active_status.status.task_run_status_counts = {"completed": 1, "running": 1}
+        active_status.status.is_active = True
+        active_status.status.num_task_runs = 2
+
+        # Second retrieve: done
+        done_status = mock.MagicMock()
+        done_status.status.task_run_status_counts = {"completed": 2}
+        done_status.status.is_active = False
+        done_status.status.num_task_runs = 2
+
+        mock_client.beta.task_group.retrieve.side_effect = [active_status, done_status]
+
+        event_1 = SimpleNamespace(
+            type="task_run.state",
+            run=SimpleNamespace(run_id="run_1", error=None),
+            input=SimpleNamespace(input={"company": "A"}),
+            output=SimpleNamespace(content={"ceo": "CEO A"}),
+        )
+        event_2 = SimpleNamespace(
+            type="task_run.state",
+            run=SimpleNamespace(run_id="run_2", error=None),
+            input=SimpleNamespace(input={"company": "B"}),
+            output=SimpleNamespace(content={"ceo": "CEO B"}),
+        )
+        mock_client.beta.task_group.get_runs.return_value = [event_1, event_2]
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                results = poll_task_group("tgrp_poll", api_key="test-key")
+
+        assert len(results) == 2
+        assert results[0]["input"] == {"company": "A"}
+        assert results[0]["output"] == {"ceo": "CEO A"}
+        assert results[1]["output"] == {"ceo": "CEO B"}
+
+    def test_timeout_raises_error(self):
+        """Should raise TimeoutError when task group doesn't complete."""
+        mock_client = mock.MagicMock()
+        active_status = mock.MagicMock()
+        active_status.status.task_run_status_counts = {"running": 2}
+        active_status.status.is_active = True
+        active_status.status.num_task_runs = 2
+        mock_client.beta.task_group.retrieve.return_value = active_status
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                with mock.patch("parallel_web_tools.core.batch.time.time") as mock_time:
+                    # Simulate time passing beyond timeout
+                    mock_time.side_effect = [0, 0, 100, 200]
+                    with pytest.raises(TimeoutError, match="timed out"):
+                        poll_task_group("tgrp_timeout", timeout=1)
+
+    def test_calls_on_progress(self):
+        """Should call on_progress callback with counts."""
+        mock_client = mock.MagicMock()
+        done_status = mock.MagicMock()
+        done_status.status.task_run_status_counts = {"completed": 3}
+        done_status.status.is_active = False
+        done_status.status.num_task_runs = 3
+        mock_client.beta.task_group.retrieve.return_value = done_status
+        mock_client.beta.task_group.get_runs.return_value = []
+
+        progress_calls = []
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                poll_task_group(
+                    "tgrp_cb",
+                    on_progress=lambda c, f, t: progress_calls.append((c, f, t)),
+                )
+
+        assert len(progress_calls) == 1
+        assert progress_calls[0] == (3, 0, 3)
+
+    def test_handles_failed_runs(self):
+        """Should include error info for failed runs."""
+        mock_client = mock.MagicMock()
+        done_status = mock.MagicMock()
+        done_status.status.task_run_status_counts = {"completed": 0, "failed": 1}
+        done_status.status.is_active = False
+        done_status.status.num_task_runs = 1
+        mock_client.beta.task_group.retrieve.return_value = done_status
+
+        event = SimpleNamespace(
+            type="task_run.state",
+            run=SimpleNamespace(run_id="run_1", error="Processing failed"),
+            input=SimpleNamespace(input={"company": "X"}),
+            output=None,
+        )
+        mock_client.beta.task_group.get_runs.return_value = [event]
+
+        with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
+            with mock.patch("parallel_web_tools.core.batch.time.sleep"):
+                results = poll_task_group("tgrp_fail")
+
+        assert len(results) == 1
+        assert results[0]["error"] == "Processing failed"
+        assert results[0]["input"] == {"company": "X"}

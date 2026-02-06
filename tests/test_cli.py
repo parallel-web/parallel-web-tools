@@ -1225,3 +1225,209 @@ class TestExitCodes:
             result = runner.invoke(main, ["login"])
 
         assert result.exit_code == EXIT_AUTH_ERROR
+
+
+class TestEnrichNoWait:
+    """Tests for enrich run --no-wait."""
+
+    def test_enrich_run_no_wait_prints_taskgroup_id(self, runner):
+        """Should print taskgroup_id and hints when --no-wait is used."""
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            mock_run.return_value = {
+                "taskgroup_id": "tgrp_nowait_123",
+                "url": "https://platform.parallel.ai/view/task-run-group/tgrp_nowait_123",
+                "num_runs": 5,
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "enrich",
+                    "run",
+                    "--no-wait",
+                    "--source-type",
+                    "csv",
+                    "--source",
+                    "input.csv",
+                    "--target",
+                    "output.csv",
+                    "--source-columns",
+                    '[{"name": "company", "description": "Company name"}]',
+                    "--enriched-columns",
+                    '[{"name": "ceo", "description": "CEO name"}]',
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert "tgrp_nowait_123" in result.output
+        assert "enrich status" in result.output
+        assert "enrich poll" in result.output
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["no_wait"] is True
+
+    def test_enrich_run_help_shows_no_wait(self, runner):
+        """Should show --no-wait in help."""
+        result = runner.invoke(main, ["enrich", "run", "--help"])
+        assert result.exit_code == 0
+        assert "--no-wait" in result.output
+
+
+class TestEnrichStatusCommand:
+    """Tests for the enrich status command."""
+
+    def test_enrich_status_help(self, runner):
+        """Should show enrich status help."""
+        result = runner.invoke(main, ["enrich", "status", "--help"])
+        assert result.exit_code == 0
+        assert "TASKGROUP_ID" in result.output
+        assert "--json" in result.output
+
+    def test_enrich_status_shows_formatted_output(self, runner):
+        """Should show formatted status info."""
+        with mock.patch("parallel_web_tools.cli.commands.get_task_group_status") as mock_status:
+            mock_status.return_value = {
+                "taskgroup_id": "tgrp_status_123",
+                "status_counts": {"completed": 3, "failed": 1},
+                "is_active": False,
+                "num_runs": 4,
+                "url": "https://platform.parallel.ai/view/task-run-group/tgrp_status_123",
+            }
+
+            result = runner.invoke(main, ["enrich", "status", "tgrp_status_123"])
+
+        assert result.exit_code == 0
+        assert "tgrp_status_123" in result.output
+        assert "3 completed" in result.output
+        assert "1 failed" in result.output
+        assert "4 total" in result.output
+
+    def test_enrich_status_json_output(self, runner):
+        """Should output JSON when --json flag is set."""
+        with mock.patch("parallel_web_tools.cli.commands.get_task_group_status") as mock_status:
+            mock_status.return_value = {
+                "taskgroup_id": "tgrp_json",
+                "status_counts": {"completed": 2},
+                "is_active": False,
+                "num_runs": 2,
+                "url": "https://platform.parallel.ai/view/task-run-group/tgrp_json",
+            }
+
+            result = runner.invoke(main, ["enrich", "status", "tgrp_json", "--json"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["taskgroup_id"] == "tgrp_json"
+        assert output["num_runs"] == 2
+
+    def test_enrich_status_running_group(self, runner):
+        """Should show running status for active groups."""
+        with mock.patch("parallel_web_tools.cli.commands.get_task_group_status") as mock_status:
+            mock_status.return_value = {
+                "taskgroup_id": "tgrp_running",
+                "status_counts": {"completed": 1, "running": 4},
+                "is_active": True,
+                "num_runs": 5,
+                "url": "https://platform.parallel.ai/view/task-run-group/tgrp_running",
+            }
+
+            result = runner.invoke(main, ["enrich", "status", "tgrp_running"])
+
+        assert result.exit_code == 0
+        assert "running" in result.output
+
+
+class TestEnrichPollCommand:
+    """Tests for the enrich poll command."""
+
+    def test_enrich_poll_help(self, runner):
+        """Should show enrich poll help."""
+        result = runner.invoke(main, ["enrich", "poll", "--help"])
+        assert result.exit_code == 0
+        assert "TASKGROUP_ID" in result.output
+        assert "--timeout" in result.output
+        assert "--poll-interval" in result.output
+        assert "--json" in result.output
+        assert "--output" in result.output
+
+    def test_enrich_poll_waits_and_outputs_summary(self, runner):
+        """Should wait for completion and show summary."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_task_group") as mock_poll:
+            mock_poll.return_value = [
+                {"input": {"company": "A"}, "output": {"ceo": "CEO A"}},
+                {"input": {"company": "B"}, "output": {"ceo": "CEO B"}},
+            ]
+
+            result = runner.invoke(main, ["enrich", "poll", "tgrp_poll_123"])
+
+        assert result.exit_code == 0
+        assert "complete" in result.output.lower()
+        assert "2 completed" in result.output
+
+    def test_enrich_poll_json_output(self, runner):
+        """Should output full results as JSON with --json flag."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_task_group") as mock_poll:
+            mock_poll.return_value = [
+                {"input": {"company": "A"}, "output": {"ceo": "CEO A"}},
+            ]
+
+            result = runner.invoke(main, ["enrich", "poll", "tgrp_json", "--json"])
+
+        assert result.exit_code == 0
+        # Extract JSON from mixed output
+        lines = result.output.strip().split("\n")
+        json_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("["):
+                json_start = i
+                break
+        assert json_start is not None
+        json_text = "\n".join(lines[json_start:])
+        output = json.loads(json_text)
+        assert len(output) == 1
+        assert output[0]["output"]["ceo"] == "CEO A"
+
+    def test_enrich_poll_saves_to_file(self, runner, tmp_path):
+        """Should save results to file with --output."""
+        output_file = tmp_path / "results.json"
+
+        with mock.patch("parallel_web_tools.cli.commands.poll_task_group") as mock_poll:
+            mock_poll.return_value = [
+                {"input": {"company": "A"}, "output": {"ceo": "CEO A"}},
+            ]
+
+            result = runner.invoke(main, ["enrich", "poll", "tgrp_file", "--output", str(output_file)])
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        data = json.loads(output_file.read_text())
+        assert len(data) == 1
+        assert data[0]["output"]["ceo"] == "CEO A"
+
+    def test_enrich_poll_timeout(self, runner):
+        """Should exit with timeout code on TimeoutError."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_task_group") as mock_poll:
+            mock_poll.side_effect = TimeoutError("timed out after 10s")
+
+            result = runner.invoke(main, ["enrich", "poll", "tgrp_timeout", "--timeout", "10"])
+
+        assert result.exit_code == EXIT_TIMEOUT
+        assert "Timeout" in result.output or "timed out" in result.output
+
+    def test_enrich_poll_timeout_json_output(self, runner):
+        """Should output JSON error on timeout with --json."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_task_group") as mock_poll:
+            mock_poll.side_effect = TimeoutError("timed out")
+
+            result = runner.invoke(main, ["enrich", "poll", "tgrp_timeout", "--json"])
+
+        assert result.exit_code == EXIT_TIMEOUT
+        lines = result.output.strip().split("\n")
+        json_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("{"):
+                json_start = i
+                break
+        assert json_start is not None
+        json_text = "\n".join(lines[json_start:])
+        output = json.loads(json_text)
+        assert output["error"]["type"] == "TimeoutError"
