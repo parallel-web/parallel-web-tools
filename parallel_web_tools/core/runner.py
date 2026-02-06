@@ -8,30 +8,31 @@ from parallel_web_tools.core.schema import InputSchema, SourceType, load_schema,
 logger = logging.getLogger(__name__)
 
 
-def _run_processor(parsed_schema: InputSchema) -> None:
+def _run_processor(parsed_schema: InputSchema, no_wait: bool = False) -> dict | None:
     """Run the appropriate processor for the given schema."""
     match parsed_schema.source_type:
         case SourceType.CSV:
             from parallel_web_tools.processors.csv import process_csv
 
-            process_csv(parsed_schema)
+            return process_csv(parsed_schema, no_wait=no_wait)
         case SourceType.DUCKDB:
             from parallel_web_tools.processors.duckdb import process_duckdb
 
-            process_duckdb(parsed_schema)
+            return process_duckdb(parsed_schema, no_wait=no_wait)
         case SourceType.BIGQUERY:
             from parallel_web_tools.processors.bigquery import process_bigquery
 
-            process_bigquery(parsed_schema)
+            return process_bigquery(parsed_schema, no_wait=no_wait)
         case _:
             raise NotImplementedError(f"{parsed_schema.source_type} is not supported")
 
 
-def run_enrichment(config_file: str | Path) -> None:
+def run_enrichment(config_file: str | Path, no_wait: bool = False) -> dict | None:
     """Run data enrichment using a YAML config file.
 
     Args:
         config_file: Path to YAML configuration file
+        no_wait: If True, return taskgroup info without waiting for completion.
 
     Example:
         >>> from parallel_web_tools import run_enrichment
@@ -47,15 +48,21 @@ def run_enrichment(config_file: str | Path) -> None:
     parsed_schema = parse_schema(schema)
 
     logger.info(f"Running enrichment: {parsed_schema.source} -> {parsed_schema.target}")
-    _run_processor(parsed_schema)
+    result = _run_processor(parsed_schema, no_wait=no_wait)
+
+    if no_wait:
+        return result
+
     logger.info("Enrichment complete!")
+    return None
 
 
-def run_enrichment_from_dict(config: dict) -> None:
+def run_enrichment_from_dict(config: dict, no_wait: bool = False) -> dict | None:
     """Run data enrichment using a configuration dictionary.
 
     Args:
         config: Configuration dictionary matching YAML schema
+        no_wait: If True, return taskgroup info without waiting for completion.
 
     Example:
         >>> config = {
@@ -71,5 +78,10 @@ def run_enrichment_from_dict(config: dict) -> None:
     parsed_schema = parse_schema(config)
 
     logger.info(f"Running enrichment: {parsed_schema.source} -> {parsed_schema.target}")
-    _run_processor(parsed_schema)
+    result = _run_processor(parsed_schema, no_wait=no_wait)
+
+    if no_wait:
+        return result
+
     logger.info("Enrichment complete!")
+    return None

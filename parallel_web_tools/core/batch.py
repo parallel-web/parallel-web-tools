@@ -6,11 +6,15 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from parallel_web_tools.core.auth import create_client
 from parallel_web_tools.core.user_agent import ClientSource
+
+# Base URL for viewing task groups on the platform
+PLATFORM_BASE = "https://platform.parallel.ai"
 
 
 def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
@@ -197,28 +201,29 @@ def enrich_single(
     return results[0] if results else {"error": "No result"}
 
 
-def run_tasks(
+def create_task_group(
     input_data: list[dict[str, Any]],
     InputModel,
     OutputModel,
     processor: str = "core-fast",
     source: ClientSource = "python",
-    timeout: int = 3600,
-) -> list[Any]:
-    """Run batch tasks using Pydantic models for schema.
-
-    Uses the Parallel SDK's task group API with proper SSE handling.
+) -> dict[str, Any]:
+    """Create a task group and add runs without waiting for completion.
 
     Args:
-        timeout: Max seconds to wait for completion (default: 3600 = 1 hour).
+        input_data: List of input dictionaries.
+        InputModel: Pydantic model for input schema.
+        OutputModel: Pydantic model for output schema.
+        processor: Parallel processor (default: core-fast).
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        Dict with taskgroup_id, url, and num_runs.
     """
     from parallel.types import JsonSchemaParam, TaskSpecParam
     from parallel.types.beta import BetaRunInputParam
 
     logger = logging.getLogger(__name__)
-
-    batch_id = str(uuid.uuid4())
-    logger.info(f"Generated batch_id: {batch_id}")
 
     client = create_client(source=source)
 
@@ -247,7 +252,134 @@ def run_tasks(
         total_created += len(response.run_ids)
         logger.info(f"Processing {i + len(batch)} entities. Created {total_created} Tasks.")
 
+    return {
+        "taskgroup_id": taskgroup_id,
+        "url": f"{PLATFORM_BASE}/view/task-run-group/{taskgroup_id}",
+        "num_runs": total_created,
+    }
+
+
+def get_task_group_status(
+    taskgroup_id: str,
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> dict[str, Any]:
+    """Get the current status of a task group.
+
+    Args:
+        taskgroup_id: The task group ID.
+        api_key: Optional API key.
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        Dict with taskgroup_id, status_counts, is_active, num_runs, url.
+    """
+    client = create_client(api_key, source)
+    status = client.beta.task_group.retrieve(taskgroup_id)
+    status_counts = dict(status.status.task_run_status_counts or {})
+
+    return {
+        "taskgroup_id": taskgroup_id,
+        "status_counts": status_counts,
+        "is_active": status.status.is_active,
+        "num_runs": status.status.num_task_runs,
+        "url": f"{PLATFORM_BASE}/view/task-run-group/{taskgroup_id}",
+    }
+
+
+def poll_task_group(
+    taskgroup_id: str,
+    api_key: str | None = None,
+    timeout: int = 3600,
+    poll_interval: int = 5,
+    on_progress: Callable[[int, int, int], None] | None = None,
+    source: ClientSource = "python",
+) -> list[dict[str, Any]]:
+    """Poll a task group until completion and collect results.
+
+    Args:
+        taskgroup_id: The task group ID.
+        api_key: Optional API key.
+        timeout: Max wait time in seconds (default: 3600).
+        poll_interval: Seconds between status checks (default: 5).
+        on_progress: Optional callback called with (completed, failed, total).
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        List of result dicts (raw enrichment results, no Pydantic validation).
+
+    Raises:
+        TimeoutError: If the task group doesn't complete within timeout.
+    """
+    client = create_client(api_key, source)
+    logger = logging.getLogger(__name__)
+
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        status = client.beta.task_group.retrieve(taskgroup_id)
+        status_counts = status.status.task_run_status_counts or {}
+        completed = status_counts.get("completed", 0)
+        failed = status_counts.get("failed", 0)
+        total = status.status.num_task_runs
+
+        if on_progress:
+            on_progress(completed, failed, total)
+
+        if not status.status.is_active:
+            logger.info("Task group completed!")
+            break
+
+        time.sleep(poll_interval)
+    else:
+        raise TimeoutError(f"Task group {taskgroup_id} timed out after {timeout} seconds")
+
+    # Collect results
+    results = []
+    runs_stream = client.beta.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
+
+    for event in runs_stream:
+        if event.type == "task_run.state":
+            result: dict[str, Any] = {}
+            if event.input and hasattr(event.input, "input"):
+                result["input"] = event.input.input
+            if content := getattr(event.output, "content", None):
+                result["output"] = _parse_content(content)
+            elif event.run.error:
+                result["error"] = str(event.run.error)
+            else:
+                result["error"] = "No result"
+            results.append(result)
+
+    return results
+
+
+def run_tasks(
+    input_data: list[dict[str, Any]],
+    InputModel,
+    OutputModel,
+    processor: str = "core-fast",
+    source: ClientSource = "python",
+    timeout: int = 3600,
+) -> list[Any]:
+    """Run batch tasks using Pydantic models for schema.
+
+    Uses the Parallel SDK's task group API with proper SSE handling.
+
+    Args:
+        timeout: Max seconds to wait for completion (default: 3600 = 1 hour).
+    """
+    logger = logging.getLogger(__name__)
+
+    batch_id = str(uuid.uuid4())
+    logger.info(f"Generated batch_id: {batch_id}")
+
+    # Create task group and add runs
+    tg_info = create_task_group(input_data, InputModel, OutputModel, processor, source)
+    taskgroup_id = tg_info["taskgroup_id"]
+
     # Wait for completion
+    client = create_client(source=source)
     poll_start = time.time()
     while time.time() - poll_start < timeout:
         status = client.beta.task_group.retrieve(taskgroup_id)

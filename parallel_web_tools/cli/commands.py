@@ -22,9 +22,11 @@ from parallel_web_tools.core import (
     get_api_key,
     get_auth_status,
     get_research_status,
+    get_task_group_status,
     get_user_agent,
     logout,
     poll_research,
+    poll_task_group,
     run_enrichment_from_dict,
     run_research,
 )
@@ -764,6 +766,7 @@ def enrich():
 @click.option("--intent", help="Natural language description (AI suggests columns)")
 @click.option("--processor", type=click.Choice(AVAILABLE_PROCESSORS), help="Processor to use")
 @click.option("--data", "inline_data", help="Inline JSON data array (alternative to --source)")
+@click.option("--no-wait", is_flag=True, help="Return immediately after creating task group (don't poll)")
 def enrich_run(
     config_file: str | None,
     source_type: str | None,
@@ -774,6 +777,7 @@ def enrich_run(
     intent: str | None,
     processor: str | None,
     inline_data: str | None,
+    no_wait: bool,
 ):
     """Run data enrichment from YAML config or CLI arguments.
 
@@ -833,7 +837,7 @@ def enrich_run(
 
         if config_file:
             console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
-            run_enrichment(config_file)  # type: ignore[name-defined]
+            result = run_enrichment(config_file, no_wait=no_wait)  # type: ignore[name-defined]
         else:
             # After validation, these are guaranteed non-None
             assert source_type is not None
@@ -864,9 +868,16 @@ def enrich_run(
             )
 
             console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
-            run_enrichment_from_dict(config)
+            result = run_enrichment_from_dict(config, no_wait=no_wait)
 
-        console.print("\n[bold green]Enrichment complete![/bold green]")
+        if no_wait and result:
+            console.print(f"\n[bold green]Task group created: {result['taskgroup_id']}[/bold green]")
+            console.print(f"Track progress: {result['url']}")
+            console.print(f"[dim]Runs: {result['num_runs']}[/dim]")
+            console.print("\n[dim]Use 'parallel-cli enrich status <id>' to check status[/dim]")
+            console.print("[dim]Use 'parallel-cli enrich poll <id>' to wait for results[/dim]")
+        else:
+            console.print("\n[bold green]Enrichment complete![/bold green]")
 
     except FileNotFoundError as e:
         _handle_error(e, exit_code=EXIT_BAD_INPUT)
@@ -983,6 +994,110 @@ def enrich_suggest(intent: str, source_columns: str | None, output_json: bool):
             console.print("\n[dim]JSON (for --enriched-columns):[/dim]")
             console.print(json.dumps(result["enriched_columns"]))
 
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@enrich.command(name="status")
+@click.argument("taskgroup_id")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def enrich_status(taskgroup_id: str, output_json: bool):
+    """Check the status of an enrichment task group.
+
+    TASKGROUP_ID is the task group identifier (e.g., tgrp_xxx).
+    """
+    try:
+        result = get_task_group_status(taskgroup_id, source="cli")
+
+        if output_json:
+            print(json.dumps(result, indent=2))
+        else:
+            is_active = result["is_active"]
+            status_counts = result["status_counts"]
+            completed = status_counts.get("completed", 0)
+            failed = status_counts.get("failed", 0)
+            total = result["num_runs"]
+
+            if not is_active and completed + failed >= total:
+                status_color = "green"
+                status_label = "completed"
+            elif is_active:
+                status_color = "cyan"
+                status_label = "running"
+            else:
+                status_color = "yellow"
+                status_label = "pending"
+
+            console.print(f"[bold]Task Group:[/bold] {taskgroup_id}")
+            console.print(f"[bold]Status:[/bold] [{status_color}]{status_label}[/{status_color}]")
+            console.print(f"[bold]Progress:[/bold] {completed} completed, {failed} failed / {total} total")
+            console.print(f"[bold]URL:[/bold] {result['url']}")
+
+            if status_label == "completed":
+                console.print("\n[dim]Use 'parallel-cli enrich poll <id>' to retrieve results[/dim]")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@enrich.command(name="poll")
+@click.argument("taskgroup_id")
+@click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
+@click.option("--poll-interval", type=int, default=5, show_default=True, help="Seconds between status checks")
+@click.option("--json", "output_json", is_flag=True, help="Output results as JSON to stdout")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+def enrich_poll(
+    taskgroup_id: str,
+    timeout: int,
+    poll_interval: int,
+    output_json: bool,
+    output_file: str | None,
+):
+    """Poll an enrichment task group until completion.
+
+    TASKGROUP_ID is the task group identifier (e.g., tgrp_xxx).
+    """
+    try:
+        console.print(f"[bold cyan]Polling task group: {taskgroup_id}[/bold cyan]")
+        console.print(f"[dim]Track progress: https://platform.parallel.ai/view/task-run-group/{taskgroup_id}[/dim]\n")
+
+        def on_progress(completed: int, failed: int, total: int):
+            console.print(f"[dim]Progress: {completed} completed, {failed} failed / {total} total[/dim]")
+
+        results = poll_task_group(
+            taskgroup_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_progress=on_progress,
+            source="cli",
+        )
+
+        completed = sum(1 for r in results if "output" in r)
+        failed = sum(1 for r in results if "error" in r)
+
+        if output_file:
+            with open(output_file, "w") as f:
+                json.dump(results, f, indent=2)
+            console.print(f"[dim]Results saved to {output_file}[/dim]\n")
+
+        if output_json:
+            print(json.dumps(results, indent=2))
+
+        if not output_json:
+            console.print("\n[bold green]Task group complete![/bold green]")
+            console.print(f"{completed} completed, {failed} failed out of {len(results)} total runs")
+
+            if not output_file:
+                console.print("[dim]Use --json to output full results, or --output to save to a file[/dim]")
+
+    except TimeoutError as e:
+        if output_json:
+            error_data = {"error": {"message": str(e), "type": "TimeoutError"}}
+            print(json.dumps(error_data, indent=2))
+        else:
+            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+            console.print("[dim]The task group is still running. Use 'parallel-cli enrich poll <id>' to resume.[/dim]")
+        sys.exit(EXIT_TIMEOUT)
     except Exception as e:
         _handle_error(e, output_json=output_json)
 
