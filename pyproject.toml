@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "parallel-web-tools"
-version = "0.0.13rc1"
+version = "0.0.13rc2"
 description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -26,7 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "parallel-web>=0.4.0",
+    "parallel-web>=0.4.1",
     "python-dotenv>=1.0.0",
     # CLI dependencies (minimal - search, extract, enrich with CLI args)
     "click>=8.1.0",
