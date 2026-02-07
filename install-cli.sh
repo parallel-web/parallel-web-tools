@@ -291,10 +291,11 @@ main() {
         "${BINARY_NAME}" --version 2>/dev/null || true
         echo ""
         echo "Next steps:"
-        echo "  1. Authenticate:  ${BINARY_NAME} login"
-        echo "  2. Search:        ${BINARY_NAME} search \"your query\""
-        echo "  3. Extract:       ${BINARY_NAME} extract https://example.com"
-        echo "  4. Enrich:        ${BINARY_NAME} enrich run --help"
+        echo "  1. Authenticate:     ${BINARY_NAME} login"
+        echo "  2. Search:           ${BINARY_NAME} search \"Parallel Web Systems\""
+        echo "  3. Extract:          ${BINARY_NAME} extract https://parallel.ai"
+        echo "  4. Deep Research:    ${BINARY_NAME} research run \"Detailed report on the latest AI research\""
+        echo "  5. Enrich:           ${BINARY_NAME} enrich run --help"
         echo ""
     else
         print_error "Installation verification failed"
