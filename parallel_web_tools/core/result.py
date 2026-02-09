@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Generic, TypeVar
+
+T = TypeVar("T")
 
 
 @dataclass
-class EnrichmentResult[T]:
+class EnrichmentResult(Generic[T]):
     """Result of an enrichment operation.
 
     Generic over the result type (e.g., DuckDB relation, Polars DataFrame).

@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from parallel_web_tools.core.auth import create_client
@@ -409,7 +409,7 @@ def run_tasks(
                         **input_val.model_dump(),
                         **output_val.model_dump(),
                         "batch_id": batch_id,
-                        "insertion_timestamp": datetime.now(UTC).isoformat(),
+                        "insertion_timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                 )
             except Exception as e:
