@@ -44,7 +44,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --extra cli && uv pip install pyinstaller>=6.0.0
 
       - name: Get version
         id: version

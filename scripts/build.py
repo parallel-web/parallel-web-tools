@@ -35,14 +35,14 @@ def ensure_dependencies():
     if has_uv():
         print("Using uv to install dependencies...")
         subprocess.run(
-            ["uv", "pip", "install", "-e", ".[dev]"],
+            ["uv", "pip", "install", "-e", ".[cli]", "pyinstaller>=6.0.0"],
             cwd=project_root,
             check=True,
         )
     else:
         print("Using pip to install dependencies...")
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", ".[dev]"],
+            [sys.executable, "-m", "pip", "install", "-e", ".[cli]", "pyinstaller>=6.0.0"],
             cwd=project_root,
             check=True,
         )
