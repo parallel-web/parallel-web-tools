@@ -12,7 +12,7 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 - **CLI for Humans & AI Agents** - Works interactively or fully via command-line arguments
 - **Web Search** - AI-powered search with domain filtering and date ranges
 - **Content Extraction** - Extract clean markdown from any URL
-- **Data Enrichment** - Enrich CSV, DuckDB, and BigQuery data with AI
+- **Data Enrichment** - Enrich CSV, JSON, DuckDB, and BigQuery data with AI
 - **AI-Assisted Planning** - Use natural language to define what data you want
 - **Multiple Integrations** - Polars, DuckDB, Snowflake, BigQuery, Spark
 
@@ -30,7 +30,7 @@ curl -fsSL https://parallel.ai/install.sh | bash
 
 This automatically detects your platform (macOS/Linux, x64/arm64) and installs to `~/.local/bin`.
 
-> **Note:** The standalone binary supports `search`, `extract`, `research`, and `enrich run` with CLI arguments and CSV files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
+> **Note:** The standalone binary supports `search`, `extract`, `research`, and `enrich run` with CLI arguments, CSV files, and JSON files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
 
 ### Python Package
 
@@ -140,6 +140,14 @@ parallel-cli enrich run \
     --target enriched.csv \
     --source-columns '[{"name": "company", "description": "Company name"}]' \
     --intent "Find the CEO and annual revenue"
+
+# Enrich a JSON file
+parallel-cli enrich run \
+    --source-type json \
+    --source companies.json \
+    --target enriched.json \
+    --source-columns '[{"name": "company", "description": "Company name"}]' \
+    --enriched-columns '[{"name": "ceo", "description": "CEO name"}]'
 ```
 
 ### 5. Deploy to Cloud Systems
@@ -245,7 +253,7 @@ run_enrichment_from_dict({
 ```yaml
 source: input.csv
 target: output.csv
-source_type: csv  # csv, duckdb, or bigquery
+source_type: csv  # csv, json, duckdb, or bigquery
 processor: core-fast  # lite, base, core, pro, ultra (add -fast for speed)
 
 source_columns:

@@ -1,6 +1,7 @@
 """Data processors for different source types."""
 
 from parallel_web_tools.processors.csv import process_csv
+from parallel_web_tools.processors.json import process_json
 
 
 def process_duckdb(schema):
@@ -17,4 +18,4 @@ def process_bigquery(schema):
     return _process_bigquery(schema)
 
 
-__all__ = ["process_csv", "process_duckdb", "process_bigquery"]
+__all__ = ["process_csv", "process_json", "process_duckdb", "process_bigquery"]

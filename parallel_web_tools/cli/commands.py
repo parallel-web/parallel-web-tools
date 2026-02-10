@@ -63,9 +63,9 @@ load_dotenv(".env.local")
 # DuckDB requires: pip install parallel-web-tools[duckdb]
 # BigQuery requires: pip install parallel-web-tools[bigquery]
 if _STANDALONE_MODE:
-    AVAILABLE_SOURCE_TYPES = ["csv"]
+    AVAILABLE_SOURCE_TYPES = ["csv", "json"]
 else:
-    AVAILABLE_SOURCE_TYPES = ["csv", "duckdb", "bigquery"]
+    AVAILABLE_SOURCE_TYPES = ["csv", "json", "duckdb", "bigquery"]
 
 
 # =============================================================================

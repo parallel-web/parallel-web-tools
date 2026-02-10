@@ -1,5 +1,6 @@
 """Tests for the core.batch module."""
 
+import json
 import os
 from types import SimpleNamespace
 from unittest import mock
@@ -1018,3 +1019,121 @@ class TestPollTaskGroup:
         assert len(results) == 1
         assert results[0]["error"] == "Processing failed"
         assert results[0]["input"] == {"company": "X"}
+
+
+class TestProcessJson:
+    """Tests for the JSON processor."""
+
+    def test_read_json_array(self, tmp_path):
+        """Should read a JSON array of objects."""
+        from parallel_web_tools.core.schema import Column, InputSchema, SourceType
+        from parallel_web_tools.processors.json import process_json
+
+        source_file = tmp_path / "input.json"
+        target_file = tmp_path / "output.json"
+        data = [
+            {"company": "Google", "website": "google.com"},
+            {"company": "Apple", "website": "apple.com"},
+        ]
+        source_file.write_text(json.dumps(data))
+
+        schema = InputSchema(
+            source=str(source_file),
+            target=str(target_file),
+            source_type=SourceType.JSON,
+            source_columns=[
+                Column("company", "Company name"),
+                Column("website", "Company website"),
+            ],
+            enriched_columns=[Column("ceo", "CEO name")],
+        )
+
+        with mock.patch("parallel_web_tools.processors.json.run_tasks") as mock_run:
+            mock_run.return_value = [
+                {"company": "Google", "ceo": "Sundar Pichai"},
+                {"company": "Apple", "ceo": "Tim Cook"},
+            ]
+            result = process_json(schema)
+
+        assert result is None
+        mock_run.assert_called_once()
+        # Verify it read the correct data
+        call_args = mock_run.call_args
+        assert len(call_args[0][0]) == 2
+        assert call_args[0][0][0]["company"] == "Google"
+
+    def test_write_json_output(self, tmp_path):
+        """Should write enriched results to JSON file with indent=2."""
+        from parallel_web_tools.core.schema import Column, InputSchema, SourceType
+        from parallel_web_tools.processors.json import process_json
+
+        source_file = tmp_path / "input.json"
+        target_file = tmp_path / "output.json"
+        data = [{"company": "Google"}]
+        source_file.write_text(json.dumps(data))
+
+        schema = InputSchema(
+            source=str(source_file),
+            target=str(target_file),
+            source_type=SourceType.JSON,
+            source_columns=[Column("company", "Company name")],
+            enriched_columns=[Column("ceo", "CEO name")],
+        )
+
+        expected_output = [{"company": "Google", "ceo": "Sundar Pichai"}]
+
+        with mock.patch("parallel_web_tools.processors.json.run_tasks") as mock_run:
+            mock_run.return_value = expected_output
+            process_json(schema)
+
+        assert target_file.exists()
+        with open(target_file) as f:
+            output_data = json.load(f)
+        assert output_data == expected_output
+        # Verify indent=2 formatting
+        raw = target_file.read_text()
+        assert "  " in raw  # indented
+
+    def test_no_wait_returns_task_group(self, tmp_path):
+        """Should return task group info when no_wait=True."""
+        from parallel_web_tools.core.schema import Column, InputSchema, SourceType
+        from parallel_web_tools.processors.json import process_json
+
+        source_file = tmp_path / "input.json"
+        target_file = tmp_path / "output.json"
+        data = [{"company": "Google"}]
+        source_file.write_text(json.dumps(data))
+
+        schema = InputSchema(
+            source=str(source_file),
+            target=str(target_file),
+            source_type=SourceType.JSON,
+            source_columns=[Column("company", "Company name")],
+            enriched_columns=[Column("ceo", "CEO name")],
+        )
+
+        with mock.patch("parallel_web_tools.processors.json.create_task_group") as mock_create:
+            mock_create.return_value = {"taskgroup_id": "tgrp_json_123"}
+            result = process_json(schema, no_wait=True)
+
+        assert result == {"taskgroup_id": "tgrp_json_123"}
+        mock_create.assert_called_once()
+
+    def test_invalid_json_raises_error(self, tmp_path):
+        """Should raise error for invalid JSON input files."""
+        from parallel_web_tools.core.schema import Column, InputSchema, SourceType
+        from parallel_web_tools.processors.json import process_json
+
+        source_file = tmp_path / "bad.json"
+        source_file.write_text("not valid json {{{")
+
+        schema = InputSchema(
+            source=str(source_file),
+            target=str(tmp_path / "output.json"),
+            source_type=SourceType.JSON,
+            source_columns=[Column("company", "Company name")],
+            enriched_columns=[Column("ceo", "CEO name")],
+        )
+
+        with pytest.raises(json.JSONDecodeError):
+            process_json(schema)
