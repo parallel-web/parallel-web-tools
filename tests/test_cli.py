@@ -687,15 +687,6 @@ class TestCLIExtrasAndStandaloneMode:
         assert "duckdb" in commands.AVAILABLE_SOURCE_TYPES
         assert "bigquery" in commands.AVAILABLE_SOURCE_TYPES
 
-    def test_source_types_include_json_in_standalone(self, runner):
-        """Standalone CLI should support json source type."""
-        from parallel_web_tools.cli import commands
-
-        # JSON should be available even in standalone mode
-        with mock.patch.object(commands, "_STANDALONE_MODE", True):
-            # Re-evaluate what standalone would have
-            assert "json" in ["csv", "json"]  # standalone list includes json
-
 
 class TestUpdateCommand:
     """Tests for the update command."""
