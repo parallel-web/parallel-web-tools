@@ -94,7 +94,7 @@ export PARALLEL_API_KEY=your_api_key
 parallel-cli search "What is Anthropic's latest AI model?" --json
 
 # Keyword search with filters
-parallel-cli search -q "bitcoin price" --after-date 2025-01-01 --json
+parallel-cli search -q "bitcoin price" --after-date 2026-01-01 --json
 
 # Search specific domains
 parallel-cli search "SEC filings for Apple" --include-domains sec.gov --json
