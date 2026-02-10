@@ -100,6 +100,7 @@ class SourceType(Enum):
     """Supported data sources."""
 
     CSV = "csv"
+    JSON = "json"
     DUCKDB = "duckdb"
     BIGQUERY = "bigquery"
 

@@ -683,6 +683,7 @@ class TestCLIExtrasAndStandaloneMode:
         # When not in standalone mode, all source types are available
         assert commands._STANDALONE_MODE is False
         assert "csv" in commands.AVAILABLE_SOURCE_TYPES
+        assert "json" in commands.AVAILABLE_SOURCE_TYPES
         assert "duckdb" in commands.AVAILABLE_SOURCE_TYPES
         assert "bigquery" in commands.AVAILABLE_SOURCE_TYPES
 
@@ -1431,3 +1432,75 @@ class TestEnrichPollCommand:
         json_text = "\n".join(lines[json_start:])
         output = json.loads(json_text)
         assert output["error"]["type"] == "TimeoutError"
+
+
+class TestEnrichRunJsonSourceType:
+    """Tests for enrich run with --source-type json."""
+
+    def test_enrich_run_accepts_json_source_type(self, runner):
+        """CLI should accept --source-type json."""
+        result = runner.invoke(main, ["enrich", "run", "--help"])
+        assert result.exit_code == 0
+        assert "json" in result.output
+
+    def test_enrich_run_json_source_type_valid(self, runner):
+        """Should accept json as a valid source type option."""
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            mock_run.return_value = None
+
+            result = runner.invoke(
+                main,
+                [
+                    "enrich",
+                    "run",
+                    "--source-type",
+                    "json",
+                    "--source",
+                    "input.json",
+                    "--target",
+                    "output.json",
+                    "--source-columns",
+                    '[{"name": "company", "description": "Company name"}]',
+                    "--enriched-columns",
+                    '[{"name": "ceo", "description": "CEO name"}]',
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_run.assert_called_once()
+        config = mock_run.call_args[0][0]
+        assert config["source_type"] == "json"
+
+    def test_enrich_plan_accepts_json_source_type(self, runner, tmp_path):
+        """enrich plan should accept json as a valid source type."""
+        output_file = tmp_path / "config.yaml"
+
+        result = runner.invoke(
+            main,
+            [
+                "enrich",
+                "plan",
+                "-o",
+                str(output_file),
+                "--source-type",
+                "json",
+                "--source",
+                "input.json",
+                "--target",
+                "output.json",
+                "--source-columns",
+                '[{"name": "company", "description": "Company name"}]',
+                "--enriched-columns",
+                '[{"name": "ceo", "description": "CEO name"}]',
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+
+        import yaml
+
+        with open(output_file) as f:
+            config = yaml.safe_load(f)
+
+        assert config["source_type"] == "json"

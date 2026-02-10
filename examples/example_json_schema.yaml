@@ -1,0 +1,13 @@
+source: examples/example_file.json
+target: data/output_file.json
+source_type: json
+processor: core-fast  # Options: lite, base, core, pro, ultra, etc. (add -fast for fast variant, default: core-fast)
+source_columns:
+  - name: business_name
+    description: The name of a business
+  - name: web_site
+    description: The business's web site
+enriched_columns:
+  - name: estimated_ad_spend_last_quarter
+    description: The estimated spend in the last quarter by this business in USD
+    type: int  # Specify output type (default: str)

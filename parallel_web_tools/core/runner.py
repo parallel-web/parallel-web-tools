@@ -15,6 +15,10 @@ def _run_processor(parsed_schema: InputSchema, no_wait: bool = False) -> dict | 
             from parallel_web_tools.processors.csv import process_csv
 
             return process_csv(parsed_schema, no_wait=no_wait)
+        case SourceType.JSON:
+            from parallel_web_tools.processors.json import process_json
+
+            return process_json(parsed_schema, no_wait=no_wait)
         case SourceType.DUCKDB:
             from parallel_web_tools.processors.duckdb import process_duckdb
 
