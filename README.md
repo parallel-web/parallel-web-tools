@@ -68,6 +68,8 @@ parallel-cli
 │   └── processors          # List available research processors
 └── enrich                  # Data enrichment commands
     ├── run                 # Run enrichment
+    ├── status              # Check status of a task group
+    ├── poll                # Poll until completion and collect results
     ├── plan                # Create YAML config
     ├── suggest             # AI suggests output columns
     └── deploy              # Deploy to cloud systems (requires pip install)
