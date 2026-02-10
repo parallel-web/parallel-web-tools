@@ -18,6 +18,8 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 
 ## Installation
 
+Requires **Python 3.10+**.
+
 ### Standalone CLI (Recommended)
 
 Install the standalone `parallel-cli` binary for search, extract, enrichment, and deep research (no Python required):
@@ -28,7 +30,7 @@ curl -fsSL https://parallel.ai/install.sh | bash
 
 This automatically detects your platform (macOS/Linux, x64/arm64) and installs to `~/.local/bin`.
 
-> **Note:** The standalone binary supports `search`, `extract`, and `enrich run` with CLI arguments and CSV files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
+> **Note:** The standalone binary supports `search`, `extract`, `research`, and `enrich run` with CLI arguments and CSV files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
 
 ### Python Package
 
@@ -59,6 +61,11 @@ parallel-cli
 ├── logout                  # Remove stored credentials
 ├── search                  # Web search
 ├── extract                 # Extract content from URLs
+├── research                # Deep research commands
+│   ├── run                 # Run deep research on a question or topic
+│   ├── status              # Check status of a research task
+│   ├── poll                # Poll until completion
+│   └── processors          # List available research processors
 └── enrich                  # Data enrichment commands
     ├── run                 # Run enrichment
     ├── plan                # Create YAML config
@@ -85,7 +92,7 @@ export PARALLEL_API_KEY=your_api_key
 parallel-cli search "What is Anthropic's latest AI model?" --json
 
 # Keyword search with filters
-parallel-cli search -q "bitcoin price" --after-date 2024-01-01 --json
+parallel-cli search -q "bitcoin price" --after-date 2025-01-01 --json
 
 # Search specific domains
 parallel-cli search "SEC filings for Apple" --include-domains sec.gov --json
