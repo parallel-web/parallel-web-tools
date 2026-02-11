@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from typing import Any
 
 import click
@@ -767,6 +768,8 @@ def enrich():
 @click.option("--processor", type=click.Choice(AVAILABLE_PROCESSORS), help="Processor to use")
 @click.option("--data", "inline_data", help="Inline JSON data array (alternative to --source)")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task group (don't poll)")
+@click.option("--json", "output_json", is_flag=True, help="Output results as JSON to stdout")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 def enrich_run(
     config_file: str | None,
     source_type: str | None,
@@ -778,6 +781,8 @@ def enrich_run(
     processor: str | None,
     inline_data: str | None,
     no_wait: bool,
+    output_json: bool,
+    output_file: str | None,
 ):
     """Run data enrichment from YAML config or CLI arguments.
 
@@ -813,7 +818,8 @@ def enrich_run(
             # Use inferred columns if not explicitly provided
             if not source_columns:
                 source_columns = json.dumps(inferred_cols)
-                console.print(f"[dim]Inferred {len(inferred_cols)} source column(s) from data[/dim]")
+                if not output_json:
+                    console.print(f"[dim]Inferred {len(inferred_cols)} source column(s) from data[/dim]")
 
         base_args = [source_type, source, target, source_columns]
         has_cli_args = any(arg is not None for arg in base_args) or enriched_columns or intent
@@ -836,7 +842,8 @@ def enrich_run(
             validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
 
         if config_file:
-            console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
+            if not output_json:
+                console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
             result = run_enrichment(config_file, no_wait=no_wait)  # type: ignore[name-defined]
         else:
             # After validation, these are guaranteed non-None
@@ -848,11 +855,15 @@ def enrich_run(
             assert src_cols is not None  # Validated above
 
             if intent:
-                console.print("[dim]Getting suggestions from Parallel API...[/dim]")
+                if not output_json:
+                    console.print("[dim]Getting suggestions from Parallel API...[/dim]")
                 suggestion = suggest_from_intent(intent, src_cols)
                 enr_cols = suggestion["enriched_columns"]
                 final_processor = processor or suggestion["processor"]
-                console.print(f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n")
+                if not output_json:
+                    console.print(
+                        f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n"
+                    )
             else:
                 enr_cols = parse_columns(enriched_columns)
                 assert enr_cols is not None  # Validated above
@@ -867,22 +878,56 @@ def enrich_run(
                 processor=final_processor,
             )
 
-            console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
+            if not output_json:
+                console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
             result = run_enrichment_from_dict(config, no_wait=no_wait)
 
         if no_wait and result:
-            console.print(f"\n[bold green]Task group created: {result['taskgroup_id']}[/bold green]")
-            console.print(f"Track progress: {result['url']}")
-            console.print(f"[dim]Runs: {result['num_runs']}[/dim]")
-            console.print("\n[dim]Use 'parallel-cli enrich status <id>' to check status[/dim]")
-            console.print("[dim]Use 'parallel-cli enrich poll <id>' to wait for results[/dim]")
+            if output_json:
+                print(json.dumps(result, indent=2))
+            else:
+                console.print(f"\n[bold green]Task group created: {result['taskgroup_id']}[/bold green]")
+                console.print(f"Track progress: {result['url']}")
+                console.print(f"[dim]Runs: {result['num_runs']}[/dim]")
+                console.print("\n[dim]Use 'parallel-cli enrich status <id>' to check status[/dim]")
+                console.print("[dim]Use 'parallel-cli enrich poll <id>' to wait for results[/dim]")
+
+            if output_file:
+                with open(output_file, "w") as f:
+                    json.dump(result, f, indent=2)
+                if not output_json:
+                    console.print(f"[dim]Results saved to {output_file}[/dim]")
         else:
-            console.print("\n[bold green]Enrichment complete![/bold green]")
+            # Wait mode completed - read back target file for JSON/output if requested
+            if output_json or output_file:
+                # Try to read enrichment results from the target file
+                results_data: Any = None
+                if target and os.path.exists(target):
+                    with open(target) as f:
+                        if target.endswith(".json"):
+                            results_data = json.load(f)
+                        else:
+                            # CSV target - convert to list of dicts
+                            reader = csv.DictReader(f)
+                            results_data = list(reader)
+
+                if results_data is not None:
+                    if output_file:
+                        with open(output_file, "w") as f:
+                            json.dump(results_data, f, indent=2)
+                        if not output_json:
+                            console.print(f"[dim]Results saved to {output_file}[/dim]")
+
+                    if output_json:
+                        print(json.dumps(results_data, indent=2))
+
+            if not output_json:
+                console.print("\n[bold green]Enrichment complete![/bold green]")
 
     except FileNotFoundError as e:
-        _handle_error(e, exit_code=EXIT_BAD_INPUT)
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT)
     except Exception as e:
-        _handle_error(e, prefix="Error during enrichment")
+        _handle_error(e, output_json=output_json, prefix="Error during enrichment")
     finally:
         # Clean up temp file if we created one
         if temp_csv_path and os.path.exists(temp_csv_path):
@@ -1058,11 +1103,24 @@ def enrich_poll(
     TASKGROUP_ID is the task group identifier (e.g., tgrp_xxx).
     """
     try:
-        console.print(f"[bold cyan]Polling task group: {taskgroup_id}[/bold cyan]")
-        console.print(f"[dim]Track progress: https://platform.parallel.ai/view/task-run-group/{taskgroup_id}[/dim]\n")
+        if not output_json:
+            console.print(f"[bold cyan]Polling task group: {taskgroup_id}[/bold cyan]")
+            console.print(
+                f"[dim]Track progress: https://platform.parallel.ai/view/task-run-group/{taskgroup_id}[/dim]\n"
+            )
+
+        start_time = time.time()
 
         def on_progress(completed: int, failed: int, total: int):
-            console.print(f"[dim]Progress: {completed} completed, {failed} failed / {total} total[/dim]")
+            if output_json:
+                return
+            elapsed = time.time() - start_time
+            mins, secs = divmod(int(elapsed), 60)
+            elapsed_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+            rate_str = f", {completed / elapsed:.1f}/s" if elapsed > 0 and completed > 0 else ""
+            console.print(
+                f"[dim]Progress: {completed}/{total} completed, {failed} failed ({elapsed_str}{rate_str})[/dim]"
+            )
 
         results = poll_task_group(
             taskgroup_id,
@@ -1291,29 +1349,39 @@ def research_run(
     try:
         if no_wait:
             # Create task and return immediately
-            console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
+            if not output_json:
+                console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
             result = create_research_task(query, processor=processor, source="cli")
 
-            console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
-            console.print(f"Track progress: {result['result_url']}")
-            console.print("\n[dim]Use 'parallel-cli research status <run_id>' to check status[/dim]")
-            console.print("[dim]Use 'parallel-cli research poll <run_id>' to wait for results[/dim]")
+            if not output_json:
+                console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
+                console.print(f"Track progress: {result['result_url']}")
+                console.print("\n[dim]Use 'parallel-cli research status <run_id>' to check status[/dim]")
+                console.print("[dim]Use 'parallel-cli research poll <run_id>' to wait for results[/dim]")
 
             if output_json:
                 print(json.dumps(result, indent=2))
         else:
             # Run and wait for results
-            console.print(f"[bold cyan]Starting deep research with processor: {processor}[/bold cyan]")
-            console.print(f"[dim]This may take {RESEARCH_PROCESSORS[processor]}[/dim]\n")
+            if not output_json:
+                console.print(f"[bold cyan]Starting deep research with processor: {processor}[/bold cyan]")
+                console.print(f"[dim]This may take {RESEARCH_PROCESSORS[processor]}[/dim]\n")
+
+            start_time = time.time()
 
             def on_status(status: str, run_id: str):
+                if output_json:
+                    return
+                elapsed = time.time() - start_time
+                mins, secs = divmod(int(elapsed), 60)
+                elapsed_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
                 if status == "created":
                     console.print(f"[green]Task created: {run_id}[/green]")
                     console.print(
                         f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]\n"
                     )
                 else:
-                    console.print(f"[dim]Status: {status}[/dim]")
+                    console.print(f"[dim]Status: {status} ({elapsed_str})[/dim]")
 
             result = run_research(
                 query,
@@ -1394,11 +1462,19 @@ def research_poll(
     RUN_ID is the task identifier (e.g., trun_xxx).
     """
     try:
-        console.print(f"[bold cyan]Polling task: {run_id}[/bold cyan]")
-        console.print(f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]\n")
+        if not output_json:
+            console.print(f"[bold cyan]Polling task: {run_id}[/bold cyan]")
+            console.print(f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]\n")
+
+        start_time = time.time()
 
         def on_status(status: str, run_id: str):
-            console.print(f"[dim]Status: {status}[/dim]")
+            if output_json:
+                return
+            elapsed = time.time() - start_time
+            mins, secs = divmod(int(elapsed), 60)
+            elapsed_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+            console.print(f"[dim]Status: {status} ({elapsed_str})[/dim]")
 
         result = poll_research(
             run_id,
