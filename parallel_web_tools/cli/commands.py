@@ -17,18 +17,26 @@ from rich.console import Console
 from parallel_web_tools import __version__
 from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
+    FINDALL_GENERATORS,
     JSON_SCHEMA_TYPE_MAP,
     RESEARCH_PROCESSORS,
+    cancel_findall_run,
+    create_findall_run,
     create_research_task,
     get_api_key,
     get_auth_status,
+    get_findall_result,
+    get_findall_status,
     get_research_status,
     get_task_group_status,
     get_user_agent,
+    ingest_findall,
     logout,
+    poll_findall,
     poll_research,
     poll_task_group,
     run_enrichment_from_dict,
+    run_findall,
     run_research,
 )
 
@@ -1684,6 +1692,402 @@ def _output_research_result(
 
         if not output_file:
             console.print("[dim]Use --output to save full results to a file, or --json to print to stdout[/dim]")
+
+
+# =============================================================================
+# FindAll Commands
+# =============================================================================
+
+
+@main.group()
+def findall():
+    """FindAll: discover entities from the web using natural language."""
+    pass
+
+
+@findall.command(name="run")
+@click.argument("objective")
+@click.option(
+    "--generator",
+    "-g",
+    type=click.Choice(list(FINDALL_GENERATORS.keys())),
+    default="core",
+    show_default=True,
+    help="Generator tier (higher = more thorough but slower/costlier)",
+)
+@click.option(
+    "--match-limit",
+    "-n",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Maximum number of matched candidates (5-1000)",
+)
+@click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
+@click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
+@click.option("--no-wait", is_flag=True, help="Return immediately after creating run (don't poll)")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+def findall_run(
+    objective: str,
+    generator: str,
+    match_limit: int,
+    timeout: int,
+    poll_interval: int,
+    no_wait: bool,
+    output_file: str | None,
+    output_json: bool,
+):
+    """Run a FindAll query to discover and match entities from the web.
+
+    OBJECTIVE is a natural language description of what to find.
+
+    Examples:
+
+        parallel-cli findall run "Find all AI companies that raised Series A in 2026"
+
+        parallel-cli findall run "Find roofing companies in Charlotte NC" -g base -n 25
+
+        parallel-cli findall run "Find YC companies in developer tools" --no-wait --json
+    """
+    try:
+        if no_wait:
+            # Ingest + create, then return immediately
+            if not output_json:
+                console.print("[dim]Ingesting objective...[/dim]")
+
+            schema = ingest_findall(objective, source="cli")
+
+            if not output_json:
+                entity_type = schema.get("entity_type", "entities")
+                conditions = schema.get("match_conditions", [])
+                console.print(f"[green]Entity type:[/green] {entity_type}")
+                console.print(f"[green]Match conditions:[/green] {len(conditions)}")
+                for mc in conditions:
+                    name = mc.get("name", "")
+                    desc = mc.get("description", "")
+                    console.print(f"  [dim]- {name}: {desc}[/dim]")
+                console.print(f"\n[dim]Creating run with generator={generator}, match_limit={match_limit}...[/dim]")
+
+            result = create_findall_run(
+                objective=objective,
+                entity_type=schema.get("entity_type", "entities"),
+                match_conditions=schema.get("match_conditions", []),
+                generator=generator,
+                match_limit=match_limit,
+                source="cli",
+            )
+
+            if output_json:
+                print(json.dumps(result, indent=2, default=str))
+            else:
+                console.print(f"\n[bold green]Run created: {result['findall_id']}[/bold green]")
+                console.print(
+                    f"\n[dim]Use 'parallel-cli findall status {result['findall_id']}' to check progress[/dim]"
+                )
+                console.print(f"[dim]Use 'parallel-cli findall poll {result['findall_id']}' to wait for results[/dim]")
+
+            if output_file:
+                with open(output_file, "w") as f:
+                    json.dump(result, f, indent=2, default=str)
+                if not output_json:
+                    console.print(f"[dim]Results saved to {output_file}[/dim]")
+        else:
+            # Full flow: ingest, create, poll
+            if not output_json:
+                console.print(
+                    f"[bold cyan]Starting FindAll with generator={generator}, match_limit={match_limit}[/bold cyan]"
+                )
+                console.print(f"[dim]Generator: {FINDALL_GENERATORS[generator]}[/dim]\n")
+
+            start_time = time.time()
+
+            def on_status(status: str, findall_id: str, metrics: dict):
+                if output_json:
+                    return
+                elapsed = time.time() - start_time
+                mins, secs = divmod(int(elapsed), 60)
+                elapsed_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+
+                if status == "ingested":
+                    entity_type = metrics.get("entity_type", "")
+                    console.print(f"[green]Schema ready - entity type: {entity_type}[/green]")
+                elif status == "created":
+                    console.print(f"[green]Run created: {findall_id}[/green]\n")
+                else:
+                    generated = metrics.get("generated_candidates_count", 0)
+                    matched = metrics.get("matched_candidates_count", 0)
+                    console.print(
+                        f"[dim]Status: {status} | generated: {generated}, matched: {matched} ({elapsed_str})[/dim]"
+                    )
+
+            result = run_findall(
+                objective,
+                generator=generator,
+                match_limit=match_limit,
+                timeout=timeout,
+                poll_interval=poll_interval,
+                on_status=on_status,
+                source="cli",
+            )
+
+            _output_findall_result(result, output_file, output_json)
+
+    except TimeoutError as e:
+        if output_json:
+            print(json.dumps({"error": {"message": str(e), "type": "TimeoutError"}}, indent=2))
+        else:
+            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+            console.print("[dim]The run is still active. Use 'parallel-cli findall poll <findall_id>' to resume.[/dim]")
+        sys.exit(EXIT_TIMEOUT)
+    except RuntimeError as e:
+        _handle_error(e, output_json=output_json)
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="ingest")
+@click.argument("objective")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+def findall_ingest(objective: str, output_json: bool):
+    """Convert a natural language objective into a FindAll schema.
+
+    Use this to preview the schema (entity type, match conditions) before
+    creating a run. You can then use the output to refine your query.
+
+    OBJECTIVE is a natural language description of what to find.
+
+    Examples:
+
+        parallel-cli findall ingest "Find all AI companies that raised Series A in 2026"
+    """
+    try:
+        if not output_json:
+            console.print("[dim]Ingesting objective...[/dim]\n")
+
+        schema = ingest_findall(objective, source="cli")
+
+        if output_json:
+            print(json.dumps(schema, indent=2, default=str))
+        else:
+            console.print(f"[bold]Entity type:[/bold] {schema.get('entity_type', 'unknown')}")
+            console.print(f"[bold]Generator:[/bold]   {schema.get('generator', 'core')}")
+            conditions = schema.get("match_conditions", [])
+            console.print(f"\n[bold]Match conditions ({len(conditions)}):[/bold]")
+            for mc in conditions:
+                name = mc.get("name", "")
+                desc = mc.get("description", "")
+                console.print(f"  [cyan]{name}[/cyan]: {desc}")
+
+            enrichments = schema.get("enrichments") or []
+            if enrichments:
+                console.print(f"\n[bold]Suggested enrichments ({len(enrichments)}):[/bold]")
+                for e in enrichments:
+                    name = e.get("name", "")
+                    desc = e.get("description", "")
+                    console.print(f"  [cyan]{name}[/cyan]: {desc}")
+
+            console.print("\n[dim]Use 'parallel-cli findall run' to start a run with this schema[/dim]")
+            console.print("[dim]Use --json to get machine-readable output for programmatic use[/dim]")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="status")
+@click.argument("findall_id")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def findall_status(findall_id: str, output_json: bool):
+    """Check the status of a FindAll run.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+    """
+    try:
+        result = get_findall_status(findall_id, source="cli")
+
+        if output_json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            status = result["status"]
+            status_color = {
+                "completed": "green",
+                "running": "cyan",
+                "queued": "yellow",
+                "failed": "red",
+                "cancelled": "red",
+            }.get(status, "white")
+
+            metrics = result.get("metrics", {})
+            generated = metrics.get("generated_candidates_count", 0)
+            matched = metrics.get("matched_candidates_count", 0)
+
+            console.print(f"[bold]Run:[/bold]       {findall_id}")
+            console.print(f"[bold]Status:[/bold]    [{status_color}]{status}[/{status_color}]")
+            console.print(f"[bold]Generator:[/bold] {result.get('generator', 'unknown')}")
+            console.print(f"[bold]Generated:[/bold] {generated}")
+            console.print(f"[bold]Matched:[/bold]   {matched}")
+
+            if result.get("is_active"):
+                console.print(f"\n[dim]Use 'parallel-cli findall poll {findall_id}' to wait for results[/dim]")
+            elif status == "completed":
+                console.print(f"\n[dim]Use 'parallel-cli findall result {findall_id}' to get results[/dim]")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="poll")
+@click.argument("findall_id")
+@click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
+@click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+def findall_poll(
+    findall_id: str,
+    timeout: int,
+    poll_interval: int,
+    output_file: str | None,
+    output_json: bool,
+):
+    """Poll a FindAll run until completion and show results.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+    """
+    try:
+        if not output_json:
+            console.print(f"[bold cyan]Polling FindAll run: {findall_id}[/bold cyan]\n")
+
+        start_time = time.time()
+
+        def on_status(status: str, fid: str, metrics: dict):
+            if output_json:
+                return
+            elapsed = time.time() - start_time
+            mins, secs = divmod(int(elapsed), 60)
+            elapsed_str = f"{mins}m{secs:02d}s" if mins else f"{secs}s"
+            generated = metrics.get("generated_candidates_count", 0)
+            matched = metrics.get("matched_candidates_count", 0)
+            console.print(f"[dim]Status: {status} | generated: {generated}, matched: {matched} ({elapsed_str})[/dim]")
+
+        result = poll_findall(
+            findall_id,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            on_status=on_status,
+            source="cli",
+        )
+
+        _output_findall_result(result, output_file, output_json)
+
+    except TimeoutError as e:
+        if output_json:
+            print(json.dumps({"error": {"message": str(e), "type": "TimeoutError"}}, indent=2))
+        else:
+            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
+        sys.exit(EXIT_TIMEOUT)
+    except RuntimeError as e:
+        _handle_error(e, output_json=output_json)
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="result")
+@click.argument("findall_id")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+def findall_result(findall_id: str, output_file: str | None, output_json: bool):
+    """Fetch results of a completed FindAll run.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+    """
+    try:
+        result = get_findall_result(findall_id, source="cli")
+        _output_findall_result(result, output_file, output_json)
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="cancel")
+@click.argument("findall_id")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def findall_cancel(findall_id: str, output_json: bool):
+    """Cancel a running FindAll run.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+    """
+    try:
+        result = cancel_findall_run(findall_id, source="cli")
+
+        if output_json:
+            print(json.dumps(result, indent=2))
+        else:
+            console.print(f"[bold green]Cancelled:[/bold green] {findall_id}")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+def _output_findall_result(
+    result: dict,
+    output_file: str | None,
+    output_json: bool,
+):
+    """Format and output FindAll results to console and/or files."""
+    candidates = result.get("candidates", [])
+    matched = [c for c in candidates if c.get("match_status") == "matched"]
+    metrics = result.get("metrics", {})
+
+    output_data = {
+        "findall_id": result.get("findall_id"),
+        "status": result.get("status"),
+        "metrics": metrics,
+        "candidates": candidates,
+    }
+
+    if output_file:
+        from pathlib import Path
+
+        out_path = Path(output_file)
+        if not out_path.suffix:
+            out_path = out_path.with_suffix(".json")
+
+        with open(out_path, "w") as f:
+            json.dump(output_data, f, indent=2, default=str)
+        if not output_json:
+            console.print(f"[green]Results saved to:[/green] {out_path}")
+
+    if output_json:
+        print(json.dumps(output_data, indent=2, default=str))
+    else:
+        console.print("\n[bold green]FindAll Complete![/bold green]")
+        console.print(f"[dim]Run: {result.get('findall_id')}[/dim]")
+        console.print(
+            f"[dim]Generated: {metrics.get('generated_candidates_count', 0)} | "
+            f"Matched: {metrics.get('matched_candidates_count', 0)}[/dim]\n"
+        )
+
+        if matched:
+            from rich.table import Table
+
+            table = Table(title=f"Matched Candidates ({len(matched)})")
+            table.add_column("Name", style="cyan", no_wrap=True)
+            table.add_column("URL", style="dim")
+            table.add_column("Description", max_width=50)
+
+            for c in matched:
+                table.add_row(
+                    c.get("name", ""),
+                    c.get("url", ""),
+                    (c.get("description", "") or "")[:50],
+                )
+
+            console.print(table)
+            console.print()
+        else:
+            console.print("[yellow]No matched candidates found.[/yellow]\n")
+
+        if not output_file:
+            console.print("[dim]Use --output to save full results, or --json for machine-readable output[/dim]")
 
 
 if __name__ == "__main__":

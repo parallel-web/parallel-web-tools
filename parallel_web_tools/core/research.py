@@ -8,11 +8,11 @@ and returns analyst-grade intelligence reports.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from typing import Any
 
 from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
 
 # Base URL for viewing results
@@ -42,8 +42,6 @@ RESEARCH_PROCESSORS = {
     "ultra4x": "5-90min - very difficult research, fresher data",
     "ultra8x": "5min-2hr - most challenging research, fresher data",
 }
-
-TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
 def _serialize_output(output: Any) -> dict[str, Any]:
@@ -182,34 +180,42 @@ def _poll_until_complete(
         TimeoutError: If the task doesn't complete within timeout.
         RuntimeError: If the task fails or is cancelled.
     """
-    deadline = time.time() + timeout
 
-    while time.time() < deadline:
-        status = client.task_run.retrieve(run_id=run_id)
-        current_status = status.status
+    def retrieve():
+        return client.task_run.retrieve(run_id=run_id)
 
+    def extract_status(response):
+        return response.status
+
+    def fetch_result():
+        result = client.task_run.result(run_id=run_id)
+        output = result.output if hasattr(result, "output") else {}
+        output_data = _serialize_output(output)
+        return {
+            "run_id": run_id,
+            "result_url": result_url,
+            "status": "completed",
+            "output": output_data,
+        }
+
+    def format_error(response, status):
+        error = getattr(response, "error", None) or f"Task {status}"
+        return f"Research {status}: {error}"
+
+    def _on_poll(response):
         if on_status:
-            on_status(current_status, run_id)
+            on_status(response.status, run_id)
 
-        if current_status in TERMINAL_STATUSES:
-            if current_status == "completed":
-                result = client.task_run.result(run_id=run_id)
-                output = result.output if hasattr(result, "output") else {}
-                output_data = _serialize_output(output)
-
-                return {
-                    "run_id": run_id,
-                    "result_url": result_url,
-                    "status": "completed",
-                    "output": output_data,
-                }
-
-            error = getattr(status, "error", None) or f"Task {current_status}"
-            raise RuntimeError(f"Research {current_status}: {error}")
-
-        time.sleep(poll_interval)
-
-    raise TimeoutError(f"Research task {run_id} timed out after {timeout} seconds")
+    return poll_until(
+        retrieve=retrieve,
+        extract_status=extract_status,
+        fetch_result=fetch_result,
+        format_error=format_error,
+        on_poll=_on_poll,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        timeout_message=f"Research task {run_id} timed out after {timeout} seconds",
+    )
 
 
 def run_research(

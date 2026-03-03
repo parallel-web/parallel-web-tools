@@ -19,6 +19,16 @@ from parallel_web_tools.core.batch import (
     poll_task_group,
     run_tasks,
 )
+from parallel_web_tools.core.findall import (
+    FINDALL_GENERATORS,
+    cancel_findall_run,
+    create_findall_run,
+    get_findall_result,
+    get_findall_status,
+    ingest_findall,
+    poll_findall,
+    run_findall,
+)
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
     create_research_task,
@@ -97,6 +107,15 @@ __all__ = [
     "get_research_status",
     "poll_research",
     "run_research",
+    # FindAll
+    "FINDALL_GENERATORS",
+    "cancel_findall_run",
+    "create_findall_run",
+    "get_findall_result",
+    "get_findall_status",
+    "ingest_findall",
+    "poll_findall",
+    "run_findall",
     # Result
     "EnrichmentResult",
 ]
