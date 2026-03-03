@@ -1744,7 +1744,7 @@ def findall_run(
 
     Examples:
 
-        parallel-cli findall run "Find all AI companies that raised Series A in 2024"
+        parallel-cli findall run "Find all AI companies that raised Series A in 2026"
 
         parallel-cli findall run "Find roofing companies in Charlotte NC" -g base -n 25
 
@@ -1853,7 +1853,7 @@ def findall_ingest(objective: str, output_json: bool):
 
     Examples:
 
-        parallel-cli findall ingest "Find all AI companies that raised Series A in 2024"
+        parallel-cli findall ingest "Find all AI companies that raised Series A in 2026"
     """
     try:
         if not output_json:
