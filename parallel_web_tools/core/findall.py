@@ -13,11 +13,11 @@ The typical workflow is:
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from typing import Any
 
 from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
 
 # Generator tiers for FindAll runs
@@ -28,7 +28,7 @@ FINDALL_GENERATORS = {
     "pro": "largest pool - highly specific, hard-to-find matches",
 }
 
-# Statuses that indicate a run has finished
+# Kept as a public alias for backwards compatibility with tests/consumers
 FINDALL_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
@@ -256,35 +256,42 @@ def _poll_findall_until_complete(
         TimeoutError: If the run doesn't complete within timeout.
         RuntimeError: If the run fails or is cancelled.
     """
-    deadline = time.time() + timeout
 
-    while time.time() < deadline:
-        run = client.beta.findall.retrieve(findall_id=findall_id)
-        status_info = _extract_status_info(run)
+    def retrieve():
+        return client.beta.findall.retrieve(findall_id=findall_id)
 
+    def extract_status(response):
+        return _extract_status_info(response)["status"]
+
+    def fetch_result():
+        result = client.beta.findall.result(findall_id=findall_id)
+        candidates = _serialize(getattr(result, "candidates", []))
+        result_status = _extract_status_from_result(result)
+        return {
+            "findall_id": findall_id,
+            **result_status,
+            "candidates": candidates or [],
+        }
+
+    def format_error(response, status):
+        termination = getattr(getattr(response, "status", None), "termination_reason", None)
+        detail = f" ({termination})" if termination else ""
+        return f"FindAll run {status}{detail}"
+
+    def _on_poll(response):
         if on_status:
+            status_info = _extract_status_info(response)
             on_status(status_info["status"], findall_id, status_info["metrics"])
 
-        if status_info["status"] in FINDALL_TERMINAL_STATUSES:
-            if status_info["status"] == "completed":
-                result = client.beta.findall.result(findall_id=findall_id)
-                candidates = _serialize(getattr(result, "candidates", []))
-                result_status = _extract_status_from_result(result)
-                return {
-                    "findall_id": findall_id,
-                    **result_status,
-                    "candidates": candidates or [],
-                }
-
-            # Failed or cancelled
-            termination = getattr(getattr(run, "status", None), "termination_reason", None)
-            detail = f" ({termination})" if termination else ""
-            raise RuntimeError(f"FindAll run {status_info['status']}{detail}")
-
-        time.sleep(poll_interval)
-
-    raise TimeoutError(
-        f"FindAll run {findall_id} timed out after {timeout}s. Use 'parallel-cli findall poll {findall_id}' to resume."
+    return poll_until(
+        retrieve=retrieve,
+        extract_status=extract_status,
+        fetch_result=fetch_result,
+        format_error=format_error,
+        on_poll=_on_poll,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        timeout_message=f"FindAll run {findall_id} timed out after {timeout}s. Use 'parallel-cli findall poll {findall_id}' to resume.",
     )
 
 

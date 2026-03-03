@@ -133,7 +133,7 @@ class TestRunResearch:
         mock_result.output = mock_output
         mock_parallel_client.task_run.result.return_value = mock_result
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             result = run_research("What is AI?", poll_interval=1, timeout=10)
 
         assert result["status"] == "completed"
@@ -149,8 +149,8 @@ class TestRunResearch:
         mock_status.status = "running"
         mock_parallel_client.task_run.retrieve.return_value = mock_status
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
-            with mock.patch("parallel_web_tools.core.research.time.time") as mock_time:
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
+            with mock.patch("parallel_web_tools.core.polling.time.time") as mock_time:
                 # Simulate timeout by returning increasing time values
                 mock_time.side_effect = [0, 0, 5, 10, 15]
 
@@ -168,7 +168,7 @@ class TestRunResearch:
         mock_status.error = "Processing error"
         mock_parallel_client.task_run.retrieve.return_value = mock_status
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             with pytest.raises(RuntimeError, match="failed"):
                 run_research("What is AI?", poll_interval=1)
 
@@ -193,7 +193,7 @@ class TestRunResearch:
         def on_status(status, run_id):
             statuses.append((status, run_id))
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             run_research("What is AI?", on_status=on_status, poll_interval=1)
 
         assert ("created", "trun_123") in statuses
@@ -215,7 +215,7 @@ class TestPollResearch:
         mock_result.output = mock_output
         mock_parallel_client.task_run.result.return_value = mock_result
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             result = poll_research("trun_123", poll_interval=1)
 
         assert result["status"] == "completed"
@@ -662,7 +662,7 @@ class TestRunResearchCancelled:
         mock_status.error = None
         mock_parallel_client.task_run.retrieve.return_value = mock_status
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             with pytest.raises(RuntimeError, match="cancelled"):
                 run_research("What is AI?", poll_interval=1)
 
@@ -687,7 +687,7 @@ class TestPollResearchStatuses:
         def on_status(status, run_id):
             statuses.append(status)
 
-        with mock.patch("parallel_web_tools.core.research.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             poll_research("trun_poll", on_status=on_status, poll_interval=1)
 
         assert statuses[0] == "polling"

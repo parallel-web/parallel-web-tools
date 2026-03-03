@@ -384,7 +384,7 @@ class TestRunFindall:
         # Mock result
         mock_parallel_client.beta.findall.result.return_value = _make_result()
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             result = run_findall("Find AI companies", poll_interval=1, timeout=60)
 
         assert result["findall_id"] == "findall_abc123"
@@ -402,8 +402,8 @@ class TestRunFindall:
 
         mock_parallel_client.beta.findall.retrieve.return_value = _make_run(status="running", is_active=True)
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
-            with mock.patch("parallel_web_tools.core.findall.time.time") as mock_time:
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
+            with mock.patch("parallel_web_tools.core.polling.time.time") as mock_time:
                 mock_time.side_effect = [0, 0, 5, 10, 15]
                 with pytest.raises(TimeoutError, match="timed out"):
                     run_findall("query", timeout=10, poll_interval=1)
@@ -421,7 +421,7 @@ class TestRunFindall:
         failed_run.status.termination_reason = "internal_error"
         mock_parallel_client.beta.findall.retrieve.return_value = failed_run
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             with pytest.raises(RuntimeError, match="failed"):
                 run_findall("query", poll_interval=1)
 
@@ -437,7 +437,7 @@ class TestRunFindall:
         cancelled_run = _make_run(status="cancelled", is_active=False)
         mock_parallel_client.beta.findall.retrieve.return_value = cancelled_run
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             with pytest.raises(RuntimeError, match="cancelled"):
                 run_findall("query", poll_interval=1)
 
@@ -460,7 +460,7 @@ class TestRunFindall:
         def on_status(status, findall_id, metrics):
             statuses.append((status, findall_id))
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             run_findall("query", on_status=on_status, poll_interval=1)
 
         # Should have ingested, created, then completed
@@ -482,7 +482,7 @@ class TestRunFindall:
         failed_run.status.termination_reason = "quota_exceeded"
         mock_parallel_client.beta.findall.retrieve.return_value = failed_run
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             with pytest.raises(RuntimeError, match="quota_exceeded"):
                 run_findall("query", poll_interval=1)
 
@@ -498,7 +498,7 @@ class TestRunFindall:
         mock_parallel_client.beta.findall.retrieve.return_value = _make_run(status="completed", is_active=False)
         mock_parallel_client.beta.findall.result.return_value = _make_result()
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             run_findall(
                 "query",
                 exclude_list=[{"name": "Foo", "url": "https://foo.com"}],
@@ -520,7 +520,7 @@ class TestPollFindall:
         )
         mock_parallel_client.beta.findall.result.return_value = _make_result()
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             result = poll_findall("findall_abc123", poll_interval=1)
 
         assert result["findall_id"] == "findall_abc123"
@@ -536,7 +536,7 @@ class TestPollFindall:
         def on_status(status, findall_id, metrics):
             statuses.append(status)
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
             poll_findall("findall_abc123", on_status=on_status, poll_interval=1)
 
         assert statuses[0] == "polling"
@@ -545,8 +545,8 @@ class TestPollFindall:
     def test_poll_timeout(self, mock_parallel_client):
         mock_parallel_client.beta.findall.retrieve.return_value = _make_run(status="running", is_active=True)
 
-        with mock.patch("parallel_web_tools.core.findall.time.sleep"):
-            with mock.patch("parallel_web_tools.core.findall.time.time") as mock_time:
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
+            with mock.patch("parallel_web_tools.core.polling.time.time") as mock_time:
                 mock_time.side_effect = [0, 0, 5, 10, 15]
                 with pytest.raises(TimeoutError, match="timed out"):
                     poll_findall("findall_abc123", timeout=10, poll_interval=1)
