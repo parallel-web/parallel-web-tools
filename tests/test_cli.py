@@ -1504,3 +1504,234 @@ class TestEnrichRunJsonSourceType:
             config = yaml.safe_load(f)
 
         assert config["source_type"] == "json"
+
+
+class TestCleanJsonOutput:
+    """Tests that --json mode produces clean, parseable JSON without Rich console messages."""
+
+    def test_enrich_poll_json_clean_output(self, runner):
+        """enrich poll --json should produce clean parseable JSON (no extra lines)."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_task_group") as mock_poll:
+            mock_poll.return_value = [
+                {"input": {"company": "A"}, "output": {"ceo": "CEO A"}},
+            ]
+
+            result = runner.invoke(main, ["enrich", "poll", "tgrp_clean", "--json"])
+
+        assert result.exit_code == 0
+        # The entire output should be valid JSON - no Rich console messages before it
+        output = json.loads(result.output.strip())
+        assert isinstance(output, list)
+        assert len(output) == 1
+        assert output[0]["output"]["ceo"] == "CEO A"
+
+    def test_research_run_json_clean_output(self, runner):
+        """research run --json should produce clean parseable JSON."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_clean",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_clean",
+                "status": "completed",
+                "output": {"content": {"text": "findings"}, "basis": []},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "test query", "--poll-interval", "1", "--json"],
+            )
+
+        assert result.exit_code == 0
+        # The entire output should be valid JSON
+        output = json.loads(result.output.strip())
+        assert output["run_id"] == "trun_clean"
+        assert output["status"] == "completed"
+
+    def test_research_run_no_wait_json_clean_output(self, runner):
+        """research run --no-wait --json should produce clean JSON."""
+        with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
+            mock_create.return_value = {
+                "run_id": "trun_nowait",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_nowait",
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "test query", "--no-wait", "--json"],
+            )
+
+        assert result.exit_code == 0
+        output = json.loads(result.output.strip())
+        assert output["run_id"] == "trun_nowait"
+
+    def test_research_poll_json_clean_output(self, runner):
+        """research poll --json should produce clean parseable JSON."""
+        with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
+            mock_poll.return_value = {
+                "run_id": "trun_poll_clean",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_poll_clean",
+                "status": "completed",
+                "output": {"content": "Research results", "basis": []},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "poll", "trun_poll_clean", "--poll-interval", "1", "--json"],
+            )
+
+        assert result.exit_code == 0
+        output = json.loads(result.output.strip())
+        assert output["run_id"] == "trun_poll_clean"
+        assert output["status"] == "completed"
+
+
+class TestEnrichRunJsonOutput:
+    """Tests for enrich run --json and --output flags."""
+
+    def test_enrich_run_help_shows_json_and_output(self, runner):
+        """Should show --json and --output in help."""
+        result = runner.invoke(main, ["enrich", "run", "--help"])
+        assert result.exit_code == 0
+        assert "--json" in result.output
+        assert "--output" in result.output
+
+    def test_enrich_run_no_wait_json_output(self, runner):
+        """enrich run --no-wait --json should output taskgroup info as JSON."""
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            mock_run.return_value = {
+                "taskgroup_id": "tgrp_json_nowait",
+                "url": "https://platform.parallel.ai/view/task-run-group/tgrp_json_nowait",
+                "num_runs": 3,
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "enrich",
+                    "run",
+                    "--no-wait",
+                    "--json",
+                    "--source-type",
+                    "csv",
+                    "--source",
+                    "input.csv",
+                    "--target",
+                    "output.csv",
+                    "--source-columns",
+                    '[{"name": "company", "description": "Company name"}]',
+                    "--enriched-columns",
+                    '[{"name": "ceo", "description": "CEO name"}]',
+                ],
+            )
+
+        assert result.exit_code == 0
+        output = json.loads(result.output.strip())
+        assert output["taskgroup_id"] == "tgrp_json_nowait"
+        assert output["num_runs"] == 3
+
+    def test_enrich_run_no_wait_output_file(self, runner, tmp_path):
+        """enrich run --no-wait --output should save taskgroup info to file."""
+        output_file = tmp_path / "taskgroup.json"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            mock_run.return_value = {
+                "taskgroup_id": "tgrp_file_nowait",
+                "url": "https://platform.parallel.ai/view/task-run-group/tgrp_file_nowait",
+                "num_runs": 2,
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "enrich",
+                    "run",
+                    "--no-wait",
+                    "--output",
+                    str(output_file),
+                    "--source-type",
+                    "csv",
+                    "--source",
+                    "input.csv",
+                    "--target",
+                    "output.csv",
+                    "--source-columns",
+                    '[{"name": "company", "description": "Company name"}]',
+                    "--enriched-columns",
+                    '[{"name": "ceo", "description": "CEO name"}]',
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        data = json.loads(output_file.read_text())
+        assert data["taskgroup_id"] == "tgrp_file_nowait"
+
+    def test_enrich_run_wait_json_reads_target_csv(self, runner, tmp_path):
+        """enrich run --json (wait mode) should read target CSV and output as JSON."""
+        target_csv = tmp_path / "enriched.csv"
+        # Write a mock target CSV that enrichment would produce
+        target_csv.write_text("company,ceo\nGoogle,Sundar Pichai\nApple,Tim Cook\n")
+
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            mock_run.return_value = None  # Wait mode returns None
+
+            result = runner.invoke(
+                main,
+                [
+                    "enrich",
+                    "run",
+                    "--json",
+                    "--source-type",
+                    "csv",
+                    "--source",
+                    "input.csv",
+                    "--target",
+                    str(target_csv),
+                    "--source-columns",
+                    '[{"name": "company", "description": "Company name"}]',
+                    "--enriched-columns",
+                    '[{"name": "ceo", "description": "CEO name"}]',
+                ],
+            )
+
+        assert result.exit_code == 0
+        output = json.loads(result.output.strip())
+        assert isinstance(output, list)
+        assert len(output) == 2
+        assert output[0]["company"] == "Google"
+        assert output[0]["ceo"] == "Sundar Pichai"
+
+    def test_enrich_run_wait_output_file(self, runner, tmp_path):
+        """enrich run --output (wait mode) should save results to output file."""
+        target_csv = tmp_path / "enriched.csv"
+        target_csv.write_text("company,ceo\nGoogle,Sundar Pichai\n")
+        output_file = tmp_path / "results.json"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            mock_run.return_value = None
+
+            result = runner.invoke(
+                main,
+                [
+                    "enrich",
+                    "run",
+                    "--output",
+                    str(output_file),
+                    "--source-type",
+                    "csv",
+                    "--source",
+                    "input.csv",
+                    "--target",
+                    str(target_csv),
+                    "--source-columns",
+                    '[{"name": "company", "description": "Company name"}]',
+                    "--enriched-columns",
+                    '[{"name": "ceo", "description": "CEO name"}]',
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        data = json.loads(output_file.read_text())
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["company"] == "Google"
