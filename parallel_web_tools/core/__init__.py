@@ -29,6 +29,17 @@ from parallel_web_tools.core.findall import (
     poll_findall,
     run_findall,
 )
+from parallel_web_tools.core.monitor import (
+    MONITOR_CADENCES,
+    create_monitor,
+    delete_monitor,
+    get_monitor,
+    get_monitor_event_group,
+    list_monitor_events,
+    list_monitors,
+    simulate_monitor_event,
+    update_monitor,
+)
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
     create_research_task,
@@ -116,6 +127,16 @@ __all__ = [
     "ingest_findall",
     "poll_findall",
     "run_findall",
+    # Monitor
+    "MONITOR_CADENCES",
+    "create_monitor",
+    "delete_monitor",
+    "get_monitor",
+    "get_monitor_event_group",
+    "list_monitor_events",
+    "list_monitors",
+    "simulate_monitor_event",
+    "update_monitor",
     # Result
     "EnrichmentResult",
 ]
