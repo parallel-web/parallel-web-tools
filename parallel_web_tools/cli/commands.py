@@ -1786,6 +1786,12 @@ def findall_run(
                     f"\n[dim]Use 'parallel-cli findall status {result['findall_id']}' to check progress[/dim]"
                 )
                 console.print(f"[dim]Use 'parallel-cli findall poll {result['findall_id']}' to wait for results[/dim]")
+
+            if output_file:
+                with open(output_file, "w") as f:
+                    json.dump(result, f, indent=2, default=str)
+                if not output_json:
+                    console.print(f"[dim]Results saved to {output_file}[/dim]")
         else:
             # Full flow: ingest, create, poll
             if not output_json:

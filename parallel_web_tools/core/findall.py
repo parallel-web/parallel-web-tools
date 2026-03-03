@@ -28,7 +28,6 @@ FINDALL_GENERATORS = {
     "pro": "largest pool - highly specific, hard-to-find matches",
 }
 
-# Kept as a public alias for backwards compatibility with tests/consumers
 FINDALL_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
