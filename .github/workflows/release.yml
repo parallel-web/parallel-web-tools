@@ -117,9 +117,6 @@ jobs:
   publish-npm:
     needs: release
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
 
     steps:
       - name: Checkout code
@@ -144,4 +141,6 @@ jobs:
 
       - name: Publish to npm
         working-directory: npm
-        run: npm publish --access public --provenance
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
