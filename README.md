@@ -32,6 +32,14 @@ This automatically detects your platform (macOS/Linux, x64/arm64) and installs t
 
 > **Note:** The standalone binary supports `search`, `extract`, `research`, and `enrich run` with CLI arguments, CSV files, and JSON files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
 
+### npm
+
+```bash
+npm install -g parallel-web-cli
+```
+
+This downloads the pre-built binary for your platform. No Python or Go required.
+
 ### Python Package
 
 For programmatic usage or additional features:
