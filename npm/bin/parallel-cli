@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+
+"use strict";
+
+const path = require("path");
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+
+const vendorDir = path.join(__dirname, "..", "vendor");
+const binaryName = process.platform === "win32" ? "parallel-cli.exe" : "parallel-cli";
+const binaryPath = path.join(vendorDir, binaryName);
+
+if (!fs.existsSync(binaryPath)) {
+  console.error(
+    "Error: parallel-cli binary not found.\n\n" +
+    "The binary was not downloaded during installation. This can happen if:\n" +
+    "  - The postinstall script was skipped (PARALLEL_CLI_SKIP_DOWNLOAD=1)\n" +
+    "  - The download failed due to network issues\n" +
+    "  - Your platform is not supported\n\n" +
+    "To fix this, try reinstalling:\n" +
+    "  npm install -g parallel-cli\n\n" +
+    "Or download manually from:\n" +
+    "  https://github.com/parallel-industries/parallel-web-tools/releases"
+  );
+  process.exit(1);
+}
+
+try {
+  const result = execFileSync(binaryPath, process.argv.slice(2), {
+    stdio: "inherit",
+  });
+  process.exit(0);
+} catch (err) {
+  if (err.status !== null && err.status !== undefined) {
+    process.exit(err.status);
+  }
+  console.error("Failed to run parallel-cli:", err.message);
+  process.exit(1);
+}

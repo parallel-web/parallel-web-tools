@@ -113,3 +113,34 @@ jobs:
         with:
           files: artifacts/*
           tag_name: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Get version from tag
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update package.json version
+        working-directory: npm
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+
+      - name: Publish to npm
+        working-directory: npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
