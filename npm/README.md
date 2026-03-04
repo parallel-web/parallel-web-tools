@@ -1,6 +1,6 @@
 # parallel-cli
 
-npm wrapper for [parallel-cli](https://github.com/parallel-industries/parallel-web-tools) — the CLI for the Parallel API.
+npm wrapper for [parallel-cli](https://github.com/parallel-web/parallel-web-tools) — the CLI for the Parallel API.
 
 ## Install
 
@@ -19,7 +19,7 @@ parallel-cli monitor watch https://example.com
 
 ## How it works
 
-This package downloads the pre-built `parallel-cli` binary for your platform during `npm install`. The binary is fetched from [GitHub Releases](https://github.com/parallel-industries/parallel-web-tools/releases).
+This package downloads the pre-built `parallel-cli` binary for your platform during `npm install`. The binary is fetched from [GitHub Releases](https://github.com/parallel-web/parallel-web-tools/releases).
 
 ### Supported platforms
 

@@ -2,10 +2,10 @@
   "name": "parallel-cli",
   "version": "0.0.14",
   "description": "CLI for the Parallel API — web search, data enrichment, and monitoring",
-  "homepage": "https://github.com/parallel-industries/parallel-web-tools",
+  "homepage": "https://github.com/parallel-web/parallel-web-tools",
   "repository": {
     "type": "git",
-    "url": "https://github.com/parallel-industries/parallel-web-tools.git",
+    "url": "https://github.com/parallel-web/parallel-web-tools.git",
     "directory": "npm"
   },
   "license": "MIT",

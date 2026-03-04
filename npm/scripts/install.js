@@ -29,7 +29,7 @@ if (!platform) {
     `Unsupported platform: ${platformKey}\n` +
     `Supported platforms: ${Object.keys(PLATFORM_MAP).join(", ")}\n\n` +
     "You can download the binary manually from:\n" +
-    "  https://github.com/parallel-industries/parallel-web-tools/releases"
+    "  https://github.com/parallel-web/parallel-web-tools/releases"
   );
   process.exit(1);
 }
@@ -41,7 +41,7 @@ const version = packageJson.version;
 
 const baseUrl =
   process.env.PARALLEL_CLI_MIRROR ||
-  `https://github.com/parallel-industries/parallel-web-tools/releases/download/v${version}`;
+  `https://github.com/parallel-web/parallel-web-tools/releases/download/v${version}`;
 
 const zipFilename = `parallel-cli-${platform}.zip`;
 const zipUrl = `${baseUrl}/${zipFilename}`;
@@ -111,7 +111,8 @@ function extractZip(zipPath, destDir) {
 
 function setExecutable(dir) {
   if (process.platform === "win32") return;
-  const binaryPath = path.join(dir, "parallel-cli");
+  // The zip extracts into a parallel-cli/ subdirectory
+  const binaryPath = path.join(dir, "parallel-cli", "parallel-cli");
   if (fs.existsSync(binaryPath)) {
     fs.chmodSync(binaryPath, 0o755);
   }

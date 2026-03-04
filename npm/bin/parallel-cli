@@ -8,7 +8,8 @@ const { execFileSync } = require("child_process");
 
 const vendorDir = path.join(__dirname, "..", "vendor");
 const binaryName = process.platform === "win32" ? "parallel-cli.exe" : "parallel-cli";
-const binaryPath = path.join(vendorDir, binaryName);
+// The zip extracts into a parallel-cli/ subdirectory
+const binaryPath = path.join(vendorDir, "parallel-cli", binaryName);
 
 if (!fs.existsSync(binaryPath)) {
   console.error(
@@ -20,7 +21,7 @@ if (!fs.existsSync(binaryPath)) {
     "To fix this, try reinstalling:\n" +
     "  npm install -g parallel-cli\n\n" +
     "Or download manually from:\n" +
-    "  https://github.com/parallel-industries/parallel-web-tools/releases"
+    "  https://github.com/parallel-web/parallel-web-tools/releases"
   );
   process.exit(1);
 }
