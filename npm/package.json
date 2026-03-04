@@ -1,0 +1,33 @@
+{
+  "name": "parallel-web-cli",
+  "version": "0.0.14",
+  "description": "CLI for the Parallel API — web search, data enrichment, and monitoring",
+  "homepage": "https://github.com/parallel-web/parallel-web-tools",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parallel-web/parallel-web-tools.git",
+    "directory": "npm"
+  },
+  "license": "MIT",
+  "bin": {
+    "parallel-cli": "./bin/parallel-cli"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md"
+  ],
+  "keywords": [
+    "parallel",
+    "cli",
+    "web-search",
+    "data-enrichment",
+    "ai"
+  ]
+}

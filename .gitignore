@@ -19,3 +19,6 @@ configs/
 *.db
 output_*.csv
 notebooks/debug_enrichment.ipynb
+
+# npm wrapper
+npm/vendor/
