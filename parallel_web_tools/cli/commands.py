@@ -402,9 +402,14 @@ def _after_command(*args, **kwargs):
 
 
 @main.command()
-def auth():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def auth(output_json: bool):
     """Check authentication status."""
     status = get_auth_status()
+
+    if output_json:
+        print(json.dumps(status, indent=2))
+        return
 
     if status["authenticated"]:
         if status["method"] == "environment":
@@ -420,21 +425,30 @@ def auth():
 
 
 @main.command()
-def login():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def login(output_json: bool):
     """Authenticate with Parallel API."""
-    console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
+    if not output_json:
+        console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
 
     try:
         get_api_key(force_login=True)
-        console.print("\n[bold green]Authentication successful![/bold green]")
+        if output_json:
+            print(json.dumps({"status": "authenticated"}, indent=2))
+        else:
+            console.print("\n[bold green]Authentication successful![/bold green]")
     except Exception as e:
-        _handle_error(e, exit_code=EXIT_AUTH_ERROR, prefix="Authentication failed")
+        _handle_error(e, output_json=output_json, exit_code=EXIT_AUTH_ERROR, prefix="Authentication failed")
 
 
 @main.command(name="logout")
-def logout_cmd():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def logout_cmd(output_json: bool):
     """Remove stored credentials."""
-    if logout():
+    removed = logout()
+    if output_json:
+        print(json.dumps({"status": "logged_out" if removed else "no_credentials"}, indent=2))
+    elif removed:
         console.print("[green]Logged out successfully[/green]")
     else:
         console.print("[yellow]No stored credentials found[/yellow]")
@@ -443,7 +457,8 @@ def logout_cmd():
 @main.command(name="update")
 @click.option("--check", is_flag=True, help="Check for updates without installing")
 @click.option("--force", is_flag=True, help="Reinstall even if already at latest version")
-def update_cmd(check: bool, force: bool):
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def update_cmd(check: bool, force: bool, output_json: bool):
     """Update to the latest version (standalone CLI only)."""
     from parallel_web_tools.cli.updater import (
         check_for_update_notification,
@@ -451,15 +466,39 @@ def update_cmd(check: bool, force: bool):
     )
 
     if not _STANDALONE_MODE:
-        console.print("[yellow]Update command is only available for standalone CLI.[/yellow]")
-        console.print("\nTo update via pip:")
-        console.print("  [cyan]pip install --upgrade parallel-web-tools[/cyan]")
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "Update command is only available for standalone CLI.",
+                            "type": "UnsupportedOperation",
+                        }
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            console.print("[yellow]Update command is only available for standalone CLI.[/yellow]")
+            console.print("\nTo update via pip:")
+            console.print("  [cyan]pip install --upgrade parallel-web-tools[/cyan]")
         return
 
     if check:
         # Don't save state for explicit --check (doesn't reset 24h timer)
         notification = check_for_update_notification(__version__, save_state=False)
-        if notification:
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "current_version": __version__,
+                        "update_available": notification is not None,
+                        "message": notification,
+                    },
+                    indent=2,
+                )
+            )
+        elif notification:
             console.print(f"[cyan]{notification}[/cyan]")
         else:
             console.print(f"[green]Already up to date (v{__version__})[/green]")
@@ -472,7 +511,8 @@ def update_cmd(check: bool, force: bool):
 @main.command(name="config")
 @click.argument("key", required=False)
 @click.argument("value", required=False)
-def config_cmd(key: str | None, value: str | None):
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def config_cmd(key: str | None, value: str | None, output_json: bool):
     """View or set CLI configuration (standalone CLI only).
 
     \b
@@ -488,7 +528,20 @@ def config_cmd(key: str | None, value: str | None):
     )
 
     if not _STANDALONE_MODE:
-        console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "Config command is only available for standalone CLI.",
+                            "type": "UnsupportedOperation",
+                        }
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
         return
 
     valid_keys = ["auto-update-check"]
@@ -501,8 +554,12 @@ def config_cmd(key: str | None, value: str | None):
 
     # Show all settings
     if key is None:
-        console.print("[bold]Configuration:[/bold]")
-        console.print(f"  auto-update-check: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
+        config_data = {"auto-update-check": is_auto_update_check_enabled()}
+        if output_json:
+            print(json.dumps(config_data, indent=2))
+        else:
+            console.print("[bold]Configuration:[/bold]")
+            console.print(f"  auto-update-check: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
         return
 
     if key not in valid_keys:
@@ -510,10 +567,16 @@ def config_cmd(key: str | None, value: str | None):
 
     # Show or set the value
     if value is None:
-        console.print(f"{key}: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
+        if output_json:
+            print(json.dumps({key: is_auto_update_check_enabled()}, indent=2))
+        else:
+            console.print(f"{key}: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
     else:
         set_auto_update_check(parse_bool(value))
-        console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
+        if output_json:
+            print(json.dumps({key: is_auto_update_check_enabled()}, indent=2))
+        else:
+            console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
 
 
 # =============================================================================
@@ -560,8 +623,12 @@ def search(
 
     OBJECTIVE is a natural language description of what you're looking for. You can
     also pass specific keyword queries with --query. At least one of OBJECTIVE or
-    --query is required.
+    --query is required. Use "-" as OBJECTIVE to read from stdin.
     """
+    # Read from stdin if "-" is passed
+    if objective == "-":
+        objective = click.get_text_stream("stdin").read().strip()
+
     if not objective and not query:
         raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
@@ -808,6 +875,7 @@ def enrich():
 @click.option("--processor", type=click.Choice(AVAILABLE_PROCESSORS), help="Processor to use")
 @click.option("--data", "inline_data", help="Inline JSON data array (alternative to --source)")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task group (don't poll)")
+@click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option("--json", "output_json", is_flag=True, help="Output results as JSON to stdout")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 def enrich_run(
@@ -821,6 +889,7 @@ def enrich_run(
     processor: str | None,
     inline_data: str | None,
     no_wait: bool,
+    dry_run: bool,
     output_json: bool,
     output_file: str | None,
 ):
@@ -882,9 +951,17 @@ def enrich_run(
             validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
 
         if config_file:
+            if dry_run:
+                _handle_error(
+                    click.UsageError("--dry-run is not supported with config files. Use CLI arguments instead."),
+                    output_json=output_json,
+                    exit_code=EXIT_BAD_INPUT,
+                )
+                return
+
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
-            result = run_enrichment(config_file, no_wait=no_wait)  # type: ignore[name-defined]
+            result = run_enrichment(config_file, no_wait=no_wait)
         else:
             # After validation, these are guaranteed non-None
             assert source_type is not None
@@ -895,19 +972,74 @@ def enrich_run(
             assert src_cols is not None  # Validated above
 
             if intent:
-                if not output_json:
-                    console.print("[dim]Getting suggestions from Parallel API...[/dim]")
-                suggestion = suggest_from_intent(intent, src_cols)
-                enr_cols = suggestion["enriched_columns"]
-                final_processor = processor or suggestion["processor"]
-                if not output_json:
-                    console.print(
-                        f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n"
-                    )
+                if dry_run:
+                    # Skip suggest API call — show what we know without it
+                    enr_cols: list[dict[str, str]] = []
+                    final_processor = processor or "core-fast"
+                else:
+                    if not output_json:
+                        console.print("[dim]Getting suggestions from Parallel API...[/dim]")
+                    suggestion = suggest_from_intent(intent, src_cols)
+                    enr_cols = suggestion["enriched_columns"]
+                    final_processor = processor or suggestion["processor"]
+                    if not output_json:
+                        console.print(
+                            f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n"
+                        )
             else:
-                enr_cols = parse_columns(enriched_columns)
-                assert enr_cols is not None  # Validated above
+                parsed_enr_cols = parse_columns(enriched_columns)
+                assert parsed_enr_cols is not None  # Validated above
+                enr_cols = parsed_enr_cols
                 final_processor = processor or "core-fast"
+
+            if dry_run:
+                # Count rows in source file
+                row_count = None
+                source_display = source
+                if inline_data:
+                    source_display = "<inline data>"
+                if source and os.path.exists(source):
+                    with open(source) as f:
+                        row_count = sum(1 for _ in f) - 1  # subtract header
+
+                dry_run_data: dict[str, Any] = {
+                    "dry_run": True,
+                    "source_type": source_type,
+                    "source": source_display,
+                    "target": target,
+                    "processor": final_processor,
+                    "source_columns": src_cols,
+                }
+                if enr_cols:
+                    dry_run_data["enriched_columns"] = enr_cols
+                else:
+                    dry_run_data["intent"] = intent
+                    dry_run_data["note"] = (
+                        "Columns will be suggested by AI at runtime (use without --dry-run to see suggestions)"
+                    )
+                if row_count is not None:
+                    dry_run_data["row_count"] = row_count
+
+                if output_json:
+                    print(json.dumps(dry_run_data, indent=2))
+                else:
+                    console.print("[bold]Dry run — no API calls will be made[/bold]\n")
+                    console.print(f"  [bold]Source:[/bold]      {source_display} ({source_type})")
+                    if row_count is not None:
+                        console.print(f"  [bold]Rows:[/bold]        {row_count}")
+                    console.print(f"  [bold]Target:[/bold]      {target}")
+                    console.print(f"  [bold]Processor:[/bold]   {final_processor}")
+                    console.print(f"  [bold]Input cols:[/bold]  {len(src_cols)}")
+                    for col in src_cols:
+                        console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
+                    if enr_cols:
+                        console.print(f"  [bold]Output cols:[/bold] {len(enr_cols)}")
+                        for col in enr_cols:
+                            console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
+                    else:
+                        console.print(f"  [bold]Intent:[/bold]     {intent}")
+                        console.print("  [dim]Output columns will be suggested by AI at runtime[/dim]")
+                return
 
             config = build_config_from_args(
                 source_type=source_type,
@@ -1028,12 +1160,12 @@ def enrich_plan(
             processor=final_processor,
         )
 
-        save_config(config, output)  # type: ignore[name-defined]
+        save_config(config, output)
         console.print(f"[bold green]Configuration saved to {output}[/bold green]")
     else:
         try:
-            config = create_config_interactive()  # type: ignore[name-defined]
-            save_config(config, output)  # type: ignore[name-defined]
+            config = create_config_interactive()
+            save_config(config, output)
         except KeyboardInterrupt:
             console.print("\n[yellow]Configuration creation cancelled.[/yellow]")
             raise click.Abort() from None
@@ -1351,6 +1483,7 @@ def research():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
+@click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option(
     "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
 )
@@ -1362,19 +1495,27 @@ def research_run(
     timeout: int,
     poll_interval: int,
     no_wait: bool,
+    dry_run: bool,
     output_file: str | None,
     output_json: bool,
 ):
     """Run deep research on a question or topic.
 
-    QUERY is the research question (max 15,000 chars). Alternatively, use --input-file.
+    QUERY is the research question (max 15,000 chars). Alternatively, use --input-file
+    or pass "-" as QUERY to read from stdin.
 
     Examples:
 
         parallel-cli research run "What are the latest developments in quantum computing?"
 
         parallel-cli research run -f question.txt --processor ultra -o report
+
+        echo "My research question" | parallel-cli research run - --json
     """
+    # Read from stdin if "-" is passed
+    if query == "-":
+        query = click.get_text_stream("stdin").read().strip()
+
     # Get query from argument or file
     if input_file:
         with open(input_file) as f:
@@ -1385,6 +1526,24 @@ def research_run(
     if len(query) > 15000:
         console.print(f"[yellow]Warning: Query truncated from {len(query)} to 15,000 characters[/yellow]")
         query = query[:15000]
+
+    if dry_run:
+        dry_run_data = {
+            "dry_run": True,
+            "query": query[:200] + "..." if len(query) > 200 else query,
+            "query_length": len(query),
+            "processor": processor,
+            "expected_latency": RESEARCH_PROCESSORS[processor],
+        }
+        if output_json:
+            print(json.dumps(dry_run_data, indent=2))
+        else:
+            console.print("[bold]Dry run — no API calls will be made[/bold]\n")
+            console.print(f"  [bold]Query:[/bold]     {dry_run_data['query']}")
+            console.print(f"  [bold]Length:[/bold]    {len(query)} chars")
+            console.print(f"  [bold]Processor:[/bold] {processor}")
+            console.print(f"  [bold]Latency:[/bold]   {RESEARCH_PROCESSORS[processor]}")
+        return
 
     try:
         if no_wait:
@@ -1540,8 +1699,14 @@ def research_poll(
 
 
 @research.command(name="processors")
-def research_processors():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def research_processors(output_json: bool):
     """List available research processors and their characteristics."""
+    if output_json:
+        processors = [{"name": name, "description": desc} for name, desc in RESEARCH_PROCESSORS.items()]
+        print(json.dumps({"processors": processors}, indent=2))
+        return
+
     console.print("[bold]Available Research Processors:[/bold]\n")
     for proc, desc in RESEARCH_PROCESSORS.items():
         console.print(f"  [cyan]{proc:15}[/cyan] {desc}")
@@ -1760,6 +1925,11 @@ def findall():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating run (don't poll)")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Ingest schema via API to preview entity type and conditions, but don't create the run",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def findall_run(
@@ -1771,6 +1941,7 @@ def findall_run(
     timeout: int,
     poll_interval: int,
     no_wait: bool,
+    dry_run: bool,
     output_file: str | None,
     output_json: bool,
 ):
@@ -1787,8 +1958,6 @@ def findall_run(
         parallel-cli findall run "Find YC companies in developer tools" --no-wait --json
 
         parallel-cli findall run "Find AI startups" --exclude '[{"name": "OpenAI", "url": "openai.com"}]'
-
-        parallel-cli findall run "Find SaaS companies" --metadata '{"project": "q1-research"}'
     """
     try:
         exclude_list = json.loads(exclude_json) if exclude_json else None
@@ -1798,6 +1967,41 @@ def findall_run(
         return
 
     try:
+        if dry_run:
+            # Ingest schema only — no run created
+            if not output_json:
+                console.print("[dim]Ingesting objective...[/dim]\n")
+
+            schema = ingest_findall(objective, source="cli")
+            dry_run_data = {
+                "dry_run": True,
+                "objective": objective,
+                "generator": generator,
+                "generator_description": FINDALL_GENERATORS[generator],
+                "match_limit": match_limit,
+                "entity_type": schema.get("entity_type", "unknown"),
+                "match_conditions": schema.get("match_conditions", []),
+                "enrichments": schema.get("enrichments", []),
+            }
+
+            if output_json:
+                print(json.dumps(dry_run_data, indent=2, default=str))
+            else:
+                console.print("[bold]Dry run — schema ingested, no run created[/bold]\n")
+                console.print(f"  [bold]Entity type:[/bold]  {dry_run_data['entity_type']}")
+                console.print(f"  [bold]Generator:[/bold]    {generator} ({FINDALL_GENERATORS[generator]})")
+                console.print(f"  [bold]Match limit:[/bold]  {match_limit}")
+                conditions = dry_run_data["match_conditions"]
+                console.print(f"  [bold]Conditions:[/bold]   {len(conditions)}")
+                for mc in conditions:
+                    console.print(f"    [dim]- {mc.get('name', '')}: {mc.get('description', '')}[/dim]")
+                enrichments = dry_run_data["enrichments"]
+                if enrichments:
+                    console.print(f"  [bold]Enrichments:[/bold]  {len(enrichments)}")
+                    for e in enrichments:
+                        console.print(f"    [dim]- {e.get('name', '')}: {e.get('description', '')}[/dim]")
+            return
+
         if no_wait:
             # Ingest + create, then return immediately
             if not output_json:

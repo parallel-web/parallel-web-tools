@@ -68,19 +68,35 @@ parallel-cli
 ├── login                   # OAuth login (or use PARALLEL_API_KEY env var)
 ├── logout                  # Remove stored credentials
 ├── search                  # Web search
-├── extract                 # Extract content from URLs
+├── extract / fetch         # Extract content from URLs
 ├── research                # Deep research commands
 │   ├── run                 # Run deep research on a question or topic
 │   ├── status              # Check status of a research task
 │   ├── poll                # Poll until completion
 │   └── processors          # List available research processors
-└── enrich                  # Data enrichment commands
-    ├── run                 # Run enrichment
-    ├── status              # Check status of a task group
-    ├── poll                # Poll until completion and collect results
-    ├── plan                # Create YAML config
-    ├── suggest             # AI suggests output columns
-    └── deploy              # Deploy to cloud systems (requires pip install)
+├── enrich                  # Data enrichment commands
+│   ├── run                 # Run enrichment
+│   ├── status              # Check status of a task group
+│   ├── poll                # Poll until completion and collect results
+│   ├── plan                # Create YAML config
+│   ├── suggest             # AI suggests output columns
+│   └── deploy              # Deploy to cloud systems (requires pip install)
+├── findall                 # Web-scale entity discovery
+│   ├── run                 # Discover entities matching a natural language objective
+│   ├── ingest              # Preview the schema before running
+│   ├── status              # Check status of a FindAll run
+│   ├── poll                # Poll until completion
+│   ├── result              # Fetch results of a completed run
+│   └── cancel              # Cancel a running FindAll
+└── monitor                 # Continuous web change tracking
+    ├── create              # Create a new web monitor
+    ├── list                # List all monitors
+    ├── get                 # Get monitor details
+    ├── update              # Update monitor configuration
+    ├── delete              # Delete a monitor
+    ├── events              # List events for a monitor
+    ├── event-group         # Get event group details
+    └── simulate            # Simulate webhook event for testing
 ```
 
 ## Quick Start
@@ -167,7 +183,29 @@ parallel-cli enrich deploy --system bigquery --project my-gcp-project
 
 ## Non-Interactive Mode (for AI Agents & Scripts)
 
-All commands support `--json` output and can be fully controlled via CLI arguments:
+All commands support `--json` output and can be fully controlled via CLI arguments.
+
+### Key patterns for agents
+
+```bash
+# Every command supports --json for structured output
+parallel-cli search "query" --json
+parallel-cli auth --json
+parallel-cli research processors --json
+
+# Read input from stdin with "-"
+echo "What is the latest funding for Anthropic?" | parallel-cli search - --json
+echo "Research question" | parallel-cli research run - --json
+
+# Async: launch then poll separately
+parallel-cli research run "question" --no-wait --json   # returns run_id
+parallel-cli research status trun_xxx --json             # check status
+parallel-cli research poll trun_xxx --json               # wait and get result
+
+# Exit codes: 0=ok, 2=bad input, 3=auth error, 4=api error, 5=timeout
+```
+
+### More examples
 
 ```bash
 # Search with JSON output
@@ -178,6 +216,12 @@ parallel-cli extract https://url.com --json
 
 # Suggest columns with JSON output
 parallel-cli enrich suggest "Find CEO" --json
+
+# FindAll: discover entities
+parallel-cli findall run "AI startups in healthcare" --json
+
+# Monitor: track web changes
+parallel-cli monitor create "Track Tesla SEC filings" --cadence daily --json
 
 # Plan without prompts (provide all args)
 parallel-cli enrich plan -o config.yaml \

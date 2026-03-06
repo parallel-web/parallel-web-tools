@@ -63,8 +63,8 @@ jobs:
       - name: Check formatting with ruff
         run: uv run ruff format --check parallel_web_tools/ tests/
 
-      - name: Type check with pyrefly
-        run: uv run pyrefly check
+      - name: Type check with ty
+        run: uv run ty check
 
   cli-test:
     runs-on: ubuntu-latest

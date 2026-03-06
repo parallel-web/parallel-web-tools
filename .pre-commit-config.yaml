@@ -16,9 +16,9 @@ repos:
       - id: ruff-format
   - repo: local
     hooks:
-      - id: pyrefly-check
-        name: pyrefly (type checking)
-        entry: uv run pyrefly check
+      - id: ty-check
+        name: ty (type checking)
+        entry: uv run ty check
         language: system
         pass_filenames: false
         types: [python]
