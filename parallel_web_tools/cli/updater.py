@@ -111,7 +111,7 @@ def check_for_update_notification(current_version: str, save_state: bool = True)
     if not _is_newer_version(latest_version, current_version):
         return None
 
-    return f"Update available: v{current_version} → v{latest_version}. Run `parallel-cli update` to install."
+    return f"Update available: v{current_version} → v{latest_version}"
 
 
 def get_platform() -> str | None:
@@ -220,8 +220,9 @@ def download_and_install_update(current_version: str, console, force: bool = Fal
             with zipfile.ZipFile(archive_path, "r") as zf:
                 zf.extractall(extract_dir)
 
-            # Find the current executable location
-            current_exe = Path(sys.executable)
+            # Find the current executable location (resolve symlinks so we
+            # update the real install dir, not e.g. ~/.local/bin/)
+            current_exe = Path(sys.executable).resolve()
             install_dir = current_exe.parent
 
             # The archive contains a parallel-cli folder

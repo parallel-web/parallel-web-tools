@@ -359,14 +359,15 @@ def suggest_from_intent(
 # =============================================================================
 
 
-def _check_for_update_notification():
-    """Check for updates and print notification if available.
+def _auto_update():
+    """Check for updates and auto-install if available.
 
     Only runs in standalone mode, respects config, and rate-limits to once per day.
     """
     # Import here to avoid slowing down startup when not needed
     from parallel_web_tools.cli.updater import (
         check_for_update_notification,
+        download_and_install_update,
         should_check_for_updates,
     )
 
@@ -377,7 +378,8 @@ def _check_for_update_notification():
     try:
         notification = check_for_update_notification(__version__, save_state=True)
         if notification:
-            console.print(f"\n[dim]{notification}[/dim]")
+            console.print()
+            download_and_install_update(__version__, console)
     except Exception:
         # Silently ignore errors - don't disrupt user's workflow
         pass
@@ -393,7 +395,7 @@ def main():
 @main.result_callback()
 def _after_command(*args, **kwargs):
     """Run after any command completes."""
-    _check_for_update_notification()
+    _auto_update()
 
 
 # =============================================================================

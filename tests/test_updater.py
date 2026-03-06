@@ -237,7 +237,6 @@ class TestCheckForUpdateNotification:
                 assert result is not None
                 assert "0.0.8" in result
                 assert "0.0.9" in result
-                assert "parallel-cli update" in result
 
     def test_returns_none_when_up_to_date(self):
         """Should return None when already at latest version."""
@@ -364,3 +363,81 @@ class TestDownloadAndInstallUpdate:
         assert mode & stat.S_IXUSR, "User execute bit should be set"
         assert mode & stat.S_IXGRP, "Group execute bit should be set"
         assert mode & stat.S_IXOTH, "Other execute bit should be set"
+
+    def test_resolves_symlink_to_real_install_dir(self, tmp_path):
+        """Should resolve symlinks so update targets the real install dir, not the symlink parent."""
+        import stat
+        import zipfile
+
+        from parallel_web_tools.cli import updater
+
+        # Simulate the real install layout:
+        #   ~/.local/share/parallel-cli/parallel-cli  (real binary)
+        #   ~/.local/bin/parallel-cli                  (symlink)
+        real_install_dir = tmp_path / "share" / "parallel-cli"
+        real_install_dir.mkdir(parents=True)
+        real_exe = real_install_dir / "parallel-cli"
+        real_exe.write_text("#!/bin/bash\necho 'old'")
+        real_exe.chmod(0o755)
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        symlink_exe = bin_dir / "parallel-cli"
+        symlink_exe.symlink_to(real_exe)
+
+        # Create a zip archive with updated content
+        archive_dir = tmp_path / "archive"
+        archive_dir.mkdir()
+        cli_dir = archive_dir / "parallel-cli"
+        cli_dir.mkdir()
+        new_exe = cli_dir / "parallel-cli"
+        new_exe.write_text("#!/bin/bash\necho 'updated'")
+
+        zip_path = tmp_path / "parallel-cli-darwin-arm64.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.write(new_exe, "parallel-cli/parallel-cli")
+
+        mock_release = {
+            "tag_name": "v99.0.0",
+            "assets": [{"name": "parallel-cli-darwin-arm64.zip", "browser_download_url": f"file://{zip_path}"}],
+        }
+
+        class MockConsole:
+            def print(self, *args, **kwargs):
+                pass
+
+        class MockResponse:
+            def __init__(self, path):
+                self._content = open(path, "rb").read()
+
+            def raise_for_status(self):
+                pass
+
+            def iter_bytes(self):
+                yield self._content
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        def mock_stream(method, url, **kwargs):
+            return MockResponse(zip_path)
+
+        # Point sys.executable at the SYMLINK (as the OS would when running via symlink)
+        with mock.patch.object(updater, "_fetch_latest_release", return_value=mock_release):
+            with mock.patch.object(updater, "get_platform", return_value="darwin-arm64"):
+                with mock.patch("sys.executable", str(symlink_exe)):
+                    with mock.patch("platform.system", return_value="Darwin"):
+                        with mock.patch("httpx.stream", mock_stream):
+                            result = updater.download_and_install_update("0.0.1", MockConsole(), force=False)
+
+        assert result is True
+
+        # The REAL install dir should have been updated, not the bin dir
+        assert real_exe.read_text() == "#!/bin/bash\necho 'updated'"
+        assert real_exe.stat().st_mode & stat.S_IXUSR
+
+        # The bin dir should NOT have had archive contents dumped into it
+        assert not (bin_dir / "parallel-cli" / "parallel-cli").exists()
