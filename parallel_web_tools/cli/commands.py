@@ -103,6 +103,27 @@ EXIT_TIMEOUT = 5  # Operation timed out
 # =============================================================================
 
 
+def _extract_api_message(error: Exception) -> str:
+    """Extract a clean error message from API exceptions."""
+    # SDK errors often embed a dict repr; try to extract the inner message
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error", {})
+        if isinstance(inner, dict) and "message" in inner:
+            return inner["message"]
+    # httpx errors
+    response = getattr(error, "response", None)
+    if response is not None:
+        try:
+            data = response.json()
+            inner = data.get("error", {})
+            if isinstance(inner, dict) and "message" in inner:
+                return inner["message"]
+        except Exception:
+            pass
+    return str(error)
+
+
 def _handle_error(
     error: Exception,
     output_json: bool = False,
@@ -114,11 +135,12 @@ def _handle_error(
     In --json mode, outputs structured JSON to stdout. Otherwise, prints a
     Rich-formatted error message.
     """
+    message = _extract_api_message(error)
     if output_json:
-        error_data = {"error": {"message": str(error), "type": type(error).__name__}}
+        error_data = {"error": {"message": message, "type": type(error).__name__}}
         print(json.dumps(error_data, indent=2))
     else:
-        console.print(f"[bold red]{prefix}: {error}[/bold red]")
+        console.print(f"[bold red]{prefix}: {message}[/bold red]")
     sys.exit(exit_code)
 
 
@@ -1733,6 +1755,8 @@ def findall():
     show_default=True,
     help="Maximum number of matched candidates (5-1000)",
 )
+@click.option("--exclude", "exclude_json", help="Entities to exclude as JSON array of {name, url} objects")
+@click.option("--metadata", "metadata_json", help="Metadata as JSON string")
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating run (don't poll)")
@@ -1742,6 +1766,8 @@ def findall_run(
     objective: str,
     generator: str,
     match_limit: int,
+    exclude_json: str | None,
+    metadata_json: str | None,
     timeout: int,
     poll_interval: int,
     no_wait: bool,
@@ -1759,7 +1785,18 @@ def findall_run(
         parallel-cli findall run "Find roofing companies in Charlotte NC" -g base -n 25
 
         parallel-cli findall run "Find YC companies in developer tools" --no-wait --json
+
+        parallel-cli findall run "Find AI startups" --exclude '[{"name": "OpenAI", "url": "openai.com"}]'
+
+        parallel-cli findall run "Find SaaS companies" --metadata '{"project": "q1-research"}'
     """
+    try:
+        exclude_list = json.loads(exclude_json) if exclude_json else None
+        metadata = json.loads(metadata_json) if metadata_json else None
+    except json.JSONDecodeError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid JSON")
+        return
+
     try:
         if no_wait:
             # Ingest + create, then return immediately
@@ -1785,6 +1822,8 @@ def findall_run(
                 match_conditions=schema.get("match_conditions", []),
                 generator=generator,
                 match_limit=match_limit,
+                exclude_list=exclude_list,
+                metadata=metadata,
                 source="cli",
             )
 
@@ -1835,6 +1874,8 @@ def findall_run(
                 objective,
                 generator=generator,
                 match_limit=match_limit,
+                exclude_list=exclude_list,
+                metadata=metadata,
                 timeout=timeout,
                 poll_interval=poll_interval,
                 on_status=on_status,
