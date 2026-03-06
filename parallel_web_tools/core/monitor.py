@@ -26,18 +26,17 @@ BASE_URL = "https://api.parallel.ai"
 
 # Supported cadences for monitor scheduling
 MONITOR_CADENCES = {
-    "5min": "Every 5 minutes",
-    "15min": "Every 15 minutes",
-    "30min": "Every 30 minutes",
     "hourly": "Every hour",
     "daily": "Once per day",
     "weekly": "Once per week",
+    "every_two_weeks": "Every two weeks",
 }
 
 # Valid webhook event types
 MONITOR_EVENT_TYPES = [
-    "change_detected",
-    "monitor_error",
+    "monitor.event.detected",
+    "monitor.execution.completed",
+    "monitor.execution.failed",
 ]
 
 
@@ -68,7 +67,7 @@ def _request(
     key = resolve_api_key(api_key)
     headers = {
         **get_default_headers(source),
-        "Authorization": f"Bearer {key}",
+        "x-api-key": key,
         "Content-Type": "application/json",
     }
     url = f"{BASE_URL}{path}"
@@ -76,6 +75,14 @@ def _request(
     response = httpx.request(method, url, headers=headers, json=json, params=params, timeout=30)
     response.raise_for_status()
     return response
+
+
+def _build_webhook(webhook_url: str, event_types: list[str] | None = None) -> dict[str, Any]:
+    """Build a webhook config object from a URL."""
+    return {
+        "url": webhook_url,
+        "event_types": event_types or ["monitor.event.detected"],
+    }
 
 
 def create_monitor(
@@ -103,7 +110,7 @@ def create_monitor(
     """
     body: dict[str, Any] = {"query": query, "cadence": cadence}
     if webhook is not None:
-        body["webhook"] = webhook
+        body["webhook"] = _build_webhook(webhook)
     if metadata is not None:
         body["metadata"] = metadata
     if output_schema is not None:
@@ -189,7 +196,7 @@ def update_monitor(
     if cadence is not None:
         body["cadence"] = cadence
     if webhook is not None:
-        body["webhook"] = webhook
+        body["webhook"] = _build_webhook(webhook)
     if metadata is not None:
         body["metadata"] = metadata
 
@@ -228,7 +235,7 @@ def list_monitor_events(
 
     Args:
         monitor_id: The monitor ID.
-        lookback_period: How far back to look (e.g., "10d", "24h").
+        lookback_period: How far back to look (e.g., "10d", "1w"). Minimum 1d.
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
 
@@ -274,20 +281,24 @@ def simulate_monitor_event(
 ) -> None:
     """Simulate an event for webhook testing.
 
+    Requires a webhook to be configured on the monitor.
+
     Args:
         monitor_id: The monitor ID.
-        event_type: Optional event type to simulate.
+        event_type: Optional event type to simulate. Defaults to
+            "monitor.event.detected". Valid values: monitor.event.detected,
+            monitor.execution.completed, monitor.execution.failed.
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
     """
-    body: dict[str, Any] = {}
+    params: dict[str, Any] = {}
     if event_type is not None:
-        body["event_type"] = event_type
+        params["event_type"] = event_type
 
     _request(
         "POST",
         f"/v1alpha/monitors/{monitor_id}/simulate_event",
         api_key=api_key,
         source=source,
-        json=body if body else None,
+        params=params if params else None,
     )

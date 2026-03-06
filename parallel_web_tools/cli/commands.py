@@ -20,6 +20,7 @@ from parallel_web_tools.core import (
     FINDALL_GENERATORS,
     JSON_SCHEMA_TYPE_MAP,
     MONITOR_CADENCES,
+    MONITOR_EVENT_TYPES,
     RESEARCH_PROCESSORS,
     cancel_findall_run,
     create_findall_run,
@@ -102,6 +103,27 @@ EXIT_TIMEOUT = 5  # Operation timed out
 # =============================================================================
 
 
+def _extract_api_message(error: Exception) -> str:
+    """Extract a clean error message from API exceptions."""
+    # SDK errors often embed a dict repr; try to extract the inner message
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error", {})
+        if isinstance(inner, dict) and "message" in inner:
+            return inner["message"]
+    # httpx errors
+    response = getattr(error, "response", None)
+    if response is not None:
+        try:
+            data = response.json()
+            inner = data.get("error", {})
+            if isinstance(inner, dict) and "message" in inner:
+                return inner["message"]
+        except Exception:
+            pass
+    return str(error)
+
+
 def _handle_error(
     error: Exception,
     output_json: bool = False,
@@ -113,11 +135,12 @@ def _handle_error(
     In --json mode, outputs structured JSON to stdout. Otherwise, prints a
     Rich-formatted error message.
     """
+    message = _extract_api_message(error)
     if output_json:
-        error_data = {"error": {"message": str(error), "type": type(error).__name__}}
+        error_data = {"error": {"message": message, "type": type(error).__name__}}
         print(json.dumps(error_data, indent=2))
     else:
-        console.print(f"[bold red]{prefix}: {error}[/bold red]")
+        console.print(f"[bold red]{prefix}: {message}[/bold red]")
     sys.exit(exit_code)
 
 
@@ -1732,6 +1755,8 @@ def findall():
     show_default=True,
     help="Maximum number of matched candidates (5-1000)",
 )
+@click.option("--exclude", "exclude_json", help="Entities to exclude as JSON array of {name, url} objects")
+@click.option("--metadata", "metadata_json", help="Metadata as JSON string")
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating run (don't poll)")
@@ -1741,6 +1766,8 @@ def findall_run(
     objective: str,
     generator: str,
     match_limit: int,
+    exclude_json: str | None,
+    metadata_json: str | None,
     timeout: int,
     poll_interval: int,
     no_wait: bool,
@@ -1758,7 +1785,18 @@ def findall_run(
         parallel-cli findall run "Find roofing companies in Charlotte NC" -g base -n 25
 
         parallel-cli findall run "Find YC companies in developer tools" --no-wait --json
+
+        parallel-cli findall run "Find AI startups" --exclude '[{"name": "OpenAI", "url": "openai.com"}]'
+
+        parallel-cli findall run "Find SaaS companies" --metadata '{"project": "q1-research"}'
     """
+    try:
+        exclude_list = json.loads(exclude_json) if exclude_json else None
+        metadata = json.loads(metadata_json) if metadata_json else None
+    except json.JSONDecodeError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid JSON")
+        return
+
     try:
         if no_wait:
             # Ingest + create, then return immediately
@@ -1784,6 +1822,8 @@ def findall_run(
                 match_conditions=schema.get("match_conditions", []),
                 generator=generator,
                 match_limit=match_limit,
+                exclude_list=exclude_list,
+                metadata=metadata,
                 source="cli",
             )
 
@@ -1834,6 +1874,8 @@ def findall_run(
                 objective,
                 generator=generator,
                 match_limit=match_limit,
+                exclude_list=exclude_list,
+                metadata=metadata,
                 timeout=timeout,
                 poll_interval=poll_interval,
                 on_status=on_status,
@@ -2335,7 +2377,9 @@ def monitor_delete(monitor_id: str, output_json: bool):
 
 @monitor.command(name="events")
 @click.argument("monitor_id")
-@click.option("--lookback", default="10d", show_default=True, help="Lookback period (e.g., 10d, 24h)")
+@click.option(
+    "--lookback", default="10d", show_default=True, help="Lookback period using d (days) or w (weeks), e.g., 10d, 1w"
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def monitor_events(monitor_id: str, lookback: str, output_file: str | None, output_json: bool):
@@ -2347,7 +2391,7 @@ def monitor_events(monitor_id: str, lookback: str, output_file: str | None, outp
 
         parallel-cli monitor events mon_abc
 
-        parallel-cli monitor events mon_abc --lookback 24h --json
+        parallel-cli monitor events mon_abc --lookback 3d --json
     """
     try:
         result = list_monitor_events(monitor_id, lookback_period=lookback, source="cli")
@@ -2363,18 +2407,30 @@ def monitor_events(monitor_id: str, lookback: str, output_file: str | None, outp
             from rich.table import Table
 
             table = Table(title=f"Events for {monitor_id} ({len(events)})")
-            table.add_column("Event ID", style="cyan", no_wrap=True)
             table.add_column("Type", style="green")
-            table.add_column("Timestamp", style="dim")
+            table.add_column("Event Group / ID", style="cyan", no_wrap=True)
+            table.add_column("Date", style="dim")
             table.add_column("Summary", max_width=50)
 
             for ev in events:
-                table.add_row(
-                    ev.get("event_id", ""),
-                    ev.get("type", ""),
-                    ev.get("created_at", ""),
-                    (ev.get("summary", "") or "")[:50],
-                )
+                ev_type = ev.get("type", "")
+                if ev_type == "event":
+                    ev_id = ev.get("event_group_id", "")
+                    date = ev.get("event_date", "")
+                    summary = (ev.get("output", "") or "")[:50]
+                elif ev_type == "completion":
+                    ev_id = ev.get("monitor_ts", "")
+                    date = ""
+                    summary = "Run completed"
+                elif ev_type == "error":
+                    ev_id = ev.get("id", "")
+                    date = ev.get("date", "")
+                    summary = (ev.get("error", "") or "")[:50]
+                else:
+                    ev_id = ""
+                    date = ""
+                    summary = ""
+                table.add_row(ev_type, ev_id, date, summary)
 
             console.print(table)
 
@@ -2401,13 +2457,18 @@ def monitor_event_group(monitor_id: str, event_group_id: str, output_file: str |
         if not output_json:
             console.print(f"[bold]Monitor:[/bold]     {monitor_id}")
             console.print(f"[bold]Event Group:[/bold] {event_group_id}")
-            console.print(f"[bold]Type:[/bold]        {result.get('type', '')}")
-            console.print(f"[bold]Created:[/bold]     {result.get('created_at', '')}")
             events = result.get("events", [])
             if events:
                 console.print(f"\n[bold]Events ({len(events)}):[/bold]")
                 for ev in events:
-                    console.print(f"  [cyan]{ev.get('event_id', '')}[/cyan]: {ev.get('summary', '')}")
+                    date = ev.get("event_date", "")
+                    output = ev.get("output", "")
+                    urls = ev.get("source_urls", [])
+                    console.print(f"  [dim]{date}[/dim] {output}")
+                    for u in urls:
+                        console.print(f"    [cyan]{u}[/cyan]")
+            else:
+                console.print("[yellow]No events in this group.[/yellow]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
@@ -2415,10 +2476,16 @@ def monitor_event_group(monitor_id: str, event_group_id: str, output_file: str |
 
 @monitor.command(name="simulate")
 @click.argument("monitor_id")
-@click.option("--event-type", help="Event type to simulate (e.g., change_detected)")
+@click.option(
+    "--event-type",
+    type=click.Choice(MONITOR_EVENT_TYPES),
+    help="Event type to simulate (default: monitor.event.detected)",
+)
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def monitor_simulate(monitor_id: str, event_type: str | None, output_json: bool):
     """Simulate an event for webhook testing.
+
+    Requires a webhook to be configured on the monitor.
 
     MONITOR_ID is the monitor identifier.
 
@@ -2426,7 +2493,7 @@ def monitor_simulate(monitor_id: str, event_type: str | None, output_json: bool)
 
         parallel-cli monitor simulate mon_abc
 
-        parallel-cli monitor simulate mon_abc --event-type change_detected
+        parallel-cli monitor simulate mon_abc --event-type monitor.execution.completed
     """
     try:
         simulate_monitor_event(monitor_id, event_type=event_type, source="cli")
