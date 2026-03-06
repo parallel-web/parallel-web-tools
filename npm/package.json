@@ -1,6 +1,6 @@
 {
   "name": "parallel-web-cli",
-  "version": "0.1.0-rc.4",
+  "version": "0.1.0",
   "description": "CLI for the Parallel API — web search, data enrichment, and monitoring",
   "homepage": "https://github.com/parallel-web/parallel-web-tools",
   "repository": {
