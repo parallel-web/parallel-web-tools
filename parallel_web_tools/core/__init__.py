@@ -31,6 +31,7 @@ from parallel_web_tools.core.findall import (
 )
 from parallel_web_tools.core.monitor import (
     MONITOR_CADENCES,
+    MONITOR_EVENT_TYPES,
     create_monitor,
     delete_monitor,
     get_monitor,
@@ -129,6 +130,7 @@ __all__ = [
     "run_findall",
     # Monitor
     "MONITOR_CADENCES",
+    "MONITOR_EVENT_TYPES",
     "create_monitor",
     "delete_monitor",
     "get_monitor",
