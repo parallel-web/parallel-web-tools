@@ -82,10 +82,7 @@ update_version_files() {
     # 2. parallel_web_tools/__init__.py
     sed -i '' "s/__version__ = \".*\"/__version__ = \"$new_version\"/" "$PROJECT_ROOT/parallel_web_tools/__init__.py"
 
-    # 3. tests/test_cli.py — update the version assertion
-    sed -i '' "s/assert \"[0-9][^\"]*\" in result.output/assert \"$new_version\" in result.output/" "$PROJECT_ROOT/tests/test_cli.py"
-
-    # 4. bigquery cloud function requirements.txt
+    # 3. bigquery cloud function requirements.txt
     sed -i '' "s/parallel-web-tools>=.*/parallel-web-tools>=$new_version/" \
         "$PROJECT_ROOT/parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt"
 
@@ -153,7 +150,6 @@ git checkout -b "$BRANCH"
 git add \
     pyproject.toml \
     parallel_web_tools/__init__.py \
-    tests/test_cli.py \
     parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt \
     npm/package.json
 
