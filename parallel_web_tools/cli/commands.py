@@ -875,6 +875,7 @@ def enrich():
 @click.option("--processor", type=click.Choice(AVAILABLE_PROCESSORS), help="Processor to use")
 @click.option("--data", "inline_data", help="Inline JSON data array (alternative to --source)")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task group (don't poll)")
+@click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option("--json", "output_json", is_flag=True, help="Output results as JSON to stdout")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 def enrich_run(
@@ -888,6 +889,7 @@ def enrich_run(
     processor: str | None,
     inline_data: str | None,
     no_wait: bool,
+    dry_run: bool,
     output_json: bool,
     output_file: str | None,
 ):
@@ -984,6 +986,42 @@ def enrich_run(
                 enriched_columns=enr_cols,
                 processor=final_processor,
             )
+
+            if dry_run:
+                # Count rows in source file
+                row_count = None
+                if source and os.path.exists(source):
+                    with open(source) as f:
+                        row_count = sum(1 for _ in f) - 1  # subtract header
+
+                dry_run_data: dict[str, Any] = {
+                    "dry_run": True,
+                    "source_type": source_type,
+                    "source": source,
+                    "target": target,
+                    "processor": final_processor,
+                    "source_columns": src_cols,
+                    "enriched_columns": enr_cols,
+                }
+                if row_count is not None:
+                    dry_run_data["row_count"] = row_count
+
+                if output_json:
+                    print(json.dumps(dry_run_data, indent=2))
+                else:
+                    console.print("[bold]Dry run — no API calls will be made[/bold]\n")
+                    console.print(f"  [bold]Source:[/bold]      {source} ({source_type})")
+                    if row_count is not None:
+                        console.print(f"  [bold]Rows:[/bold]        {row_count}")
+                    console.print(f"  [bold]Target:[/bold]      {target}")
+                    console.print(f"  [bold]Processor:[/bold]   {final_processor}")
+                    console.print(f"  [bold]Input cols:[/bold]  {len(src_cols)}")
+                    for col in src_cols:
+                        console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
+                    console.print(f"  [bold]Output cols:[/bold] {len(enr_cols)}")
+                    for col in enr_cols:
+                        console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
+                return
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
@@ -1418,6 +1456,7 @@ def research():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
+@click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option(
     "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
 )
@@ -1429,6 +1468,7 @@ def research_run(
     timeout: int,
     poll_interval: int,
     no_wait: bool,
+    dry_run: bool,
     output_file: str | None,
     output_json: bool,
 ):
@@ -1459,6 +1499,24 @@ def research_run(
     if len(query) > 15000:
         console.print(f"[yellow]Warning: Query truncated from {len(query)} to 15,000 characters[/yellow]")
         query = query[:15000]
+
+    if dry_run:
+        dry_run_data = {
+            "dry_run": True,
+            "query": query[:200] + "..." if len(query) > 200 else query,
+            "query_length": len(query),
+            "processor": processor,
+            "expected_latency": RESEARCH_PROCESSORS[processor],
+        }
+        if output_json:
+            print(json.dumps(dry_run_data, indent=2))
+        else:
+            console.print("[bold]Dry run — no API calls will be made[/bold]\n")
+            console.print(f"  [bold]Query:[/bold]     {dry_run_data['query']}")
+            console.print(f"  [bold]Length:[/bold]    {len(query)} chars")
+            console.print(f"  [bold]Processor:[/bold] {processor}")
+            console.print(f"  [bold]Latency:[/bold]   {RESEARCH_PROCESSORS[processor]}")
+        return
 
     try:
         if no_wait:
@@ -1840,6 +1898,7 @@ def findall():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating run (don't poll)")
+@click.option("--dry-run", is_flag=True, help="Ingest schema but don't create the run")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def findall_run(
@@ -1851,6 +1910,7 @@ def findall_run(
     timeout: int,
     poll_interval: int,
     no_wait: bool,
+    dry_run: bool,
     output_file: str | None,
     output_json: bool,
 ):
@@ -1883,6 +1943,41 @@ def findall_run(
         return
 
     try:
+        if dry_run:
+            # Ingest schema only — no run created
+            if not output_json:
+                console.print("[dim]Ingesting objective...[/dim]\n")
+
+            schema = ingest_findall(objective, source="cli")
+            dry_run_data = {
+                "dry_run": True,
+                "objective": objective,
+                "generator": generator,
+                "generator_description": FINDALL_GENERATORS[generator],
+                "match_limit": match_limit,
+                "entity_type": schema.get("entity_type", "unknown"),
+                "match_conditions": schema.get("match_conditions", []),
+                "enrichments": schema.get("enrichments", []),
+            }
+
+            if output_json:
+                print(json.dumps(dry_run_data, indent=2, default=str))
+            else:
+                console.print("[bold]Dry run — schema ingested, no run created[/bold]\n")
+                console.print(f"  [bold]Entity type:[/bold]  {dry_run_data['entity_type']}")
+                console.print(f"  [bold]Generator:[/bold]    {generator} ({FINDALL_GENERATORS[generator]})")
+                console.print(f"  [bold]Match limit:[/bold]  {match_limit}")
+                conditions = dry_run_data["match_conditions"]
+                console.print(f"  [bold]Conditions:[/bold]   {len(conditions)}")
+                for mc in conditions:
+                    console.print(f"    [dim]- {mc.get('name', '')}: {mc.get('description', '')}[/dim]")
+                enrichments = dry_run_data["enrichments"]
+                if enrichments:
+                    console.print(f"  [bold]Enrichments:[/bold]  {len(enrichments)}")
+                    for e in enrichments:
+                        console.print(f"    [dim]- {e.get('name', '')}: {e.get('description', '')}[/dim]")
+            return
+
         if no_wait:
             # Ingest + create, then return immediately
             if not output_json:
