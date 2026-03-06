@@ -27,7 +27,7 @@ from parallel_web_tools.core import (
     run_tasks,
 )
 
-__version__ = "0.1.0rc1"
+__version__ = "0.1.0rc2"
 
 __all__ = [
     # Auth
