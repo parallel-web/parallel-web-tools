@@ -157,7 +157,19 @@ git add \
     parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt \
     npm/package.json
 
-git commit -m "chore: bump version to $NEW_VERSION"
+# Commit — if pre-commit hooks modify files (e.g. uv.lock), re-stage and retry
+if ! git commit -m "chore: bump version to $NEW_VERSION"; then
+    echo "pre-commit hooks modified files, re-staging and retrying..."
+    git add \
+        pyproject.toml \
+        parallel_web_tools/__init__.py \
+        tests/test_cli.py \
+        parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt \
+        npm/package.json
+    # Also stage any lock files updated by hooks
+    git diff --name-only | xargs -r git add
+    git commit -m "chore: bump version to $NEW_VERSION"
+fi
 
 echo ""
 echo "pushing branch and creating PR..."
