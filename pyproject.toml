@@ -97,7 +97,7 @@ dev = [
     "pyinstaller>=6.0.0",
     "pre-commit>=4.0.0",
     "ruff>=0.14.0",
-    "pyrefly>=0.49.0",
+    "ty>=0.0.21",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -112,13 +112,9 @@ include = [
     "/parallel_web_tools",
 ]
 
-[tool.pyrefly]
-project-includes = [
-    "**/*.py*",
-    "**/*.ipynb",
-]
+[tool.ty.src]
 # Exclude files that have external dependencies not in the main project
-project-excludes = [
+exclude = [
     "**/integrations/bigquery/cloud_function/**",  # Separate deployment with flask, functions_framework
     "**/integrations/spark/**",  # PySpark type stubs are incomplete (pandas_udf overloads)
     "**/integrations/duckdb/udf.py",  # DuckDB UDF uses type="arrow" not in type stubs
@@ -126,6 +122,19 @@ project-excludes = [
     "notebooks/**",  # Jupyter notebooks with Databricks display()
     "examples/**",  # Example scripts
 ]
+
+# SDK returns TaskRunEvent | ErrorEvent union; code narrows via event.type check
+# but ty can't follow string-based narrowing on .type attribute
+[[tool.ty.overrides]]
+include = ["**/core/batch.py"]
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+
+# Polars .collect() returns InProcessQuery | DataFrame in newer polars stubs
+[[tool.ty.overrides]]
+include = ["**/integrations/polars/**"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
 
 [tool.ruff]
 line-length = 120
@@ -154,4 +163,5 @@ known-first-party = ["parallel_web_tools"]
 [dependency-groups]
 dev = [
     "ipykernel>=7.1.0",
+    "ty>=0.0.21",
 ]

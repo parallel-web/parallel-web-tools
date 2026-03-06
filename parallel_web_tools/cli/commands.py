@@ -961,7 +961,7 @@ def enrich_run(
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
-            result = run_enrichment(config_file, no_wait=no_wait)  # type: ignore[name-defined]
+            result = run_enrichment(config_file, no_wait=no_wait)
         else:
             # After validation, these are guaranteed non-None
             assert source_type is not None
@@ -1160,12 +1160,12 @@ def enrich_plan(
             processor=final_processor,
         )
 
-        save_config(config, output)  # type: ignore[name-defined]
+        save_config(config, output)
         console.print(f"[bold green]Configuration saved to {output}[/bold green]")
     else:
         try:
-            config = create_config_interactive()  # type: ignore[name-defined]
-            save_config(config, output)  # type: ignore[name-defined]
+            config = create_config_interactive()
+            save_config(config, output)
         except KeyboardInterrupt:
             console.print("\n[yellow]Configuration creation cancelled.[/yellow]")
             raise click.Abort() from None
