@@ -234,7 +234,9 @@ class TestMainCLI:
         """Should show version."""
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0rc1" in result.output
+        from parallel_web_tools import __version__
+
+        assert __version__ in result.output
 
 
 class TestAuthCommand:

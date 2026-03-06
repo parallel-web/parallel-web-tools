@@ -21,7 +21,7 @@ From the `main` branch with a clean working tree:
 
 This script will:
 1. Calculate the next version
-2. Update all 5 version files
+2. Update all 4 version files
 3. Create a `release/vX.Y.Z` branch
 4. Commit, push, and open a PR
 
@@ -36,7 +36,6 @@ After you merge the PR, everything else is automated:
 Update the version in these places:
 - `pyproject.toml`: `version = "X.Y.Z"`
 - `parallel_web_tools/__init__.py`: `__version__ = "X.Y.Z"`
-- `tests/test_cli.py`: version assertion in `test_version`
 - `parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt`: `parallel-web-tools>=X.Y.Z`
 - `npm/package.json`: `"version": "X.Y.Z"` (use semver pre-release format for RCs, e.g. `"X.Y.Z-rc.1"`)
 
