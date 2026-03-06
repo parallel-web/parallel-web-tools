@@ -1947,8 +1947,7 @@ def findall_run(
 ):
     """Run a FindAll query to discover and match entities from the web.
 
-    OBJECTIVE is a natural language description of what to find. Use "-" to read
-    from stdin.
+    OBJECTIVE is a natural language description of what to find.
 
     Examples:
 
@@ -1959,13 +1958,7 @@ def findall_run(
         parallel-cli findall run "Find YC companies in developer tools" --no-wait --json
 
         parallel-cli findall run "Find AI startups" --exclude '[{"name": "OpenAI", "url": "openai.com"}]'
-
-        echo "Find SaaS companies" | parallel-cli findall run - --json
     """
-    # Read from stdin if "-" is passed
-    if objective == "-":
-        objective = click.get_text_stream("stdin").read().strip()
-
     try:
         exclude_list = json.loads(exclude_json) if exclude_json else None
         metadata = json.loads(metadata_json) if metadata_json else None
