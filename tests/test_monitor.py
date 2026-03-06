@@ -68,7 +68,9 @@ class TestConstants:
         assert len(MONITOR_CADENCES) > 0
 
     def test_event_types_exist(self):
-        assert "change_detected" in MONITOR_EVENT_TYPES
+        assert "monitor.event.detected" in MONITOR_EVENT_TYPES
+        assert "monitor.execution.completed" in MONITOR_EVENT_TYPES
+        assert "monitor.execution.failed" in MONITOR_EVENT_TYPES
         assert len(MONITOR_EVENT_TYPES) > 0
 
     def test_base_url(self):
@@ -90,7 +92,7 @@ class TestRequest:
 
         call_kwargs = mock_httpx.request.call_args
         headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers")
-        assert headers["Authorization"] == "Bearer test-key"
+        assert headers["x-api-key"] == "test-key"
 
     def test_uses_correct_url(self, mock_httpx, mock_resolve_api_key):
         mock_httpx.request.return_value = _make_response(200, {})
@@ -157,7 +159,7 @@ class TestCreateMonitor:
         assert result["monitor_id"] == "mon_456"
         call_kwargs = mock_httpx.request.call_args
         body = call_kwargs.kwargs.get("json")
-        assert body["webhook"] == "https://hook.example.com"
+        assert body["webhook"] == {"url": "https://hook.example.com", "event_types": ["monitor.event.detected"]}
         assert body["metadata"] == {"project": "test"}
         assert body["output_schema"] == {"type": "object"}
 
@@ -307,7 +309,7 @@ class TestGetMonitorEventGroup:
     """Tests for get_monitor_event_group."""
 
     def test_get_event_group(self, mock_httpx, mock_resolve_api_key):
-        expected = {"event_group_id": "eg_123", "type": "change_detected"}
+        expected = {"event_group_id": "eg_123", "type": "event"}
         mock_httpx.request.return_value = _make_response(200, expected)
 
         result = get_monitor_event_group("mon_abc", "eg_123")
@@ -332,11 +334,11 @@ class TestSimulateMonitorEvent:
     def test_simulate_with_event_type(self, mock_httpx, mock_resolve_api_key):
         mock_httpx.request.return_value = _make_response(200, {})
 
-        simulate_monitor_event("mon_abc", event_type="change_detected")
+        simulate_monitor_event("mon_abc", event_type="monitor.event.detected")
 
         call_kwargs = mock_httpx.request.call_args
-        body = call_kwargs.kwargs.get("json")
-        assert body["event_type"] == "change_detected"
+        params = call_kwargs.kwargs.get("params")
+        assert params["event_type"] == "monitor.event.detected"
 
     def test_simulate_returns_none(self, mock_httpx, mock_resolve_api_key):
         mock_httpx.request.return_value = _make_response(200, {})
@@ -608,10 +610,11 @@ class TestMonitorEventsCommand:
             mock_events.return_value = {
                 "events": [
                     {
-                        "event_id": "ev_1",
-                        "type": "change_detected",
-                        "created_at": "2026-01-01",
-                        "summary": "Price changed",
+                        "type": "event",
+                        "event_group_id": "mevtgrp_abc123",
+                        "output": "Price changed",
+                        "event_date": "2026-01-01",
+                        "source_urls": ["https://example.com"],
                     },
                 ]
             }
@@ -619,7 +622,7 @@ class TestMonitorEventsCommand:
             result = runner.invoke(main, ["monitor", "events", "mon_abc"])
 
             assert result.exit_code == 0
-            assert "ev_1" in result.output
+            assert "mevtgrp_abc123" in result.output
 
     def test_events_empty(self, runner):
         with mock.patch("parallel_web_tools.cli.commands.list_monitor_events") as mock_events:
@@ -672,8 +675,6 @@ class TestMonitorEventGroupCommand:
         with mock.patch("parallel_web_tools.cli.commands.get_monitor_event_group") as mock_eg:
             mock_eg.return_value = {
                 "event_group_id": "eg_123",
-                "type": "change_detected",
-                "created_at": "2026-01-01",
                 "events": [],
             }
 
@@ -714,11 +715,11 @@ class TestMonitorSimulateCommand:
         with mock.patch("parallel_web_tools.cli.commands.simulate_monitor_event") as mock_sim:
             mock_sim.return_value = None
 
-            result = runner.invoke(main, ["monitor", "simulate", "mon_abc", "--event-type", "change_detected"])
+            result = runner.invoke(main, ["monitor", "simulate", "mon_abc", "--event-type", "monitor.event.detected"])
 
             assert result.exit_code == 0
             call_kwargs = mock_sim.call_args.kwargs
-            assert call_kwargs["event_type"] == "change_detected"
+            assert call_kwargs["event_type"] == "monitor.event.detected"
 
     def test_simulate_json(self, runner):
         with mock.patch("parallel_web_tools.cli.commands.simulate_monitor_event") as mock_sim:
