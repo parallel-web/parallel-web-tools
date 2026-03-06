@@ -11,6 +11,7 @@ Update the version in these places:
 - `parallel_web_tools/__init__.py`: `__version__ = "X.Y.Z"`
 - `tests/test_cli.py`: version assertion in `test_version`
 - `parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt`: `parallel-web-tools>=X.Y.Z`
+- `npm/package.json`: `"version": "X.Y.Z"` (use semver pre-release format for RCs, e.g. `"X.Y.Z-rc.1"`)
 
 ### 2. Create a GitHub Release
 
