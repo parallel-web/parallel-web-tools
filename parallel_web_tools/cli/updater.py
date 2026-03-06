@@ -111,7 +111,7 @@ def check_for_update_notification(current_version: str, save_state: bool = True)
     if not _is_newer_version(latest_version, current_version):
         return None
 
-    return f"Update available: v{current_version} → v{latest_version}. Run `parallel-cli update` to install."
+    return f"Update available: v{current_version} → v{latest_version}"
 
 
 def get_platform() -> str | None:

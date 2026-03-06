@@ -237,7 +237,6 @@ class TestCheckForUpdateNotification:
                 assert result is not None
                 assert "0.0.8" in result
                 assert "0.0.9" in result
-                assert "parallel-cli update" in result
 
     def test_returns_none_when_up_to_date(self):
         """Should return None when already at latest version."""
