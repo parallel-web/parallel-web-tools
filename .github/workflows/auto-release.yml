@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   check:
@@ -65,3 +66,10 @@ jobs:
             --title "${{ needs.check.outputs.tag }}" \
             --generate-notes \
             $PRERELEASE_FLAG
+
+      - name: Trigger downstream workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml -f tag=${{ needs.check.outputs.tag }}
+          gh workflow run publish.yml
