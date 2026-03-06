@@ -1,0 +1,67 @@
+name: Auto Release
+
+# Triggers when a version bump commit lands on main (from a merged release PR)
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+      is_prerelease: ${{ steps.check.outputs.is_prerelease }}
+    steps:
+      - name: Check if this is a version bump commit
+        id: check
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if [[ "$COMMIT_MSG" =~ ^chore:\ bump\ version\ to\ (.+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+            if [[ "$VERSION" =~ rc ]]; then
+              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "Detected release: $VERSION"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Not a version bump commit, skipping."
+          fi
+
+  create-release:
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag doesn't already exist
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/${{ needs.check.outputs.tag }}$"; then
+            echo "Tag ${{ needs.check.outputs.tag }} already exists!"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "${{ needs.check.outputs.is_prerelease }}" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          gh release create "${{ needs.check.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "${{ needs.check.outputs.tag }}" \
+            --generate-notes \
+            $PRERELEASE_FLAG

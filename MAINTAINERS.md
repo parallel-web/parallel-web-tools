@@ -4,7 +4,34 @@ Instructions for releasing and maintaining the parallel-web-tools package.
 
 ## Release Process
 
-### 1. Update Version
+### Quick Release (Recommended)
+
+From the `main` branch with a clean working tree:
+
+```bash
+# Release candidate (most common)
+./scripts/release.sh rc
+
+# Promote RC to stable
+./scripts/release.sh stable
+
+# Explicit version
+./scripts/release.sh 0.2.0
+```
+
+This script will:
+1. Calculate the next version
+2. Update all 5 version files
+3. Create a `release/vX.Y.Z` branch
+4. Commit, push, and open a PR
+
+After you merge the PR, everything else is automated:
+- `auto-release.yml` detects the version bump commit and creates a GitHub Release + tag
+- `release.yml` builds standalone binaries for all platforms
+- `publish.yml` publishes to PyPI
+- npm publish is handled by the release workflow
+
+### Manual Version Update (if needed)
 
 Update the version in these places:
 - `pyproject.toml`: `version = "X.Y.Z"`
@@ -13,18 +40,10 @@ Update the version in these places:
 - `parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt`: `parallel-web-tools>=X.Y.Z`
 - `npm/package.json`: `"version": "X.Y.Z"` (use semver pre-release format for RCs, e.g. `"X.Y.Z-rc.1"`)
 
-### 2. Create a GitHub Release
+Then commit with the message `chore: bump version to X.Y.Z` — the auto-release workflow
+will detect it and create the release.
 
-1. Go to **Releases** → **Create new release**
-2. Create a new tag matching the version (e.g., `v0.2.0`)
-3. Add release notes describing changes
-4. Click **Publish release**
-
-This triggers two workflows:
-- **release.yml**: Builds standalone binaries for all platforms
-- **publish.yml**: Publishes to PyPI
-
-### 3. Verify the Release
+### Verify the Release
 
 After the workflows complete:
 
@@ -145,6 +164,7 @@ twine yank parallel-web-tools==0.0.1
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | Push to main, PRs | Run tests and type checking |
+| `auto-release.yml` | Push to main (version bump commits) | Create tag + GitHub Release |
 | `release.yml` | Release created | Build binaries for all platforms |
 | `publish.yml` | Release published | Publish to PyPI |
 
