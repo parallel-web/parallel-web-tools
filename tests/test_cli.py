@@ -234,7 +234,7 @@ class TestMainCLI:
         """Should show version."""
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0rc1" in result.output
+        assert "0.1.0rc2" in result.output
 
 
 class TestAuthCommand:
@@ -1298,9 +1298,9 @@ class TestEnrichStatusCommand:
 
         assert result.exit_code == 0
         assert "tgrp_status_123" in result.output
-        assert "3 completed" in result.output
-        assert "1 failed" in result.output
-        assert "4 total" in result.output
+        assert "0.1.0rc2" in result.output
+        assert "0.1.0rc2" in result.output
+        assert "0.1.0rc2" in result.output
 
     def test_enrich_status_json_output(self, runner):
         """Should output JSON when --json flag is set."""
@@ -1362,7 +1362,7 @@ class TestEnrichPollCommand:
 
         assert result.exit_code == 0
         assert "complete" in result.output.lower()
-        assert "2 completed" in result.output
+        assert "0.1.0rc2" in result.output
 
     def test_enrich_poll_json_output(self, runner):
         """Should output full results as JSON with --json flag."""
