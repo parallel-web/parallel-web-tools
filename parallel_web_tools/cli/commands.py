@@ -951,6 +951,14 @@ def enrich_run(
             validate_enrich_args(source_type, source, target, source_columns, enriched_columns, intent)
 
         if config_file:
+            if dry_run:
+                _handle_error(
+                    click.UsageError("--dry-run is not supported with config files. Use CLI arguments instead."),
+                    output_json=output_json,
+                    exit_code=EXIT_BAD_INPUT,
+                )
+                return
+
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
             result = run_enrichment(config_file, no_wait=no_wait)  # type: ignore[name-defined]
@@ -964,19 +972,74 @@ def enrich_run(
             assert src_cols is not None  # Validated above
 
             if intent:
-                if not output_json:
-                    console.print("[dim]Getting suggestions from Parallel API...[/dim]")
-                suggestion = suggest_from_intent(intent, src_cols)
-                enr_cols = suggestion["enriched_columns"]
-                final_processor = processor or suggestion["processor"]
-                if not output_json:
-                    console.print(
-                        f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n"
-                    )
+                if dry_run:
+                    # Skip suggest API call — show what we know without it
+                    enr_cols: list[dict[str, str]] = []
+                    final_processor = processor or "core-fast"
+                else:
+                    if not output_json:
+                        console.print("[dim]Getting suggestions from Parallel API...[/dim]")
+                    suggestion = suggest_from_intent(intent, src_cols)
+                    enr_cols = suggestion["enriched_columns"]
+                    final_processor = processor or suggestion["processor"]
+                    if not output_json:
+                        console.print(
+                            f"[green]AI suggested {len(enr_cols)} columns, processor: {final_processor}[/green]\n"
+                        )
             else:
-                enr_cols = parse_columns(enriched_columns)
-                assert enr_cols is not None  # Validated above
+                parsed_enr_cols = parse_columns(enriched_columns)
+                assert parsed_enr_cols is not None  # Validated above
+                enr_cols = parsed_enr_cols
                 final_processor = processor or "core-fast"
+
+            if dry_run:
+                # Count rows in source file
+                row_count = None
+                source_display = source
+                if inline_data:
+                    source_display = "<inline data>"
+                if source and os.path.exists(source):
+                    with open(source) as f:
+                        row_count = sum(1 for _ in f) - 1  # subtract header
+
+                dry_run_data: dict[str, Any] = {
+                    "dry_run": True,
+                    "source_type": source_type,
+                    "source": source_display,
+                    "target": target,
+                    "processor": final_processor,
+                    "source_columns": src_cols,
+                }
+                if enr_cols:
+                    dry_run_data["enriched_columns"] = enr_cols
+                else:
+                    dry_run_data["intent"] = intent
+                    dry_run_data["note"] = (
+                        "Columns will be suggested by AI at runtime (use without --dry-run to see suggestions)"
+                    )
+                if row_count is not None:
+                    dry_run_data["row_count"] = row_count
+
+                if output_json:
+                    print(json.dumps(dry_run_data, indent=2))
+                else:
+                    console.print("[bold]Dry run — no API calls will be made[/bold]\n")
+                    console.print(f"  [bold]Source:[/bold]      {source_display} ({source_type})")
+                    if row_count is not None:
+                        console.print(f"  [bold]Rows:[/bold]        {row_count}")
+                    console.print(f"  [bold]Target:[/bold]      {target}")
+                    console.print(f"  [bold]Processor:[/bold]   {final_processor}")
+                    console.print(f"  [bold]Input cols:[/bold]  {len(src_cols)}")
+                    for col in src_cols:
+                        console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
+                    if enr_cols:
+                        console.print(f"  [bold]Output cols:[/bold] {len(enr_cols)}")
+                        for col in enr_cols:
+                            console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
+                    else:
+                        console.print(f"  [bold]Intent:[/bold]     {intent}")
+                        console.print("  [dim]Output columns will be suggested by AI at runtime[/dim]")
+                return
 
             config = build_config_from_args(
                 source_type=source_type,
@@ -986,42 +1049,6 @@ def enrich_run(
                 enriched_columns=enr_cols,
                 processor=final_processor,
             )
-
-            if dry_run:
-                # Count rows in source file
-                row_count = None
-                if source and os.path.exists(source):
-                    with open(source) as f:
-                        row_count = sum(1 for _ in f) - 1  # subtract header
-
-                dry_run_data: dict[str, Any] = {
-                    "dry_run": True,
-                    "source_type": source_type,
-                    "source": source,
-                    "target": target,
-                    "processor": final_processor,
-                    "source_columns": src_cols,
-                    "enriched_columns": enr_cols,
-                }
-                if row_count is not None:
-                    dry_run_data["row_count"] = row_count
-
-                if output_json:
-                    print(json.dumps(dry_run_data, indent=2))
-                else:
-                    console.print("[bold]Dry run — no API calls will be made[/bold]\n")
-                    console.print(f"  [bold]Source:[/bold]      {source} ({source_type})")
-                    if row_count is not None:
-                        console.print(f"  [bold]Rows:[/bold]        {row_count}")
-                    console.print(f"  [bold]Target:[/bold]      {target}")
-                    console.print(f"  [bold]Processor:[/bold]   {final_processor}")
-                    console.print(f"  [bold]Input cols:[/bold]  {len(src_cols)}")
-                    for col in src_cols:
-                        console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
-                    console.print(f"  [bold]Output cols:[/bold] {len(enr_cols)}")
-                    for col in enr_cols:
-                        console.print(f"    [dim]- {col['name']}: {col.get('description', '')}[/dim]")
-                return
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
@@ -1898,7 +1925,11 @@ def findall():
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=30, show_default=True, help="Seconds between status checks")
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating run (don't poll)")
-@click.option("--dry-run", is_flag=True, help="Ingest schema but don't create the run")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Ingest schema via API to preview entity type and conditions, but don't create the run",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def findall_run(
