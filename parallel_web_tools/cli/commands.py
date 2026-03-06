@@ -402,9 +402,14 @@ def _after_command(*args, **kwargs):
 
 
 @main.command()
-def auth():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def auth(output_json: bool):
     """Check authentication status."""
     status = get_auth_status()
+
+    if output_json:
+        print(json.dumps(status, indent=2))
+        return
 
     if status["authenticated"]:
         if status["method"] == "environment":
@@ -420,21 +425,30 @@ def auth():
 
 
 @main.command()
-def login():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def login(output_json: bool):
     """Authenticate with Parallel API."""
-    console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
+    if not output_json:
+        console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
 
     try:
         get_api_key(force_login=True)
-        console.print("\n[bold green]Authentication successful![/bold green]")
+        if output_json:
+            print(json.dumps({"status": "authenticated"}, indent=2))
+        else:
+            console.print("\n[bold green]Authentication successful![/bold green]")
     except Exception as e:
-        _handle_error(e, exit_code=EXIT_AUTH_ERROR, prefix="Authentication failed")
+        _handle_error(e, output_json=output_json, exit_code=EXIT_AUTH_ERROR, prefix="Authentication failed")
 
 
 @main.command(name="logout")
-def logout_cmd():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def logout_cmd(output_json: bool):
     """Remove stored credentials."""
-    if logout():
+    removed = logout()
+    if output_json:
+        print(json.dumps({"status": "logged_out" if removed else "no_credentials"}, indent=2))
+    elif removed:
         console.print("[green]Logged out successfully[/green]")
     else:
         console.print("[yellow]No stored credentials found[/yellow]")
@@ -443,7 +457,8 @@ def logout_cmd():
 @main.command(name="update")
 @click.option("--check", is_flag=True, help="Check for updates without installing")
 @click.option("--force", is_flag=True, help="Reinstall even if already at latest version")
-def update_cmd(check: bool, force: bool):
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def update_cmd(check: bool, force: bool, output_json: bool):
     """Update to the latest version (standalone CLI only)."""
     from parallel_web_tools.cli.updater import (
         check_for_update_notification,
@@ -451,15 +466,39 @@ def update_cmd(check: bool, force: bool):
     )
 
     if not _STANDALONE_MODE:
-        console.print("[yellow]Update command is only available for standalone CLI.[/yellow]")
-        console.print("\nTo update via pip:")
-        console.print("  [cyan]pip install --upgrade parallel-web-tools[/cyan]")
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "Update command is only available for standalone CLI.",
+                            "type": "UnsupportedOperation",
+                        }
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            console.print("[yellow]Update command is only available for standalone CLI.[/yellow]")
+            console.print("\nTo update via pip:")
+            console.print("  [cyan]pip install --upgrade parallel-web-tools[/cyan]")
         return
 
     if check:
         # Don't save state for explicit --check (doesn't reset 24h timer)
         notification = check_for_update_notification(__version__, save_state=False)
-        if notification:
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "current_version": __version__,
+                        "update_available": notification is not None,
+                        "message": notification,
+                    },
+                    indent=2,
+                )
+            )
+        elif notification:
             console.print(f"[cyan]{notification}[/cyan]")
         else:
             console.print(f"[green]Already up to date (v{__version__})[/green]")
@@ -472,7 +511,8 @@ def update_cmd(check: bool, force: bool):
 @main.command(name="config")
 @click.argument("key", required=False)
 @click.argument("value", required=False)
-def config_cmd(key: str | None, value: str | None):
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def config_cmd(key: str | None, value: str | None, output_json: bool):
     """View or set CLI configuration (standalone CLI only).
 
     \b
@@ -488,7 +528,20 @@ def config_cmd(key: str | None, value: str | None):
     )
 
     if not _STANDALONE_MODE:
-        console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "Config command is only available for standalone CLI.",
+                            "type": "UnsupportedOperation",
+                        }
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            console.print("[yellow]Config command is only available for standalone CLI.[/yellow]")
         return
 
     valid_keys = ["auto-update-check"]
@@ -501,8 +554,12 @@ def config_cmd(key: str | None, value: str | None):
 
     # Show all settings
     if key is None:
-        console.print("[bold]Configuration:[/bold]")
-        console.print(f"  auto-update-check: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
+        config_data = {"auto-update-check": is_auto_update_check_enabled()}
+        if output_json:
+            print(json.dumps(config_data, indent=2))
+        else:
+            console.print("[bold]Configuration:[/bold]")
+            console.print(f"  auto-update-check: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
         return
 
     if key not in valid_keys:
@@ -510,10 +567,16 @@ def config_cmd(key: str | None, value: str | None):
 
     # Show or set the value
     if value is None:
-        console.print(f"{key}: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
+        if output_json:
+            print(json.dumps({key: is_auto_update_check_enabled()}, indent=2))
+        else:
+            console.print(f"{key}: [cyan]{format_bool(is_auto_update_check_enabled())}[/cyan]")
     else:
         set_auto_update_check(parse_bool(value))
-        console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
+        if output_json:
+            print(json.dumps({key: is_auto_update_check_enabled()}, indent=2))
+        else:
+            console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
 
 
 # =============================================================================
@@ -560,8 +623,12 @@ def search(
 
     OBJECTIVE is a natural language description of what you're looking for. You can
     also pass specific keyword queries with --query. At least one of OBJECTIVE or
-    --query is required.
+    --query is required. Use "-" as OBJECTIVE to read from stdin.
     """
+    # Read from stdin if "-" is passed
+    if objective == "-":
+        objective = click.get_text_stream("stdin").read().strip()
+
     if not objective and not query:
         raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
@@ -1367,14 +1434,21 @@ def research_run(
 ):
     """Run deep research on a question or topic.
 
-    QUERY is the research question (max 15,000 chars). Alternatively, use --input-file.
+    QUERY is the research question (max 15,000 chars). Alternatively, use --input-file
+    or pass "-" as QUERY to read from stdin.
 
     Examples:
 
         parallel-cli research run "What are the latest developments in quantum computing?"
 
         parallel-cli research run -f question.txt --processor ultra -o report
+
+        echo "My research question" | parallel-cli research run - --json
     """
+    # Read from stdin if "-" is passed
+    if query == "-":
+        query = click.get_text_stream("stdin").read().strip()
+
     # Get query from argument or file
     if input_file:
         with open(input_file) as f:
@@ -1540,8 +1614,14 @@ def research_poll(
 
 
 @research.command(name="processors")
-def research_processors():
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def research_processors(output_json: bool):
     """List available research processors and their characteristics."""
+    if output_json:
+        processors = [{"name": name, "description": desc} for name, desc in RESEARCH_PROCESSORS.items()]
+        print(json.dumps({"processors": processors}, indent=2))
+        return
+
     console.print("[bold]Available Research Processors:[/bold]\n")
     for proc, desc in RESEARCH_PROCESSORS.items():
         console.print(f"  [cyan]{proc:15}[/cyan] {desc}")
@@ -1776,7 +1856,8 @@ def findall_run(
 ):
     """Run a FindAll query to discover and match entities from the web.
 
-    OBJECTIVE is a natural language description of what to find.
+    OBJECTIVE is a natural language description of what to find. Use "-" to read
+    from stdin.
 
     Examples:
 
@@ -1788,8 +1869,12 @@ def findall_run(
 
         parallel-cli findall run "Find AI startups" --exclude '[{"name": "OpenAI", "url": "openai.com"}]'
 
-        parallel-cli findall run "Find SaaS companies" --metadata '{"project": "q1-research"}'
+        echo "Find SaaS companies" | parallel-cli findall run - --json
     """
+    # Read from stdin if "-" is passed
+    if objective == "-":
+        objective = click.get_text_stream("stdin").read().strip()
+
     try:
         exclude_list = json.loads(exclude_json) if exclude_json else None
         metadata = json.loads(metadata_json) if metadata_json else None
