@@ -2,17 +2,15 @@
 
 # Re-export everything from core for convenience
 from parallel_web_tools.core import (
-    # Schema
     AVAILABLE_PROCESSORS,
     Column,
     InputSchema,
     ParseError,
     ProcessorType,
     SourceType,
-    # Batch
+    create_monitor,
     enrich_batch,
     enrich_single,
-    # Auth
     get_api_key,
     get_async_client,
     get_auth_status,
@@ -21,9 +19,10 @@ from parallel_web_tools.core import (
     logout,
     parse_input_and_output_models,
     parse_schema,
-    # Runner
     run_enrichment,
     run_enrichment_from_dict,
+    run_findall,
+    run_research,
     run_tasks,
 )
 
@@ -53,4 +52,10 @@ __all__ = [
     # Runner
     "run_enrichment",
     "run_enrichment_from_dict",
+    # FindAll
+    "run_findall",
+    # Monitor
+    "create_monitor",
+    # Research
+    "run_research",
 ]
