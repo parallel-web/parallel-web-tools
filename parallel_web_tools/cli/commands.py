@@ -1098,6 +1098,8 @@ def enrich_run(
 
     except FileNotFoundError as e:
         _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT)
+    except (click.BadParameter, click.UsageError) as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid input")
     except Exception as e:
         _handle_error(e, output_json=output_json, prefix="Error during enrichment")
     finally:
