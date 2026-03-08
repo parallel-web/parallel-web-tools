@@ -253,6 +253,106 @@ def register_parallel_functions(
     )
 
 
+def register_parallel_findall(
+    conn: duckdb.DuckDBPyConnection,
+    api_key: str | None = None,
+    generator: str = "core",
+    match_limit: int = 10,
+    enrich: bool = True,
+    timeout: int = 3600,
+    poll_interval: int = 15,
+) -> None:
+    """
+    Register a ``parallel_findall()`` SQL function in a DuckDB connection.
+
+    After calling this, you can use ``parallel_findall(objective)`` in SQL
+    to discover entities from the web. The function returns a JSON array of
+    matched candidates that can be unpacked with DuckDB JSON functions.
+
+    DuckDB doesn't support table-valued UDFs in the Python API, so this
+    returns JSON that you unpack into rows with ``unnest()`` + ``json()``.
+
+    Args:
+        conn: DuckDB connection.
+        api_key: Parallel API key. Uses PARALLEL_API_KEY env var if not set.
+        generator: Generator tier. Default "core" (balanced breadth/depth).
+        match_limit: Max matched candidates (5-1000). Default 10.
+        enrich: Whether to apply suggested enrichments. Default True.
+        timeout: Max wait in seconds (default 3600).
+        poll_interval: Seconds between status checks (default 15).
+
+    Example::
+
+        register_parallel_findall(conn)
+
+        conn.sql('''
+            CREATE TABLE world_cup AS
+            SELECT unnest(from_json(
+                parallel_findall(
+                    'find all countries that won the FIFA World Cup '
+                    'and tell me their capital city'
+                ),
+                '["json"]'
+            )) AS data;
+        ''')
+
+        -- Unpack JSON columns
+        conn.sql('''
+            SELECT
+                data->>'name' AS name,
+                data->>'url' AS url,
+                data->>'description' AS description
+            FROM world_cup
+        ''')
+    """
+    from parallel_web_tools.core.auth import resolve_api_key
+    from parallel_web_tools.integrations.duckdb.findall import (
+        _unpack_output,
+    )
+
+    key = resolve_api_key(api_key)
+
+    def findall_scalar(objective_col: pa.Array) -> pa.Array:
+        """Scalar UDF: takes objective string, returns JSON array of matched candidates."""
+        from parallel_web_tools.core.findall import run_findall
+
+        objectives = objective_col.to_pylist()
+        results = []
+        for objective in objectives:
+            if not objective:
+                results.append("[]")
+                continue
+            try:
+                findall_result = run_findall(
+                    objective=objective,
+                    generator=generator,
+                    match_limit=match_limit,
+                    api_key=key,
+                    timeout=timeout,
+                    poll_interval=poll_interval,
+                    source="duckdb",
+                    enrich=enrich,
+                )
+                candidates = findall_result.get("candidates", [])
+                matched = [_unpack_output(c) for c in candidates if c.get("match_status") == "matched"]
+                # Strip internal fields
+                skip_keys = {"candidate_id", "match_status", "basis"}
+                cleaned = [{k: v for k, v in c.items() if k not in skip_keys} for c in matched]
+                results.append(json.dumps(cleaned, default=str))
+            except Exception as e:
+                results.append(json.dumps([{"error": str(e)}]))
+        return pa.array(results, type=pa.string())
+
+    conn.create_function(
+        "parallel_findall",
+        findall_scalar,
+        ["VARCHAR"],
+        "VARCHAR",
+        type=PythonUDFType.ARROW,
+        side_effects=True,
+    )
+
+
 def unregister_parallel_functions(conn: duckdb.DuckDBPyConnection) -> None:
     """
     Unregister Parallel enrichment functions from a DuckDB connection.

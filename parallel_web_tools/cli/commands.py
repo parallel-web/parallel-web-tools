@@ -27,9 +27,12 @@ from parallel_web_tools.core import (
     create_monitor,
     create_research_task,
     delete_monitor,
+    enrich_findall,
+    extend_findall,
     get_api_key,
     get_auth_status,
     get_findall_result,
+    get_findall_schema,
     get_findall_status,
     get_monitor,
     get_monitor_event_group,
@@ -2281,6 +2284,125 @@ def findall_cancel(findall_id: str, output_json: bool):
             print(json.dumps(result, indent=2))
         else:
             console.print(f"[bold green]Cancelled:[/bold green] {findall_id}")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="enrich")
+@click.argument("findall_id")
+@click.argument("output_schema_json")
+@click.option(
+    "--processor",
+    "-p",
+    type=click.Choice(AVAILABLE_PROCESSORS),
+    default="core",
+    show_default=True,
+    help="Processor to use for enrichment",
+)
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def findall_enrich(findall_id: str, output_schema_json: str, processor: str, output_json: bool):
+    """Add enrichments to a completed FindAll run.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+
+    OUTPUT_SCHEMA_JSON is a JSON object describing the enrichment fields.
+
+    Examples:
+
+        parallel-cli findall enrich findall_xxx '{"properties": {"ceo": {"type": "string"}}}'
+
+        parallel-cli findall enrich findall_xxx '{"properties": {"stock_price": {"type": "number"}}}' -p base
+    """
+    try:
+        output_schema = json.loads(output_schema_json)
+    except json.JSONDecodeError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid JSON")
+        return
+
+    try:
+        result = enrich_findall(
+            findall_id,
+            output_schema=output_schema,
+            processor=processor,
+            source="cli",
+        )
+
+        if output_json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            console.print(f"[bold green]Enrichment started for:[/bold green] {findall_id}")
+            console.print(f"[dim]Processor: {processor}[/dim]")
+            console.print(f"\n[dim]Use 'parallel-cli findall poll {findall_id}' to wait for enrichment results[/dim]")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="extend")
+@click.argument("findall_id")
+@click.argument("additional_match_limit", type=int)
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def findall_extend(findall_id: str, additional_match_limit: int, output_json: bool):
+    """Extend a FindAll run to get more matches.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+
+    ADDITIONAL_MATCH_LIMIT is the number of additional matches to find.
+
+    Note: Preview runs cannot be extended.
+
+    Examples:
+
+        parallel-cli findall extend findall_xxx 20
+
+        parallel-cli findall extend findall_xxx 50 --json
+    """
+    try:
+        result = extend_findall(
+            findall_id,
+            additional_match_limit=additional_match_limit,
+            source="cli",
+        )
+
+        if output_json:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            console.print(f"[bold green]Extended:[/bold green] {findall_id}")
+            console.print(f"[dim]Additional matches requested: {additional_match_limit}[/dim]")
+            console.print(f"\n[dim]Use 'parallel-cli findall poll {findall_id}' to wait for results[/dim]")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="schema")
+@click.argument("findall_id")
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save schema to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+def findall_schema(findall_id: str, output_file: str | None, output_json: bool):
+    """Retrieve the schema of a FindAll run for refresh/rerun.
+
+    FINDALL_ID is the run identifier (e.g., findall_xxx).
+
+    The schema can be used to re-run with modifications (e.g., exclude_list).
+
+    Examples:
+
+        parallel-cli findall schema findall_xxx --json
+
+        parallel-cli findall schema findall_xxx -o schema.json
+    """
+    try:
+        result = get_findall_schema(findall_id, source="cli")
+
+        write_json_output(result, output_file, output_json)
+
+        if not output_json:
+            console.print(f"[bold]Schema for:[/bold] {findall_id}")
+            console.print(f"\n{json.dumps(result, indent=2, default=str)}")
+            if not output_file:
+                console.print("\n[dim]Use -o to save schema to a file for reuse[/dim]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)

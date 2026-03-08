@@ -9,6 +9,7 @@ import pytest
 from parallel_web_tools.integrations.duckdb import (
     EnrichmentResult,
     enrich_table,
+    findall_table,
     register_parallel_functions,
     unregister_parallel_functions,
 )
@@ -846,3 +847,236 @@ class TestIntegration:
         assert ceo_names[0] == "Sundar Pichai"
         assert ceo_names[1] is None
         assert ceo_names[2] == "Satya Nadella"
+
+
+class TestFindallTable:
+    """Tests for findall_table function."""
+
+    def test_basic_findall(self, conn):
+        """Should run FindAll and return matched results as a DuckDB relation."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {"name": "Apple Inc", "url": "https://apple.com", "match_status": "matched"},
+                {"name": "Google LLC", "url": "https://google.com", "match_status": "matched"},
+                {"name": "Random Co", "url": "https://random.com", "match_status": "generated"},
+                {"name": "Microsoft Corp", "url": "https://microsoft.com", "match_status": "matched"},
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "find all tech companies")
+
+        # Only matched candidates should be returned
+        assert result.success_count == 3
+        assert result.error_count == 0
+
+        df = result.result.fetchdf()
+        assert len(df) == 3
+        assert "name" in df.columns
+        assert "url" in df.columns
+        assert df["name"].tolist() == ["Apple Inc", "Google LLC", "Microsoft Corp"]
+
+    def test_filters_out_non_matched(self, conn):
+        """Should only include candidates with match_status='matched'."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {"name": "Matched", "match_status": "matched"},
+                {"name": "Generated", "match_status": "generated"},
+                {"name": "Unmatched", "match_status": "unmatched"},
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "test")
+
+        df = result.result.fetchdf()
+        assert len(df) == 1
+        assert df["name"].iloc[0] == "Matched"
+
+    def test_unpacks_output_enrichments(self, conn):
+        """Should unpack output field into separate columns."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {
+                    "name": "France",
+                    "url": "https://en.wikipedia.org/wiki/France",
+                    "match_status": "matched",
+                    "output": {
+                        "world_cup_check": {
+                            "type": "match_condition",
+                            "value": "Won in 2018",
+                            "is_matched": True,
+                        },
+                        "capital_city": {
+                            "type": "enrichment",
+                            "value": "Paris",
+                        },
+                        "world_cup_wins": {
+                            "type": "enrichment",
+                            "value": 2,
+                        },
+                    },
+                },
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "test")
+
+        df = result.result.fetchdf()
+        assert "capital_city" in df.columns
+        assert "world_cup_wins" in df.columns
+        assert "world_cup_check" in df.columns
+        assert df["capital_city"].iloc[0] == "Paris"
+        assert df["world_cup_wins"].iloc[0] == "2"  # Converted to string
+        assert "output" not in df.columns  # Raw output should be removed
+
+    def test_strips_internal_fields(self, conn):
+        """Should not include candidate_id, match_status, or basis columns."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {
+                    "candidate_id": "cand_123",
+                    "name": "Test",
+                    "match_status": "matched",
+                    "basis": [{"field": "check", "reasoning": "..."}],
+                },
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "test")
+
+        df = result.result.fetchdf()
+        assert "candidate_id" not in df.columns
+        assert "match_status" not in df.columns
+        assert "basis" not in df.columns
+        assert "name" in df.columns
+
+    def test_empty_candidates(self, conn):
+        """Should handle empty results."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "find nonexistent things")
+
+        assert result.success_count == 0
+
+    def test_creates_result_table(self, conn):
+        """Should persist results when result_table is specified."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {"name": "Tesla", "url": "https://tesla.com", "match_status": "matched"},
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            findall_table(conn, "find EV companies", result_table="ev_companies")
+
+        df = conn.execute("SELECT * FROM ev_companies").fetchdf()
+        assert df["name"].iloc[0] == "Tesla"
+
+    def test_passes_parameters(self, conn):
+        """Should forward parameters to run_findall."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [{"name": "Test", "match_status": "matched"}],
+        }
+
+        with mock.patch(
+            "parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result
+        ) as mock_run:
+            findall_table(
+                conn,
+                "test objective",
+                generator="core",
+                match_limit=50,
+                enrich=False,
+                api_key="my-key",
+                timeout=1200,
+                poll_interval=30,
+            )
+
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs["generator"] == "core"
+        assert call_kwargs["match_limit"] == 50
+        assert call_kwargs["enrich"] is False
+        assert call_kwargs["api_key"] == "my-key"
+        assert call_kwargs["timeout"] == 1200
+        assert call_kwargs["poll_interval"] == 30
+        assert call_kwargs["source"] == "duckdb"
+
+    def test_nested_values_serialized(self, conn):
+        """Should serialize nested dicts/lists to JSON strings."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {
+                    "name": "Acme",
+                    "match_status": "matched",
+                    "tags": ["tech", "ai"],
+                    "details": {"founded": 2020},
+                },
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "test")
+
+        df = result.result.fetchdf()
+        assert df["tags"].iloc[0] == '["tech", "ai"]'
+        assert df["details"].iloc[0] == '{"founded": 2020}'
+
+    def test_heterogeneous_candidates(self, conn):
+        """Should handle matched candidates with different keys."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [
+                {"name": "Alpha", "url": "https://alpha.com", "match_status": "matched"},
+                {"name": "Beta", "industry": "Tech", "match_status": "matched"},
+            ],
+        }
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result):
+            result = findall_table(conn, "test")
+
+        df = result.result.fetchdf()
+        assert len(df) == 2
+        # Alpha has url but no industry
+        assert df["url"].iloc[0] == "https://alpha.com"
+        assert df["industry"].iloc[0] is None
+        # Beta has industry but no url
+        assert df["url"].iloc[1] is None
+        assert df["industry"].iloc[1] == "Tech"
+
+    def test_default_generator_is_core(self, conn):
+        """Should default to core generator for enrichment support."""
+        mock_result = {
+            "findall_id": "findall_123",
+            "status": "completed",
+            "candidates": [{"name": "Test", "match_status": "matched"}],
+        }
+
+        with mock.patch(
+            "parallel_web_tools.integrations.duckdb.findall.run_findall", return_value=mock_result
+        ) as mock_run:
+            findall_table(conn, "test")
+
+        assert mock_run.call_args.kwargs["generator"] == "core"
