@@ -294,6 +294,69 @@ def _poll_findall_until_complete(
     )
 
 
+def _poll_enrichments_until_complete(
+    client: Any,
+    findall_id: str,
+    enrichment_schemas: list[dict[str, Any]],
+    timeout: int,
+    poll_interval: int,
+    on_status: FindAllStatusCallback | None,
+) -> dict[str, Any]:
+    """Poll until enrichment data appears on all matched candidates.
+
+    After calling findall.enrich(), the enrichment values are populated
+    asynchronously. This polls the result endpoint until all matched
+    candidates have the enrichment fields populated in their output.
+    """
+    import time
+
+    # Collect expected enrichment field names from schemas
+    expected_fields: set[str] = set()
+    for schema in enrichment_schemas:
+        expected_fields.update(schema.get("properties", {}).keys())
+
+    if not expected_fields:
+        # Nothing to wait for
+        result = client.beta.findall.result(findall_id=findall_id)
+        candidates = _serialize(getattr(result, "candidates", []))
+        result_status = _extract_status_from_result(result)
+        return {"findall_id": findall_id, **result_status, "candidates": candidates or []}
+
+    # Use a shorter timeout for enrichment polling (5 min default, capped at main timeout)
+    enrich_timeout = min(300, timeout)
+    start = time.time()
+    while time.time() - start < enrich_timeout:
+        result = client.beta.findall.result(findall_id=findall_id)
+        candidates = _serialize(getattr(result, "candidates", []))
+        result_status = _extract_status_from_result(result)
+
+        # Bail if the run failed (enrichment can cause run to error)
+        if result_status.get("status") == "failed":
+            return {"findall_id": findall_id, **result_status, "candidates": candidates or []}
+
+        matched = [c for c in candidates if c.get("match_status") == "matched"]
+        if not matched:
+            return {"findall_id": findall_id, **result_status, "candidates": candidates or []}
+
+        # Check if all matched candidates have enrichment fields in output
+        all_enriched = all(expected_fields.issubset((c.get("output") or {}).keys()) for c in matched)
+
+        if on_status:
+            enriched_count = sum(1 for c in matched if expected_fields.issubset((c.get("output") or {}).keys()))
+            on_status("enriching", findall_id, {"enriched": enriched_count, "total": len(matched)})
+
+        if all_enriched:
+            return {"findall_id": findall_id, **result_status, "candidates": candidates or []}
+
+        time.sleep(poll_interval)
+
+    # Timeout — return what we have
+    result = client.beta.findall.result(findall_id=findall_id)
+    candidates = _serialize(getattr(result, "candidates", []))
+    result_status = _extract_status_from_result(result)
+    return {"findall_id": findall_id, **result_status, "candidates": candidates or []}
+
+
 def run_findall(
     objective: str,
     generator: str = "core",
@@ -305,11 +368,16 @@ def run_findall(
     poll_interval: int = 30,
     on_status: FindAllStatusCallback | None = None,
     source: ClientSource = "python",
+    enrich: bool = True,
 ) -> dict[str, Any]:
     """Ingest, create, and poll a FindAll run to completion.
 
     This is the main all-in-one entry point. It converts the objective to a
     schema via ingest, creates a run, and polls until results are ready.
+
+    If the ingest step suggests enrichments (non-boolean data fields like
+    CEO name, revenue, etc.), they are automatically added to the run so
+    matched candidates include enriched data.
 
     Args:
         objective: Natural language query.
@@ -322,6 +390,7 @@ def run_findall(
         poll_interval: Seconds between status checks (default: 30).
         on_status: Optional callback(status, findall_id, metrics) on each poll.
         source: Client source identifier for User-Agent.
+        enrich: Whether to apply suggested enrichments from ingest. Default True.
 
     Returns:
         Dict with findall_id, status, metrics, and candidates.
@@ -330,6 +399,8 @@ def run_findall(
         TimeoutError: If the run doesn't complete within timeout.
         RuntimeError: If the run fails or is cancelled.
     """
+    from parallel.types import JsonSchemaParam
+
     client = create_client(api_key, source)
 
     # Step 1: Ingest - convert natural language to structured schema
@@ -337,6 +408,7 @@ def run_findall(
 
     entity_type = getattr(schema, "entity_type", "entities")
     match_conditions = _serialize(getattr(schema, "match_conditions", []))
+    enrichments = _serialize(getattr(schema, "enrichments", []))
 
     if on_status:
         on_status("ingested", "", {"entity_type": entity_type})
@@ -360,8 +432,37 @@ def run_findall(
     if on_status:
         on_status("created", findall_id, {})
 
-    # Step 3: Poll until complete
-    return _poll_findall_until_complete(client, findall_id, timeout, poll_interval, on_status)
+    # Step 3: Poll until the run completes
+    result = _poll_findall_until_complete(client, findall_id, timeout, poll_interval, on_status)
+
+    # Step 4: Add enrichments after completion and wait for them (best-effort)
+    if enrich and enrichments:
+        try:
+            enrichment_schemas = []
+            for enrichment in enrichments:
+                output_schema = enrichment.get("output_schema", {})
+                json_schema = output_schema.get("json_schema")
+                if json_schema:
+                    processor = enrichment.get("processor", "core")
+                    client.beta.findall.enrich(
+                        findall_id=findall_id,
+                        processor=processor,
+                        output_schema=JsonSchemaParam(type="json", json_schema=json_schema),
+                    )
+                    enrichment_schemas.append(json_schema)
+
+            if enrichment_schemas and on_status:
+                on_status("enriching", findall_id, {})
+
+            if enrichment_schemas:
+                result = _poll_enrichments_until_complete(
+                    client, findall_id, enrichment_schemas, timeout, poll_interval, on_status
+                )
+        except Exception:
+            # Enrichment is best-effort — return results without enrichment data
+            pass
+
+    return result
 
 
 def poll_findall(
@@ -394,3 +495,92 @@ def poll_findall(
         on_status("polling", findall_id, {})
 
     return _poll_findall_until_complete(client, findall_id, timeout, poll_interval, on_status)
+
+
+def enrich_findall(
+    findall_id: str,
+    output_schema: dict[str, Any],
+    processor: str = "core",
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> dict[str, Any]:
+    """Add enrichments to a FindAll run.
+
+    Enrichments extract additional non-boolean data from matched candidates
+    without affecting match conditions. Can be called anytime after a run is
+    created, even on completed runs.
+
+    Args:
+        findall_id: The FindAll run ID.
+        output_schema: JSON schema dict for enrichment fields, e.g.:
+            {"type": "object", "properties": {"ceo_name": {"type": "string", ...}}}
+        processor: Task API processor (base, core, auto). Default "core".
+        api_key: Optional API key override.
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        Dict with the updated run schema including enrichments.
+    """
+    from parallel.types import JsonSchemaParam
+
+    client = create_client(api_key, source)
+    result = client.beta.findall.enrich(
+        findall_id=findall_id,
+        processor=processor,
+        output_schema=JsonSchemaParam(type="json", json_schema=output_schema),
+    )
+    return _serialize(result)
+
+
+def extend_findall(
+    findall_id: str,
+    additional_match_limit: int,
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> dict[str, Any]:
+    """Extend a FindAll run to get more matches.
+
+    Increases the match limit without re-running the full search. Only pays
+    for additional matches beyond the original limit. Cannot be used on
+    preview runs.
+
+    Args:
+        findall_id: The FindAll run ID.
+        additional_match_limit: Number of additional matches to find.
+        api_key: Optional API key override.
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        Dict with findall_id and updated status.
+    """
+    client = create_client(api_key, source)
+    result = client.beta.findall.extend(
+        findall_id=findall_id,
+        additional_match_limit=additional_match_limit,
+    )
+    return _serialize(result)
+
+
+def get_findall_schema(
+    findall_id: str,
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> dict[str, Any]:
+    """Retrieve the schema of a FindAll run.
+
+    Useful for refreshing/rerunning searches with the same criteria.
+    Returns objective, entity_type, match_conditions, enrichments,
+    generator, and match_limit.
+
+    Args:
+        findall_id: The FindAll run ID.
+        api_key: Optional API key override.
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        Dict with the run's schema (objective, entity_type, match_conditions,
+        enrichments, generator, match_limit).
+    """
+    client = create_client(api_key, source)
+    schema = client.beta.findall.schema(findall_id=findall_id)
+    return _serialize(schema)
