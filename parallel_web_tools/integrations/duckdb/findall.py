@@ -103,7 +103,7 @@ def findall_table(
     conn: duckdb.DuckDBPyConnection,
     objective: str,
     *,
-    generator: str = "preview",
+    generator: str = "core",
     match_limit: int = 10,
     enrich: bool = True,
     result_table: str | None = None,
@@ -125,8 +125,8 @@ def findall_table(
         conn: DuckDB connection.
         objective: Natural language description of what to find
             (e.g. "find all fortune 500 companies and their CEO").
-        generator: Generator tier. Default "preview" (~10 candidates, fast).
-            Options: preview, base, core, pro.
+        generator: Generator tier. Default "core" (balanced breadth/depth).
+            Options: base, core, pro.
         match_limit: Max matched candidates (5-1000). Default 10.
         enrich: Whether to apply suggested enrichments. Default True.
         result_table: If provided, persist results to a named table.

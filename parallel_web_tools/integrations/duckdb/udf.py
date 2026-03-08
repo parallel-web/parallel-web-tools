@@ -256,7 +256,7 @@ def register_parallel_functions(
 def register_parallel_findall(
     conn: duckdb.DuckDBPyConnection,
     api_key: str | None = None,
-    generator: str = "preview",
+    generator: str = "core",
     match_limit: int = 10,
     enrich: bool = True,
     timeout: int = 3600,
@@ -275,7 +275,7 @@ def register_parallel_findall(
     Args:
         conn: DuckDB connection.
         api_key: Parallel API key. Uses PARALLEL_API_KEY env var if not set.
-        generator: Generator tier. Default "preview" (~10 candidates, fast).
+        generator: Generator tier. Default "core" (balanced breadth/depth).
         match_limit: Max matched candidates (5-1000). Default 10.
         enrich: Whether to apply suggested enrichments. Default True.
         timeout: Max wait in seconds (default 3600).

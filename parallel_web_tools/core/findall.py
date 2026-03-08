@@ -22,7 +22,6 @@ from parallel_web_tools.core.user_agent import ClientSource
 
 # Generator tiers for FindAll runs
 FINDALL_GENERATORS = {
-    "preview": "~10 candidates - test queries before committing",
     "base": "moderate pool - broad queries with many expected matches",
     "core": "large pool - specific queries, balanced breadth/depth",
     "pro": "largest pool - highly specific, hard-to-find matches",
@@ -110,7 +109,7 @@ def create_findall_run(
         objective: Natural language objective.
         entity_type: Type of entities to find (e.g., "companies").
         match_conditions: List of {"name": ..., "description": ...} dicts.
-        generator: Generator tier (preview, base, core, pro).
+        generator: Generator tier (base, core, pro).
         match_limit: Maximum matched candidates (5-1000).
         exclude_list: Optional list of {"name": ..., "url": ...} to exclude.
         metadata: Optional metadata dict.
@@ -367,8 +366,6 @@ def _add_enrichments(
     Enrichments must be added while the run is still active so the API
     can process them on matched candidates as they arrive.
     """
-    from parallel.types import JsonSchemaParam
-
     for enrichment in enrichments:
         output_schema = enrichment.get("output_schema", {})
         json_schema = output_schema.get("json_schema")
@@ -377,7 +374,7 @@ def _add_enrichments(
             client.beta.findall.enrich(
                 findall_id=findall_id,
                 processor=processor,
-                output_schema=JsonSchemaParam(type="json", json_schema=json_schema),
+                output_schema={"type": "json", "json_schema": json_schema},
             )
 
 
@@ -390,82 +387,6 @@ def _collect_enrichment_schemas(enrichments: list[dict[str, Any]]) -> list[dict[
         if json_schema:
             schemas.append(json_schema)
     return schemas
-
-
-def _enrich_candidates_via_task_api(
-    result: dict[str, Any],
-    enrichments: list[dict[str, Any]],
-    api_key: str | None,
-    source: ClientSource,
-    on_status: FindAllStatusCallback | None,
-) -> dict[str, Any]:
-    """Enrich matched candidates using the Task API (batch enrichment).
-
-    The FindAll-native enrich endpoint is unreliable, so we fall back to
-    enriching matched candidates via the standard Task API. Each matched
-    candidate is enriched with the schemas suggested by ingest.
-    """
-    from parallel_web_tools.core.batch import enrich_batch
-
-    candidates = result.get("candidates", [])
-    matched_indices = [i for i, c in enumerate(candidates) if c.get("match_status") == "matched"]
-    if not matched_indices:
-        return result
-
-    # Collect output columns from enrichment schemas
-    output_columns: list[str] = []
-    processor = "core"
-    for enrichment in enrichments:
-        output_schema = enrichment.get("output_schema", {})
-        json_schema = output_schema.get("json_schema", {})
-        processor = enrichment.get("processor", processor)
-        for prop_name, prop_def in json_schema.get("properties", {}).items():
-            desc = prop_def.get("description", prop_name)
-            output_columns.append(desc)
-
-    if not output_columns:
-        return result
-
-    if on_status:
-        on_status("enriching", result.get("findall_id", ""), {"total": len(matched_indices)})
-
-    # Build inputs from matched candidates
-    inputs = []
-    for idx in matched_indices:
-        c = candidates[idx]
-        inputs.append(
-            {
-                "name": c.get("name", ""),
-                "url": c.get("url", ""),
-                "description": c.get("description", ""),
-            }
-        )
-
-    # Run batch enrichment via Task API
-    enrichment_results = enrich_batch(
-        inputs=inputs,
-        output_columns=output_columns,
-        api_key=api_key,
-        processor=processor,
-        include_basis=False,
-        source=source,
-    )
-
-    # Merge enrichment data into candidate output fields
-    for i, idx in enumerate(matched_indices):
-        if i >= len(enrichment_results):
-            break
-        enrich_data = enrichment_results[i]
-        if "error" in enrich_data:
-            continue
-
-        output = candidates[idx].get("output") or {}
-        for key, value in enrich_data.items():
-            output[key] = {"type": "enrichment", "value": value}
-        candidates[idx]["output"] = output
-
-    result["candidates"] = candidates
-    return result
 
 
 def run_findall(
@@ -492,7 +413,7 @@ def run_findall(
 
     Args:
         objective: Natural language query.
-        generator: Generator tier (preview/base/core/pro).
+        generator: Generator tier (base/core/pro).
         match_limit: Maximum matched candidates (5-1000).
         exclude_list: Optional entities to exclude.
         metadata: Optional run metadata.
@@ -548,7 +469,6 @@ def run_findall(
         try:
             _add_enrichments(client, findall_id, enrichments)
         except Exception:
-            # If native enrichment fails, we'll fall back to Task API after polling
             enrichments = []
 
     # Step 4: Poll until the run completes (enrichments run in parallel)
@@ -607,27 +527,25 @@ def enrich_findall(
     """Add enrichments to a FindAll run.
 
     Enrichments extract additional non-boolean data from matched candidates
-    without affecting match conditions. Can be called anytime after a run is
-    created, even on completed runs.
+    without affecting match conditions. Must be called while the run is still
+    active — calling after the run completes will fail.
 
     Args:
         findall_id: The FindAll run ID.
         output_schema: JSON schema dict for enrichment fields, e.g.:
             {"type": "object", "properties": {"ceo_name": {"type": "string", ...}}}
-        processor: Task API processor (base, core, auto). Default "core".
+        processor: Processor to use (base, core, pro). Default "core".
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
 
     Returns:
         Dict with the updated run schema including enrichments.
     """
-    from parallel.types import JsonSchemaParam
-
     client = create_client(api_key, source)
     result = client.beta.findall.enrich(
         findall_id=findall_id,
         processor=processor,
-        output_schema=JsonSchemaParam(type="json", json_schema=output_schema),
+        output_schema={"type": "json", "json_schema": output_schema},
     )
     return _serialize(result)
 

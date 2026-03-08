@@ -561,10 +561,10 @@ class TestFindallGenerators:
     """Tests for FINDALL_GENERATORS constant."""
 
     def test_expected_generators(self):
-        assert "preview" in FINDALL_GENERATORS
         assert "base" in FINDALL_GENERATORS
         assert "core" in FINDALL_GENERATORS
         assert "pro" in FINDALL_GENERATORS
+        assert "preview" not in FINDALL_GENERATORS
 
     def test_generators_have_descriptions(self):
         for _gen, desc in FINDALL_GENERATORS.items():

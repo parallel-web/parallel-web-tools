@@ -1066,8 +1066,8 @@ class TestFindallTable:
         assert df["url"].iloc[1] is None
         assert df["industry"].iloc[1] == "Tech"
 
-    def test_default_generator_is_preview(self, conn):
-        """Should default to preview generator for speed."""
+    def test_default_generator_is_core(self, conn):
+        """Should default to core generator for enrichment support."""
         mock_result = {
             "findall_id": "findall_123",
             "status": "completed",
@@ -1079,4 +1079,4 @@ class TestFindallTable:
         ) as mock_run:
             findall_table(conn, "test")
 
-        assert mock_run.call_args.kwargs["generator"] == "preview"
+        assert mock_run.call_args.kwargs["generator"] == "core"
