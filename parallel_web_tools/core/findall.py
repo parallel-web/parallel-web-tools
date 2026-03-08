@@ -357,6 +357,82 @@ def _poll_enrichments_until_complete(
     return {"findall_id": findall_id, **result_status, "candidates": candidates or []}
 
 
+def _enrich_candidates_via_task_api(
+    result: dict[str, Any],
+    enrichments: list[dict[str, Any]],
+    api_key: str | None,
+    source: ClientSource,
+    on_status: FindAllStatusCallback | None,
+) -> dict[str, Any]:
+    """Enrich matched candidates using the Task API (batch enrichment).
+
+    The FindAll-native enrich endpoint is unreliable, so we fall back to
+    enriching matched candidates via the standard Task API. Each matched
+    candidate is enriched with the schemas suggested by ingest.
+    """
+    from parallel_web_tools.core.batch import enrich_batch
+
+    candidates = result.get("candidates", [])
+    matched_indices = [i for i, c in enumerate(candidates) if c.get("match_status") == "matched"]
+    if not matched_indices:
+        return result
+
+    # Collect output columns from enrichment schemas
+    output_columns: list[str] = []
+    processor = "core"
+    for enrichment in enrichments:
+        output_schema = enrichment.get("output_schema", {})
+        json_schema = output_schema.get("json_schema", {})
+        processor = enrichment.get("processor", processor)
+        for prop_name, prop_def in json_schema.get("properties", {}).items():
+            desc = prop_def.get("description", prop_name)
+            output_columns.append(desc)
+
+    if not output_columns:
+        return result
+
+    if on_status:
+        on_status("enriching", result.get("findall_id", ""), {"total": len(matched_indices)})
+
+    # Build inputs from matched candidates
+    inputs = []
+    for idx in matched_indices:
+        c = candidates[idx]
+        inputs.append(
+            {
+                "name": c.get("name", ""),
+                "url": c.get("url", ""),
+                "description": c.get("description", ""),
+            }
+        )
+
+    # Run batch enrichment via Task API
+    enrichment_results = enrich_batch(
+        inputs=inputs,
+        output_columns=output_columns,
+        api_key=api_key,
+        processor=processor,
+        include_basis=False,
+        source=source,
+    )
+
+    # Merge enrichment data into candidate output fields
+    for i, idx in enumerate(matched_indices):
+        if i >= len(enrichment_results):
+            break
+        enrich_data = enrichment_results[i]
+        if "error" in enrich_data:
+            continue
+
+        output = candidates[idx].get("output") or {}
+        for key, value in enrich_data.items():
+            output[key] = {"type": "enrichment", "value": value}
+        candidates[idx]["output"] = output
+
+    result["candidates"] = candidates
+    return result
+
+
 def run_findall(
     objective: str,
     generator: str = "core",
@@ -399,8 +475,6 @@ def run_findall(
         TimeoutError: If the run doesn't complete within timeout.
         RuntimeError: If the run fails or is cancelled.
     """
-    from parallel.types import JsonSchemaParam
-
     client = create_client(api_key, source)
 
     # Step 1: Ingest - convert natural language to structured schema
@@ -435,29 +509,10 @@ def run_findall(
     # Step 3: Poll until the run completes
     result = _poll_findall_until_complete(client, findall_id, timeout, poll_interval, on_status)
 
-    # Step 4: Add enrichments after completion and wait for them (best-effort)
+    # Step 4: Enrich matched candidates via the Task API (best-effort)
     if enrich and enrichments:
         try:
-            enrichment_schemas = []
-            for enrichment in enrichments:
-                output_schema = enrichment.get("output_schema", {})
-                json_schema = output_schema.get("json_schema")
-                if json_schema:
-                    processor = enrichment.get("processor", "core")
-                    client.beta.findall.enrich(
-                        findall_id=findall_id,
-                        processor=processor,
-                        output_schema=JsonSchemaParam(type="json", json_schema=json_schema),
-                    )
-                    enrichment_schemas.append(json_schema)
-
-            if enrichment_schemas and on_status:
-                on_status("enriching", findall_id, {})
-
-            if enrichment_schemas:
-                result = _poll_enrichments_until_complete(
-                    client, findall_id, enrichment_schemas, timeout, poll_interval, on_status
-                )
+            result = _enrich_candidates_via_task_api(result, enrichments, api_key, source, on_status)
         except Exception:
             # Enrichment is best-effort — return results without enrichment data
             pass
