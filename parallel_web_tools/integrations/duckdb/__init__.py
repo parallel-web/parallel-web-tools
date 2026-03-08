@@ -52,6 +52,7 @@ from parallel_web_tools.core.result import EnrichmentResult
 from parallel_web_tools.integrations.duckdb.batch import enrich_table
 from parallel_web_tools.integrations.duckdb.findall import findall_table
 from parallel_web_tools.integrations.duckdb.udf import (
+    register_parallel_findall,
     register_parallel_functions,
     unregister_parallel_functions,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "enrich_table",
     "findall_table",
     "EnrichmentResult",
+    "register_parallel_findall",
     "register_parallel_functions",
     "unregister_parallel_functions",
 ]
