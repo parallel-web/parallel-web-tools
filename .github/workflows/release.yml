@@ -22,9 +22,9 @@ jobs:
             platform: darwin-arm64
           - os: macos-15-large
             platform: darwin-x64
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux-x64
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             platform: linux-arm64
           - os: windows-latest
             platform: windows-x64
