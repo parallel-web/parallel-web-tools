@@ -29,3 +29,6 @@ class EnrichmentResult(Generic[T]):
 
     elapsed_time: float = 0.0
     """Total processing time in seconds."""
+
+    run_id: str | None = None
+    """Optional run ID (e.g., findall_id) for debugging or reporting."""

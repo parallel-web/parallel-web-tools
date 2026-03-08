@@ -159,6 +159,7 @@ def findall_table(
         enrich=enrich,
     )
 
+    findall_id = findall_result.get("findall_id")
     candidates = findall_result.get("candidates", [])
     col_names, rows = _flatten_candidates(candidates)
 
@@ -171,6 +172,7 @@ def findall_table(
             error_count=0,
             errors=[],
             elapsed_time=time.time() - start_time,
+            run_id=findall_id,
         )
 
     # Create temp table with results
@@ -201,4 +203,5 @@ def findall_table(
         error_count=0,
         errors=[],
         elapsed_time=time.time() - start_time,
+        run_id=findall_id,
     )
