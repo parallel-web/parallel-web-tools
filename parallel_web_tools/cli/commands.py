@@ -431,15 +431,39 @@ def auth(output_json: bool):
 
 @main.command()
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-def login(output_json: bool):
+@click.option("--device", is_flag=True, help="Use device authorization flow (for SSH, containers, etc.)")
+def login(output_json: bool, device: bool):
     """Authenticate with Parallel API."""
     if not output_json:
-        console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
+        if device:
+            console.print("[bold cyan]Authenticating with Parallel (device flow)...[/bold cyan]\n")
+        else:
+            console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
+
+    def _on_device_code(info):
+        if output_json:
+            print(
+                json.dumps(
+                    {
+                        "status": "waiting_for_authorization",
+                        "verification_uri": info.verification_uri,
+                        "verification_uri_complete": info.verification_uri_complete,
+                        "user_code": info.user_code,
+                        "expires_in": info.expires_in,
+                    }
+                ),
+                flush=True,
+            )
+        else:
+            console.print(f"Visit: [bold cyan]{info.verification_uri}[/bold cyan]")
+            console.print(f"Enter code: [bold yellow]{info.user_code}[/bold yellow]\n")
+            console.print(f"Or open: [link={info.verification_uri_complete}]{info.verification_uri_complete}[/link]\n")
+            console.print("Waiting for authorization...")
 
     try:
-        get_api_key(force_login=True)
+        get_api_key(force_login=True, device=device, on_device_code=_on_device_code)
         if output_json:
-            print(json.dumps({"status": "authenticated"}, indent=2))
+            print(json.dumps({"status": "authenticated"}))
         else:
             console.print("\n[bold green]Authentication successful![/bold green]")
     except Exception as e:

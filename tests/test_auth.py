@@ -2,19 +2,25 @@
 
 import json
 import os
+import urllib.error
 from unittest import mock
 
 import pytest
 
 from parallel_web_tools.core.auth import (
+    DeviceCodeInfo,
+    _do_device_flow,
     _generate_code_challenge,
     _generate_code_verifier,
+    _is_headless,
     _load_stored_token,
     _save_token,
     create_client,
     get_api_key,
     get_auth_status,
     logout,
+    poll_device_token,
+    request_device_code,
     resolve_api_key,
 )
 
@@ -116,12 +122,14 @@ class TestGetApiKey:
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": env_key}):
             with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
                 with mock.patch("parallel_web_tools.core.auth._do_oauth_flow") as mock_oauth:
-                    mock_oauth.return_value = "new_oauth_token"
+                    with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
+                        mock_oauth.return_value = "new_oauth_token"
+                        mock_device.return_value = "new_device_token"
 
-                    result = get_api_key(force_login=True)
+                        result = get_api_key(force_login=True)
 
-                    assert result == "new_oauth_token"
-                    mock_oauth.assert_called_once()
+                        # Either flow may be chosen depending on environment
+                        assert result in ("new_oauth_token", "new_device_token")
 
 
 class TestAuthStatus:
@@ -247,3 +255,330 @@ class TestResolveApiKeyInAuth:
             with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
                 result = resolve_api_key()
                 assert result == "stored-token"
+
+
+class TestIsHeadless:
+    """Tests for headless environment detection."""
+
+    def test_ssh_client_detected(self):
+        with mock.patch.dict(os.environ, {"SSH_CLIENT": "1.2.3.4 54321 22"}):
+            assert _is_headless() is True
+
+    def test_ssh_tty_detected(self):
+        with mock.patch.dict(os.environ, {"SSH_TTY": "/dev/pts/0"}):
+            assert _is_headless() is True
+
+    def test_ci_detected(self):
+        with mock.patch.dict(os.environ, {"CI": "true"}):
+            assert _is_headless() is True
+
+    def test_docker_detected(self):
+        with mock.patch("os.path.exists", return_value=True):
+            assert _is_headless() is True
+
+    def test_container_env_detected(self):
+        with mock.patch.dict(os.environ, {"container": "podman"}):
+            with mock.patch("os.path.exists", return_value=False):
+                assert _is_headless() is True
+
+    def test_normal_env_not_headless(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("SSH_CLIENT", "SSH_TTY", "CI", "container")}
+        env["DISPLAY"] = ":0"  # Ensure Linux display check passes
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("os.path.exists", return_value=False):
+                assert _is_headless() is False
+
+
+def _make_http_error(status, body):
+    """Helper to create a urllib HTTPError with a JSON body."""
+    import io
+    from email.message import Message
+
+    resp = io.BytesIO(json.dumps(body).encode())
+    return urllib.error.HTTPError(
+        url="https://example.com",
+        code=status,
+        msg="Bad Request",
+        hdrs=Message(),
+        fp=resp,
+    )
+
+
+SAMPLE_DEVICE_CODE_INFO = DeviceCodeInfo(
+    device_code="a" * 48,
+    user_code="BCDF-GHJK",
+    verification_uri="https://platform.parallel.ai/getKeys/device",
+    verification_uri_complete="https://platform.parallel.ai/getKeys/device?user_code=BCDF-GHJK",
+    expires_in=600,
+    interval=5,
+)
+
+
+def _mock_urlopen_sequence(responses):
+    """Create a mock urlopen that returns a sequence of responses.
+
+    Each response is either a dict (success) or an HTTPError (error).
+    """
+    import io
+    from contextlib import contextmanager
+
+    call_count = 0
+
+    @contextmanager
+    def mock_urlopen(req, timeout=None):
+        nonlocal call_count
+        idx = min(call_count, len(responses) - 1)
+        resp = responses[idx]
+        call_count += 1
+
+        if isinstance(resp, urllib.error.HTTPError):
+            raise resp
+
+        body = json.dumps(resp).encode()
+        fp = io.BytesIO(body)
+        yield fp
+
+    return mock_urlopen
+
+
+class TestRequestDeviceCode:
+    """Tests for the request_device_code public function."""
+
+    DEVICE_RESPONSE = {
+        "device_code": "a" * 48,
+        "user_code": "BCDF-GHJK",
+        "verification_uri": "https://platform.parallel.ai/getKeys/device",
+        "verification_uri_complete": "https://platform.parallel.ai/getKeys/device?user_code=BCDF-GHJK",
+        "expires_in": 600,
+        "interval": 5,
+    }
+
+    def test_returns_device_code_info(self):
+        """Should return a DeviceCodeInfo dataclass."""
+        mock_urlopen = _mock_urlopen_sequence([self.DEVICE_RESPONSE])
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            info = request_device_code()
+
+        assert isinstance(info, DeviceCodeInfo)
+        assert info.device_code == "a" * 48
+        assert info.user_code == "BCDF-GHJK"
+        assert info.verification_uri == "https://platform.parallel.ai/getKeys/device"
+        assert info.expires_in == 600
+        assert info.interval == 5
+
+    def test_raises_on_http_error(self):
+        """Should raise on server error."""
+        error = _make_http_error(500, {"error": "internal"})
+        mock_urlopen = _mock_urlopen_sequence([error])
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            with pytest.raises(Exception, match="Device code request failed"):
+                request_device_code()
+
+
+class TestPollDeviceToken:
+    """Tests for the poll_device_token public function."""
+
+    TOKEN_RESPONSE = {
+        "access_token": "test-api-key-from-device",
+        "token_type": "bearer",
+        "scope": "key:read",
+    }
+
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_returns_token_on_success(self, mock_sleep):
+        """Should return access token when approved."""
+        mock_urlopen = _mock_urlopen_sequence([self.TOKEN_RESPONSE])
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            token = poll_device_token(SAMPLE_DEVICE_CODE_INFO)
+
+        assert token == "test-api-key-from-device"
+
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_polls_through_pending(self, mock_sleep):
+        """Should keep polling on authorization_pending."""
+        mock_urlopen = _mock_urlopen_sequence(
+            [
+                _make_http_error(400, {"error": "authorization_pending"}),
+                _make_http_error(400, {"error": "authorization_pending"}),
+                self.TOKEN_RESPONSE,
+            ]
+        )
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            token = poll_device_token(SAMPLE_DEVICE_CODE_INFO)
+
+        assert token == "test-api-key-from-device"
+        assert mock_sleep.call_count == 3
+
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_slow_down_increases_interval(self, mock_sleep):
+        """slow_down should increase polling interval by 5 seconds."""
+        mock_urlopen = _mock_urlopen_sequence(
+            [
+                _make_http_error(400, {"error": "slow_down"}),
+                self.TOKEN_RESPONSE,
+            ]
+        )
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            poll_device_token(SAMPLE_DEVICE_CODE_INFO)
+
+        assert mock_sleep.call_args_list[0] == mock.call(5)
+        assert mock_sleep.call_args_list[1] == mock.call(10)
+
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_raises_on_access_denied(self, mock_sleep):
+        mock_urlopen = _mock_urlopen_sequence(
+            [
+                _make_http_error(400, {"error": "access_denied"}),
+            ]
+        )
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            with pytest.raises(Exception, match="Authorization denied"):
+                poll_device_token(SAMPLE_DEVICE_CODE_INFO)
+
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_raises_on_expired_token(self, mock_sleep):
+        mock_urlopen = _mock_urlopen_sequence(
+            [
+                _make_http_error(400, {"error": "expired_token"}),
+            ]
+        )
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            with pytest.raises(Exception, match="expired"):
+                poll_device_token(SAMPLE_DEVICE_CODE_INFO)
+
+
+class TestDoDeviceFlow:
+    """Tests for the _do_device_flow convenience wrapper."""
+
+    DEVICE_RESPONSE = {
+        "device_code": "a" * 48,
+        "user_code": "BCDF-GHJK",
+        "verification_uri": "https://platform.parallel.ai/getKeys/device",
+        "verification_uri_complete": "https://platform.parallel.ai/getKeys/device?user_code=BCDF-GHJK",
+        "expires_in": 600,
+        "interval": 5,
+    }
+
+    TOKEN_RESPONSE = {
+        "access_token": "test-api-key-from-device",
+        "token_type": "bearer",
+        "scope": "key:read",
+    }
+
+    @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_default_prints_to_stderr(self, mock_sleep, mock_browser_open):
+        """Without callback, should print instructions to stderr."""
+        mock_urlopen = _mock_urlopen_sequence(
+            [
+                self.DEVICE_RESPONSE,
+                self.TOKEN_RESPONSE,
+            ]
+        )
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            token = _do_device_flow()
+
+        assert token == "test-api-key-from-device"
+        mock_browser_open.assert_called_once()
+
+    @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
+    @mock.patch("parallel_web_tools.core.auth.time.sleep")
+    def test_callback_receives_device_code_info(self, mock_sleep, mock_browser_open):
+        """on_device_code callback should receive DeviceCodeInfo."""
+        mock_urlopen = _mock_urlopen_sequence(
+            [
+                self.DEVICE_RESPONSE,
+                self.TOKEN_RESPONSE,
+            ]
+        )
+
+        captured = []
+
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen", side_effect=mock_urlopen):
+            token = _do_device_flow(on_device_code=lambda info: captured.append(info))
+
+        assert token == "test-api-key-from-device"
+        assert len(captured) == 1
+        assert isinstance(captured[0], DeviceCodeInfo)
+        assert captured[0].user_code == "BCDF-GHJK"
+        # Browser should NOT be opened when callback is provided
+        mock_browser_open.assert_not_called()
+
+
+class TestGetApiKeyDeviceFlow:
+    """Tests for get_api_key with device flow integration."""
+
+    def test_device_flag_uses_device_flow(self, tmp_path):
+        """device=True should use device flow instead of browser OAuth."""
+        token_file = tmp_path / "tokens.json"
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("PARALLEL_API_KEY", None)
+            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+                with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
+                    mock_device.return_value = "device-token"
+
+                    result = get_api_key(force_login=True, device=True)
+
+                    assert result == "device-token"
+                    mock_device.assert_called_once()
+
+    def test_headless_auto_selects_device_flow(self, tmp_path):
+        """Headless environment should auto-select device flow."""
+        token_file = tmp_path / "tokens.json"
+
+        with mock.patch.dict(os.environ, {"SSH_CLIENT": "1.2.3.4 54321 22"}, clear=True):
+            os.environ.pop("PARALLEL_API_KEY", None)
+            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+                with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
+                    mock_device.return_value = "ssh-device-token"
+
+                    result = get_api_key(force_login=True)
+
+                    assert result == "ssh-device-token"
+                    mock_device.assert_called_once()
+
+    def test_non_headless_uses_browser_flow(self, tmp_path):
+        """Non-headless environment should use browser-based OAuth."""
+        token_file = tmp_path / "tokens.json"
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("SSH_CLIENT", "SSH_TTY", "CI", "container", "PARALLEL_API_KEY")
+        }
+        env["DISPLAY"] = ":0"  # Ensure Linux display check passes
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+                with mock.patch("os.path.exists", return_value=False):
+                    with mock.patch("parallel_web_tools.core.auth._do_oauth_flow") as mock_oauth:
+                        mock_oauth.return_value = "browser-token"
+
+                        result = get_api_key(force_login=True)
+
+                        assert result == "browser-token"
+                        mock_oauth.assert_called_once()
+
+    def test_on_device_code_callback_passed_through(self, tmp_path):
+        """on_device_code callback should be passed to _do_device_flow."""
+        token_file = tmp_path / "tokens.json"
+        callback = mock.Mock()
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("PARALLEL_API_KEY", None)
+            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+                with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
+                    mock_device.return_value = "callback-token"
+
+                    result = get_api_key(force_login=True, device=True, on_device_code=callback)
+
+                    assert result == "callback-token"
+                    mock_device.assert_called_once_with(on_device_code=callback)
