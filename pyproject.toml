@@ -29,7 +29,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "parallel-web>=0.4.1",
+    "parallel-web>=0.4.2",
     "python-dotenv>=1.0.0",
     # CLI dependencies (minimal - search, extract, enrich with CLI args)
     "click>=8.1.0",
