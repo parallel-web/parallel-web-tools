@@ -65,7 +65,7 @@ pip install parallel-web-tools[all]
 ```
 parallel-cli
 ├── auth                    # Check authentication status
-├── login                   # OAuth login (or use PARALLEL_API_KEY env var)
+├── login                   # OAuth login (--device for SSH/containers/CI)
 ├── logout                  # Remove stored credentials
 ├── search                  # Web search
 ├── extract / fetch         # Extract content from URLs
@@ -87,6 +87,9 @@ parallel-cli
 │   ├── status              # Check status of a FindAll run
 │   ├── poll                # Poll until completion
 │   ├── result              # Fetch results of a completed run
+│   ├── enrich              # Enrich existing FindAll results with new columns
+│   ├── extend              # Request additional candidates for a run
+│   ├── schema              # Get the schema for a FindAll run
 │   └── cancel              # Cancel a running FindAll
 └── monitor                 # Continuous web change tracking
     ├── create              # Create a new web monitor
@@ -104,8 +107,11 @@ parallel-cli
 ### 1. Authenticate
 
 ```bash
-# Interactive OAuth login
+# Interactive OAuth login (opens browser)
 parallel-cli login
+
+# Device authorization flow — for SSH, containers, CI, or headless environments
+parallel-cli login --device
 
 # Or set environment variable
 export PARALLEL_API_KEY=your_api_key
@@ -269,9 +275,11 @@ print(result.result)
 **DuckDB:**
 ```python
 import duckdb
-from parallel_web_tools.integrations.duckdb import enrich_table
+from parallel_web_tools.integrations.duckdb import enrich_table, findall_table
 
 conn = duckdb.connect()
+
+# Enrich an existing table
 conn.execute("CREATE TABLE companies AS SELECT 'Google' as name")
 result = enrich_table(
     conn,
@@ -280,6 +288,14 @@ result = enrich_table(
     output_columns=["CEO name", "Founding year"],
 )
 print(result.result.fetchdf())
+
+# Discover entities with FindAll
+result = findall_table(
+    conn,
+    "countries that have won the FIFA World Cup and their capital cities",
+    match_limit=10,
+)
+result.result.show()
 ```
 
 ## Programmatic Usage
@@ -298,6 +314,56 @@ run_enrichment_from_dict({
     "source_columns": [{"name": "company", "description": "Company name"}],
     "enriched_columns": [{"name": "ceo", "description": "CEO name"}]
 })
+```
+
+### Device Authorization (RFC 8628)
+
+For headless environments (SSH, containers, CI), use the device authorization flow:
+
+```python
+from parallel_web_tools import request_device_code, poll_device_token
+
+# Step 1: Request a device code
+device_info = request_device_code()
+print(f"Go to: {device_info.verification_uri_complete}")
+
+# Step 2: Poll until the user authorizes
+token = poll_device_token(device_info.device_code)
+```
+
+### FindAll
+
+Discover entities from the web using natural language:
+
+```python
+from parallel_web_tools import run_findall
+
+# Discover entities (auto-enriches by default)
+result = run_findall("AI startups in healthcare", match_limit=20)
+
+# Post-run operations
+from parallel_web_tools import enrich_findall, extend_findall, get_findall_schema
+
+schema = get_findall_schema(result.run_id)
+enriched = enrich_findall(result.run_id, ["funding amount", "number of employees"])
+extended = extend_findall(result.run_id, additional_matches=10)
+```
+
+### Monitor
+
+Track web changes programmatically:
+
+```python
+from parallel_web_tools import create_monitor, list_monitors, get_monitor
+
+# Create a monitor
+monitor = create_monitor(query="Track Tesla SEC filings", cadence="daily")
+
+# List all monitors
+monitors = list_monitors()
+
+# Get monitor details and events
+details = get_monitor(monitor.monitor_id)
 ```
 
 ## YAML Configuration Format
