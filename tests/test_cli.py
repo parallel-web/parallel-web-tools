@@ -1737,3 +1737,74 @@ class TestEnrichRunJsonOutput:
         assert isinstance(data, list)
         assert len(data) == 1
         assert data[0]["company"] == "Google"
+
+
+class TestCompletion:
+    """Tests for the shell completion commands."""
+
+    def test_completion_show_bash(self, runner):
+        """Should output bash completion script."""
+        result = runner.invoke(main, ["completion", "show", "--shell", "bash"])
+        assert result.exit_code == 0
+        assert "_PARALLEL_CLI_COMPLETE=bash_source" in result.output
+
+    def test_completion_show_zsh(self, runner):
+        """Should output zsh completion script."""
+        result = runner.invoke(main, ["completion", "show", "--shell", "zsh"])
+        assert result.exit_code == 0
+        assert "_PARALLEL_CLI_COMPLETE=zsh_source" in result.output
+
+    def test_completion_show_fish(self, runner):
+        """Should output fish completion script."""
+        result = runner.invoke(main, ["completion", "show", "--shell", "fish"])
+        assert result.exit_code == 0
+        assert "_PARALLEL_CLI_COMPLETE=fish_source" in result.output
+
+    def test_completion_show_auto_detect(self, runner):
+        """Should auto-detect shell from SHELL env var."""
+        with mock.patch.dict(os.environ, {"SHELL": "/bin/zsh"}):
+            result = runner.invoke(main, ["completion", "show"])
+        assert result.exit_code == 0
+        assert "_PARALLEL_CLI_COMPLETE=zsh_source" in result.output
+
+    def test_completion_show_unknown_shell(self, runner):
+        """Should fail gracefully when shell cannot be detected."""
+        with mock.patch.dict(os.environ, {"SHELL": "/bin/unknown"}, clear=False):
+            result = runner.invoke(main, ["completion", "show"])
+        assert result.exit_code != 0
+
+    def test_completion_install_creates_config(self, runner, tmp_path):
+        """Should append completion line to shell config."""
+        config_file = tmp_path / ".zshrc"
+        config_file.write_text("# existing config\n")
+
+        with mock.patch(
+            "parallel_web_tools.cli.commands._SHELL_CONFIG_FILES",
+            {"bash": str(tmp_path / ".bashrc"), "zsh": str(config_file), "fish": str(tmp_path / "config.fish")},
+        ):
+            result = runner.invoke(main, ["completion", "install", "--shell", "zsh"])
+
+        assert result.exit_code == 0
+        content = config_file.read_text()
+        assert "# parallel-cli shell completion" in content
+        assert "_PARALLEL_CLI_COMPLETE=zsh_source" in content
+
+    def test_completion_install_idempotent(self, runner, tmp_path):
+        """Should not add duplicate completion lines."""
+        config_file = tmp_path / ".zshrc"
+        config_file.write_text("# parallel-cli shell completion\neval ...\n")
+
+        with mock.patch(
+            "parallel_web_tools.cli.commands._SHELL_CONFIG_FILES",
+            {"bash": str(tmp_path / ".bashrc"), "zsh": str(config_file), "fish": str(tmp_path / "config.fish")},
+        ):
+            result = runner.invoke(main, ["completion", "install", "--shell", "zsh"])
+
+        assert result.exit_code == 0
+        assert "already installed" in result.output
+
+    def test_completion_install_standalone_rejected(self, runner):
+        """Should reject install in standalone binary mode."""
+        with mock.patch("parallel_web_tools.cli.commands._STANDALONE_MODE", True):
+            result = runner.invoke(main, ["completion", "install", "--shell", "bash"])
+        assert result.exit_code != 0

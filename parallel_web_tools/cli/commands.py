@@ -2863,5 +2863,129 @@ def monitor_simulate(monitor_id: str, event_type: str | None, output_json: bool)
         _handle_error(e, output_json=output_json)
 
 
+# =============================================================================
+# Shell Completion
+# =============================================================================
+
+SUPPORTED_SHELLS = ["bash", "zsh", "fish"]
+
+# Completion script templates using Click's built-in shell completion.
+# These eval the _PARALLEL_CLI_COMPLETE env var at shell startup.
+_COMPLETION_SCRIPTS = {
+    "bash": 'eval "$(_PARALLEL_CLI_COMPLETE=bash_source parallel-cli)"',
+    "zsh": 'eval "$(_PARALLEL_CLI_COMPLETE=zsh_source parallel-cli)"',
+    "fish": "_PARALLEL_CLI_COMPLETE=fish_source parallel-cli | source",
+}
+
+# Default shell config file paths
+_SHELL_CONFIG_FILES = {
+    "bash": "~/.bashrc",
+    "zsh": "~/.zshrc",
+    "fish": "~/.config/fish/config.fish",
+}
+
+# Guard comment to prevent duplicate installs
+_GUARD_COMMENT = "# parallel-cli shell completion"
+
+
+def _detect_shell() -> str | None:
+    """Detect the current shell from the SHELL environment variable."""
+    shell_path = os.environ.get("SHELL", "")
+    for shell in SUPPORTED_SHELLS:
+        if shell in shell_path:
+            return shell
+    return None
+
+
+@main.group()
+def completion():
+    """Shell completion for bash, zsh, and fish."""
+    pass
+
+
+@completion.command(name="show")
+@click.option(
+    "--shell",
+    "shell_name",
+    type=click.Choice(SUPPORTED_SHELLS),
+    default=None,
+    help="Shell type (auto-detected from $SHELL if not specified)",
+)
+def completion_show(shell_name: str | None):
+    """Print the shell completion script to stdout.
+
+    The output can be saved to a file or eval'd directly:
+
+    \b
+        # Add to your shell config
+        parallel-cli completion show --shell zsh >> ~/.zshrc
+
+        # Or eval directly
+        eval "$(parallel-cli completion show --shell bash)"
+    """
+    if shell_name is None:
+        shell_name = _detect_shell()
+        if shell_name is None:
+            console.print("[red]Could not detect shell.[/red] Use --shell to specify: bash, zsh, or fish")
+            sys.exit(EXIT_BAD_INPUT)
+
+    click.echo(_COMPLETION_SCRIPTS[shell_name])
+
+
+@completion.command(name="install")
+@click.option(
+    "--shell",
+    "shell_name",
+    type=click.Choice(SUPPORTED_SHELLS),
+    default=None,
+    help="Shell type (auto-detected from $SHELL if not specified)",
+)
+def completion_install(shell_name: str | None):
+    """Install shell completions for the current shell.
+
+    Appends the completion script to your shell config file.
+    Safe to run multiple times (won't add duplicates).
+
+    \b
+    Examples:
+        parallel-cli completion install
+        parallel-cli completion install --shell zsh
+    """
+    if _STANDALONE_MODE:
+        console.print(
+            "[yellow]Shell completions are not supported in standalone binary mode.[/yellow]\n"
+            "Install via pip to use completions: "
+            "[cyan]pip install parallel-web-tools[/cyan]"
+        )
+        sys.exit(EXIT_BAD_INPUT)
+
+    if shell_name is None:
+        shell_name = _detect_shell()
+        if shell_name is None:
+            console.print("[red]Could not detect shell.[/red] Use --shell to specify: bash, zsh, or fish")
+            sys.exit(EXIT_BAD_INPUT)
+
+    config_path = os.path.expanduser(_SHELL_CONFIG_FILES[shell_name])
+    script_line = _COMPLETION_SCRIPTS[shell_name]
+    install_line = f"{_GUARD_COMMENT}\n{script_line}\n"
+
+    # Check for existing installation
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            content = f.read()
+        if _GUARD_COMMENT in content:
+            console.print(f"[green]Shell completions already installed[/green] in {config_path}")
+            return
+
+    # Append to config file
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, "a") as f:
+        f.write(f"\n{install_line}")
+
+    console.print("[bold green]Shell completions installed![/bold green]")
+    console.print(f"[dim]Added to {config_path}[/dim]")
+    console.print(f"\nRestart your shell or run: [cyan]source {config_path}[/cyan]")
+
+
 if __name__ == "__main__":
     main()
