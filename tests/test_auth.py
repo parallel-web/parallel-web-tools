@@ -283,6 +283,7 @@ class TestIsHeadless:
 
     def test_normal_env_not_headless(self):
         env = {k: v for k, v in os.environ.items() if k not in ("SSH_CLIENT", "SSH_TTY", "CI", "container")}
+        env["DISPLAY"] = ":0"  # Ensure Linux display check passes
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch("os.path.exists", return_value=False):
                 assert _is_headless() is False
@@ -553,6 +554,7 @@ class TestGetApiKeyDeviceFlow:
             for k, v in os.environ.items()
             if k not in ("SSH_CLIENT", "SSH_TTY", "CI", "container", "PARALLEL_API_KEY")
         }
+        env["DISPLAY"] = ":0"  # Ensure Linux display check passes
 
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
