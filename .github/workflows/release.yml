@@ -144,3 +144,67 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    # Skip for pre-release versions (RCs)
+    if: ${{ !contains(github.event.release.tag_name || github.event.inputs.tag, 'rc') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Get version from tag
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download checksum files from release
+        run: |
+          mkdir -p checksums
+          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
+          for platform in darwin-arm64 darwin-x64; do
+            gh release download "$TAG" \
+              --pattern "parallel-cli-${platform}.zip.sha256" \
+              --dir checksums || echo "Warning: No checksum for ${platform}"
+          done
+          echo "Downloaded checksums:"
+          ls -la checksums/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Generate Homebrew cask
+        run: |
+          python scripts/update-homebrew-formula.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --checksums-dir checksums \
+            --output cask/parallel-cli.rb
+          echo "Generated cask:"
+          cat cask/parallel-cli.rb
+
+      - name: Push cask to Homebrew tap
+        run: |
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/parallel-web/homebrew-tap.git tap-repo
+          mkdir -p tap-repo/Casks
+          cp cask/parallel-cli.rb tap-repo/Casks/parallel-cli.rb
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/parallel-cli.rb
+          if git diff --cached --quiet; then
+            echo "No changes to cask"
+          else
+            git commit -m "Update parallel-cli to ${{ steps.version.outputs.version }}"
+            git push origin main
+            echo "Cask updated successfully"
+          fi
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

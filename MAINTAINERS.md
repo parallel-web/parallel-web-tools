@@ -51,6 +51,10 @@ After the workflows complete:
 curl -fsSL https://raw.githubusercontent.com/parallel-web/parallel-web-tools/main/install-cli.sh | bash
 parallel-cli --version
 
+# Test Homebrew installation
+brew install parallel-web/tap/parallel-cli
+parallel-cli --version
+
 # Test PyPI installation
 pip install parallel-web-tools[all] --upgrade
 parallel-cli --version
@@ -158,13 +162,36 @@ twine yank parallel-web-tools==0.0.1
 # Must be done via PyPI web interface within 24 hours
 ```
 
+## Homebrew Tap
+
+The Homebrew formula is published to [parallel-web/homebrew-tap](https://github.com/parallel-web/homebrew-tap).
+
+### First-Time Setup
+
+1. Create the `parallel-web/homebrew-tap` repository on GitHub
+2. Add a `HOMEBREW_TAP_TOKEN` secret to this repository — a GitHub PAT with `repo` scope
+   that has write access to `parallel-web/homebrew-tap`
+
+The `publish-homebrew` job in `release.yml` automatically updates the formula on stable releases
+(skips RCs). It downloads SHA256 checksums from the release and generates the formula.
+
+### Manual Formula Update
+
+```bash
+# Generate formula from the latest release
+python scripts/update-homebrew-formula.py --output homebrew/parallel-cli.rb
+
+# Generate formula for a specific version
+python scripts/update-homebrew-formula.py --version 0.1.2 --output homebrew/parallel-cli.rb
+```
+
 ## CI/CD Workflows
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | Push to main, PRs | Run tests and type checking |
 | `auto-release.yml` | Push to main (version bump commits) | Create tag + GitHub Release |
-| `release.yml` | Release created | Build binaries for all platforms |
+| `release.yml` | Release created | Build binaries, publish to npm + Homebrew |
 | `publish.yml` | Release published | Publish to PyPI |
 
 ### Manually Trigger Workflows

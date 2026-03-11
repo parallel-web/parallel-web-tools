@@ -25,10 +25,14 @@ Requires **Python 3.10+**.
 Install the standalone `parallel-cli` binary for search, extract, enrichment, and deep research (no Python required):
 
 ```bash
+# macOS / Linux (Homebrew)
+brew install parallel-web/tap/parallel-cli
+
+# macOS / Linux (shell script)
 curl -fsSL https://parallel.ai/install.sh | bash
 ```
 
-This automatically detects your platform (macOS/Linux, x64/arm64) and installs to `~/.local/bin`.
+The shell script automatically detects your platform (macOS/Linux, x64/arm64) and installs to `~/.local/bin`.
 
 > **Note:** The standalone binary supports `search`, `extract`, `research`, and `enrich run` with CLI arguments, CSV files, and JSON files. For YAML config files, interactive planner, DuckDB/BigQuery sources, or deployment commands, use pip install.
 
