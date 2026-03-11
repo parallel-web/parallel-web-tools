@@ -130,14 +130,17 @@ jobs:
 
       - name: Get version from tag
         id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
         run: |
-          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Update package.json version
         working-directory: npm
-        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Publish to npm
         working-directory: npm
@@ -162,15 +165,18 @@ jobs:
 
       - name: Get version from tag
         id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
         run: |
-          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download checksum files from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
         run: |
           mkdir -p checksums
-          TAG="${{ github.event.release.tag_name || github.event.inputs.tag }}"
           for platform in darwin-arm64 darwin-x64; do
             gh release download "$TAG" \
               --pattern "parallel-cli-${platform}.zip.sha256" \
@@ -178,19 +184,22 @@ jobs:
           done
           echo "Downloaded checksums:"
           ls -la checksums/
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Generate Homebrew cask
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           python scripts/update-homebrew-formula.py \
-            --version "${{ steps.version.outputs.version }}" \
+            --version "$VERSION" \
             --checksums-dir checksums \
             --output cask/parallel-cli.rb
           echo "Generated cask:"
           cat cask/parallel-cli.rb
 
       - name: Push cask to Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           git clone https://x-access-token:${TAP_TOKEN}@github.com/parallel-web/homebrew-tap.git tap-repo
           mkdir -p tap-repo/Casks
@@ -202,9 +211,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to cask"
           else
-            git commit -m "Update parallel-cli to ${{ steps.version.outputs.version }}"
+            git commit -m "Update parallel-cli to ${VERSION}"
             git push origin main
             echo "Cask updated successfully"
           fi
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
