@@ -122,12 +122,14 @@ class TestGetApiKey:
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": env_key}):
             with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
                 with mock.patch("parallel_web_tools.core.auth._do_oauth_flow") as mock_oauth:
-                    mock_oauth.return_value = "new_oauth_token"
+                    with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
+                        mock_oauth.return_value = "new_oauth_token"
+                        mock_device.return_value = "new_device_token"
 
-                    result = get_api_key(force_login=True)
+                        result = get_api_key(force_login=True)
 
-                    assert result == "new_oauth_token"
-                    mock_oauth.assert_called_once()
+                        # Either flow may be chosen depending on environment
+                        assert result in ("new_oauth_token", "new_device_token")
 
 
 class TestAuthStatus:
