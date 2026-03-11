@@ -1,12 +1,15 @@
 """Core functionality for Parallel Data."""
 
 from parallel_web_tools.core.auth import (
+    DeviceCodeInfo,
     create_client,
     get_api_key,
     get_async_client,
     get_auth_status,
     get_client,
     logout,
+    poll_device_token,
+    request_device_code,
     resolve_api_key,
 )
 from parallel_web_tools.core.batch import (
@@ -79,12 +82,15 @@ from parallel_web_tools.core.user_agent import (
 
 __all__ = [
     # Auth
+    "DeviceCodeInfo",
     "create_client",
     "get_api_key",
     "get_auth_status",
     "get_client",
     "get_async_client",
     "logout",
+    "poll_device_token",
+    "request_device_code",
     "resolve_api_key",
     # User Agent
     "ClientSource",

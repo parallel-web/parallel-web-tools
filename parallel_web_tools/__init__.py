@@ -4,6 +4,7 @@
 from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     Column,
+    DeviceCodeInfo,
     InputSchema,
     ParseError,
     ProcessorType,
@@ -19,6 +20,8 @@ from parallel_web_tools.core import (
     logout,
     parse_input_and_output_models,
     parse_schema,
+    poll_device_token,
+    request_device_code,
     run_enrichment,
     run_enrichment_from_dict,
     run_findall,
@@ -30,11 +33,14 @@ __version__ = "0.1.2rc1"
 
 __all__ = [
     # Auth
+    "DeviceCodeInfo",
     "get_api_key",
     "get_auth_status",
     "get_client",
     "get_async_client",
     "logout",
+    "poll_device_token",
+    "request_device_code",
     # Schema
     "AVAILABLE_PROCESSORS",
     "Column",
