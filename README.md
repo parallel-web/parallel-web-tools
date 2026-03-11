@@ -65,7 +65,7 @@ pip install parallel-web-tools[all]
 ```
 parallel-cli
 ├── auth                    # Check authentication status
-├── login                   # OAuth login (--device for SSH/containers/CI)
+├── login                   # OAuth login (--device for SSH/containers/CI, or use PARALLEL_API_KEY)
 ├── logout                  # Remove stored credentials
 ├── search                  # Web search
 ├── extract / fetch         # Extract content from URLs
