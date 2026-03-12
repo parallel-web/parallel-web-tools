@@ -1579,7 +1579,7 @@ def research():
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 @click.option(
     "--previous-interaction-id",
-    help="Interaction ID from a previous task to reuse as context (enables follow-up research)",
+    help="Interaction ID from a previous task to reuse as context",
 )
 def research_run(
     query: str | None,
