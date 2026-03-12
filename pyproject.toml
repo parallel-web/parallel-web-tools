@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "parallel-web-tools"
 version = "0.1.2"
-description = "Parallel Tools: CLI and data enrichment utilities for the Parallel API"
+description = "Parallel Tools: CLI and Python SDK for AI-powered web intelligence"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

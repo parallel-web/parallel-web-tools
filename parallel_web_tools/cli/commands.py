@@ -78,6 +78,44 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 console = Console()
 
+# Parallel wordmark — rendered from white-parallel-text-1080.png
+# using half-block characters (▀▄█) for terminal display
+_BANNER_LINES = [
+    "[bold white]                                                        █████ █████                █████[/]",
+    "[bold white]                                                        █████ █████                █████[/]",
+    "[bold white]████████████▄  ▄███████████  ███████████▄ ████████████  █████ █████ ▄████████████▄ █████[/]",
+    "[bold white]█████   █████  ▀▀▀▀▀   █████ █████  ▀▀▀▀▀ ▀▀▀▀   █████▄ █████ █████ █████    █████ █████[/]",
+    "[bold white]█████   █████  ▄████████████ █████       ▄█████████████ █████ █████ ██████████████ █████[/]",
+    "[bold white]█████   █████ █████    █████ █████       █████   ▀█████ █████ █████ █████    █████ █████[/]",
+    "[bold white]████████████▀ ▀█████████████ █████       ▀█████████████ █████ █████ ▀████████████▀ █████[/]",
+    "[bold white]█████[/]",
+    "[bold white]█████[/]",
+]
+
+
+def _print_banner():
+    """Print the Parallel CLI banner with logo."""
+    if not console.is_terminal:
+        return
+    banner = "\n".join(line.format(version=__version__) for line in _BANNER_LINES)
+    console.print(banner, highlight=False)
+    console.print()
+    console.print(
+        f"  [bold #fb631b]parallel-cli[/bold #fb631b] v{__version__}  [dim]AI-powered web intelligence for your agent[/dim]",
+        highlight=False,
+    )
+    console.print("  [dim]Get started at[/dim] [dim link=https://parallel.ai]parallel.ai[/dim link]", highlight=False)
+    console.print()
+
+
+class ParallelCLI(click.Group):
+    """Custom Click group that shows the Parallel banner on help."""
+
+    def format_help(self, ctx, formatter):
+        _print_banner()
+        super().format_help(ctx, formatter)
+
+
 load_dotenv(".env.local")
 
 # Source types available for enrich run/plan
@@ -388,10 +426,10 @@ def _auto_update():
         pass
 
 
-@click.group()
+@click.group(cls=ParallelCLI)
 @click.version_option(version=__version__, prog_name="parallel-cli")
 def main():
-    """Parallel CLI - AI-powered data enrichment and search."""
+    """Parallel CLI - Search, research, enrich, and monitor the web."""
     pass
 
 
@@ -424,8 +462,9 @@ def auth(output_json: bool):
             console.print(f"  Credentials: {status['token_file']}")
     else:
         console.print("[yellow]Not authenticated[/yellow]")
-        console.print("\n[cyan]To authenticate:[/cyan]")
-        console.print("  Run: parallel-cli login")
+        console.print("\n[cyan]To get started:[/cyan]")
+        console.print("  1. Create an account at [link=https://parallel.ai]parallel.ai[/link]")
+        console.print("  2. Run: parallel-cli login")
         console.print("  Or set PARALLEL_API_KEY environment variable")
 
 
