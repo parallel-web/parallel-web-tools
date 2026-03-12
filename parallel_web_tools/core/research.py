@@ -9,11 +9,14 @@ and returns analyst-grade intelligence reports.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from parallel_web_tools.core.auth import create_client
 from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
+
+# Output schema types supported for deep research
+OutputSchemaType = Literal["auto", "text"]
 
 # Base URL for viewing results
 PLATFORM_BASE = "https://platform.parallel.ai"
@@ -69,12 +72,25 @@ def _serialize_output(output: Any) -> dict[str, Any]:
     return {"raw": str(output)}
 
 
+def _build_task_spec(output_schema: OutputSchemaType) -> Any:
+    """Build task_spec kwargs for the SDK based on output schema type.
+
+    Returns None for auto schema (SDK default), or a TaskSpecParam for text.
+    """
+    if output_schema == "text":
+        from parallel.types import TaskSpecParam, TextSchemaParam
+
+        return TaskSpecParam(output_schema=TextSchemaParam(type="text"))
+    return None
+
+
 def create_research_task(
     query: str,
     processor: str = "pro-fast",
     api_key: str | None = None,
     source: ClientSource = "python",
     previous_interaction_id: str | None = None,
+    output_schema: OutputSchemaType = "auto",
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -84,6 +100,7 @@ def create_research_task(
         api_key: Optional API key.
         source: Client source identifier for User-Agent.
         previous_interaction_id: Interaction ID from a previous task to reuse as context.
+        output_schema: Output schema type - "auto" for structured JSON, "text" for markdown.
 
     Returns:
         Dict with run_id, interaction_id, result_url, and other task metadata.
@@ -96,6 +113,9 @@ def create_research_task(
     }
     if previous_interaction_id:
         create_kwargs["previous_interaction_id"] = previous_interaction_id
+    task_spec = _build_task_spec(output_schema)
+    if task_spec is not None:
+        create_kwargs["task_spec"] = task_spec
 
     task = client.task_run.create(**create_kwargs)
 
@@ -244,6 +264,7 @@ def run_research(
     on_status: Callable[[str, str], None] | None = None,
     source: ClientSource = "python",
     previous_interaction_id: str | None = None,
+    output_schema: OutputSchemaType = "auto",
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -259,6 +280,7 @@ def run_research(
         on_status: Optional callback called with (status, run_id) on each poll.
         source: Client source identifier for User-Agent.
         previous_interaction_id: Interaction ID from a previous task to reuse as context.
+        output_schema: Output schema type - "auto" for structured JSON, "text" for markdown.
 
     Returns:
         Dict with content and metadata.
@@ -275,6 +297,9 @@ def run_research(
     }
     if previous_interaction_id:
         create_kwargs["previous_interaction_id"] = previous_interaction_id
+    task_spec = _build_task_spec(output_schema)
+    if task_spec is not None:
+        create_kwargs["task_spec"] = task_spec
 
     task = client.task_run.create(**create_kwargs)
     run_id = task.run_id

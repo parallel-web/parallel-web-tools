@@ -1712,6 +1712,12 @@ def research():
 @click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
 @click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option(
+    "--text",
+    "use_text",
+    is_flag=True,
+    help="Use text schema — returns markdown report instead of structured JSON",
+)
+@click.option(
     "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
 )
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
@@ -1727,6 +1733,7 @@ def research_run(
     poll_interval: int,
     no_wait: bool,
     dry_run: bool,
+    use_text: bool,
     output_file: str | None,
     output_json: bool,
     previous_interaction_id: str | None,
@@ -1736,20 +1743,26 @@ def research_run(
     QUERY is the research question (max 15,000 chars). Alternatively, use --input-file
     or pass "-" as QUERY to read from stdin.
 
-    Use --previous-interaction-id to continue research from a prior task's context.
-    The interaction ID is shown in the output of every research run.
+    By default the API returns auto schema (structured JSON). Pass --text to get a
+    markdown report instead. Use --previous-interaction-id to continue research from a
+    prior task's context. Use -o to save the result to {name}.json (and {name}.md when
+    content is present).
 
     Examples:
 
         parallel-cli research run "What are the latest developments in quantum computing?"
 
-        parallel-cli research run -f question.txt --processor ultra -o report
+        parallel-cli research run --text "Market analysis of HVAC industry" -o report
+
+        parallel-cli research run -f question.txt --processor ultra --text -o report
 
         echo "My research question" | parallel-cli research run - --json
 
         # Follow-up research using context from a previous task:
         parallel-cli research run "What are the implications?" --previous-interaction-id trun_abc123
     """
+    output_schema = "text" if use_text else "auto"
+
     # Read from stdin if "-" is passed
     if query == "-":
         query = click.get_text_stream("stdin").read().strip()
@@ -1771,6 +1784,7 @@ def research_run(
             "query": query[:200] + "..." if len(query) > 200 else query,
             "query_length": len(query),
             "processor": processor,
+            "output_schema": output_schema,
             "expected_latency": RESEARCH_PROCESSORS[processor],
         }
         if output_json:
@@ -1780,6 +1794,7 @@ def research_run(
             console.print(f"  [bold]Query:[/bold]     {dry_run_data['query']}")
             console.print(f"  [bold]Length:[/bold]    {len(query)} chars")
             console.print(f"  [bold]Processor:[/bold] {processor}")
+            console.print(f"  [bold]Schema:[/bold]    {output_schema}")
             console.print(f"  [bold]Latency:[/bold]   {RESEARCH_PROCESSORS[processor]}")
         return
 
@@ -1789,7 +1804,11 @@ def research_run(
             if not output_json:
                 console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
             result = create_research_task(
-                query, processor=processor, source="cli", previous_interaction_id=previous_interaction_id
+                query,
+                processor=processor,
+                source="cli",
+                previous_interaction_id=previous_interaction_id,
+                output_schema=output_schema,
             )
 
             if not output_json:
@@ -1833,6 +1852,7 @@ def research_run(
                 on_status=on_status,
                 source="cli",
                 previous_interaction_id=previous_interaction_id,
+                output_schema=output_schema,
             )
 
             _output_research_result(result, output_file, output_json)
@@ -2070,76 +2090,71 @@ def _output_research_result(
 ):
     """Output research result to console and/or files.
 
-    When saving to a file, creates two files from the base name:
-    - {name}.json: metadata and citations
-    - {name}.md: research content as markdown
+    Always writes {base}.json. When the API returned text-schema output (string
+    `content` in the response), also writes {base}.md and replaces `content`
+    with a `content_file` reference in the JSON.
+
+    `output_file` is a base path. If omitted, defaults to the run_id in cwd.
+    Any extension on the provided path is stripped.
     """
+    from pathlib import Path
+
     output = result.get("output", {})
+    run_id = result.get("run_id", "research")
+
+    base_path = Path(output_file) if output_file else Path(run_id)
+    if base_path.suffix:
+        base_path = base_path.with_suffix("")
+
+    json_path = base_path.with_suffix(".json")
     output_data = {
-        "run_id": result.get("run_id"),
+        "run_id": run_id,
         "interaction_id": result.get("interaction_id"),
         "result_url": result.get("result_url"),
         "status": result.get("status"),
         "output": output.copy() if isinstance(output, dict) else output,
     }
 
-    # Save to files if requested
-    if output_file:
-        from pathlib import Path
-
-        # Strip any extension to get base name
-        base_path = Path(output_file)
-        if base_path.suffix:
-            base_path = base_path.with_suffix("")
-
-        json_path = base_path.with_suffix(".json")
+    # Text-schema responses have `content` as a string of markdown. Write it
+    # to a sibling .md file and reference it from the JSON. Auto-schema
+    # responses have structured `content` (dict) and stay JSON-only.
+    content = output.get("content") if isinstance(output, dict) else None
+    if isinstance(content, str) and content:
         md_path = base_path.with_suffix(".md")
+        with open(md_path, "w") as f:
+            f.write(content)
+        if not output_json:
+            console.print(f"[green]Content saved to:[/green] {md_path}")
 
-        # Extract content to markdown file
-        if isinstance(output, dict) and "content" in output:
-            content = output["content"]
-            content_text = _content_to_markdown(content)
+        output_data["output"] = output.copy()
+        output_data["output"]["content_file"] = md_path.name
+        output_data["output"].pop("content", None)
 
-            if content_text:
-                with open(md_path, "w") as f:
-                    f.write(content_text)
-                console.print(f"[green]Content saved to:[/green] {md_path}")
-
-                # Replace content in JSON with reference to markdown file
-                output_data["output"] = output_data["output"].copy()
-                output_data["output"]["content_file"] = md_path.name
-                del output_data["output"]["content"]
-
-        with open(json_path, "w") as f:
-            json.dump(output_data, f, indent=2, default=str)
+    with open(json_path, "w") as f:
+        json.dump(output_data, f, indent=2, default=str)
+    if not output_json:
         console.print(f"[green]Metadata saved to:[/green] {json_path}")
 
-    # Output to console
     if output_json:
         print(json.dumps(output_data, indent=2, default=str))
-    else:
-        console.print("\n[bold green]Research Complete![/bold green]")
-        console.print(f"[dim]Task: {result.get('run_id')}[/dim]")
-        console.print(f"[dim]Interaction ID: {result.get('interaction_id')}[/dim]")
-        console.print(f"[dim]URL: {result.get('result_url')}[/dim]\n")
+        return
 
-        # Show executive summary if available
-        output = result.get("output", {})
-        content = output.get("content") if isinstance(output, dict) else None
-        summary = _extract_executive_summary(content) if content else None
+    console.print("\n[bold green]Research Complete![/bold green]")
+    console.print(f"[dim]Task: {run_id}[/dim]")
+    console.print(f"[dim]Interaction ID: {result.get('interaction_id')}[/dim]")
+    console.print(f"[dim]URL: {result.get('result_url')}[/dim]\n")
 
-        if summary:
-            from rich.markdown import Markdown
-            from rich.panel import Panel
+    summary = _extract_executive_summary(content) if content else None
+    if summary:
+        from rich.markdown import Markdown
+        from rich.panel import Panel
 
-            console.print(Panel(Markdown(summary), title="Executive Summary", border_style="cyan"))
-            console.print()
+        console.print(Panel(Markdown(summary), title="Executive Summary", border_style="cyan"))
+        console.print()
 
-        if not output_file:
-            console.print("[dim]Use --output to save full results to a file, or --json to print to stdout[/dim]")
-        interaction_id = result.get("interaction_id")
-        if interaction_id:
-            console.print(f"[dim]Use '--previous-interaction-id {interaction_id}' to continue this research[/dim]")
+    interaction_id = result.get("interaction_id")
+    if interaction_id:
+        console.print(f"[dim]Use '--previous-interaction-id {interaction_id}' to continue this research[/dim]")
 
 
 # =============================================================================
