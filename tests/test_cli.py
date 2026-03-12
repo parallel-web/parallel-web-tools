@@ -1006,6 +1006,45 @@ class TestSearchCommandMocked:
         assert len(output["results"]) == 1
         assert output["results"][0]["url"] == "https://example.com"
 
+    def test_search_warnings_serialized_in_json_output(self, runner):
+        """Should serialize SDK Warning objects as dicts in JSON output."""
+        mock_search_result = mock.MagicMock()
+        mock_search_result.search_id = "search_456"
+        mock_search_result.results = [
+            mock.MagicMock(
+                url="https://example.com",
+                title="Example",
+                publish_date="2024-01-01",
+                excerpts=["An excerpt"],
+            )
+        ]
+        # Simulate SDK returning Warning objects matching the API schema
+        warning_obj = mock.MagicMock()
+        warning_obj.type = "warning"
+        warning_obj.message = "Excerpts truncated to 500 characters"
+        warning_obj.detail = {"max_chars_total": 500}
+        mock_search_result.warnings = [warning_obj]
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.search.return_value = mock_search_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["search", "test query", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert len(output["warnings"]) == 1
+        warning = output["warnings"][0]
+        assert warning["type"] == "warning"
+        assert warning["message"] == "Excerpts truncated to 500 characters"
+        assert warning["detail"] == {"max_chars_total": 500}
+
     def test_search_api_error_json_mode(self, runner):
         """Should output JSON error when API fails in --json mode."""
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
