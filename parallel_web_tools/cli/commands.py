@@ -871,7 +871,7 @@ def extract(
 
         results_list = []
         for r in result.results:
-            result_dict: dict[str, Any] = {"url": r.url, "title": r.title}
+            result_dict: dict[str, Any] = {"url": r.url, "title": r.title, "publish_date": r.publish_date}
             if hasattr(r, "excerpts") and r.excerpts:
                 result_dict["excerpts"] = r.excerpts
             if hasattr(r, "full_content") and r.full_content:
@@ -884,8 +884,9 @@ def extract(
                 errors_list.append(
                     {
                         "url": getattr(e, "url", None),
-                        "error": str(getattr(e, "error", "")),
-                        "status_code": getattr(e, "status_code", None),
+                        "error_type": getattr(e, "error_type", None),
+                        "http_status_code": getattr(e, "http_status_code", None),
+                        "content": getattr(e, "content", None),
                     }
                 )
 
@@ -894,6 +895,11 @@ def extract(
             "status": "ok",
             "results": results_list,
             "errors": errors_list,
+            "warnings": [
+                {"type": w.type, "message": w.message, "detail": getattr(w, "detail", None)} for w in result.warnings
+            ]
+            if hasattr(result, "warnings") and result.warnings
+            else [],
         }
 
         write_json_output(output_data, output_file, output_json)
