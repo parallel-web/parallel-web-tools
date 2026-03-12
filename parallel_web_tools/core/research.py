@@ -74,6 +74,7 @@ def create_research_task(
     processor: str = "pro-fast",
     api_key: str | None = None,
     source: ClientSource = "python",
+    previous_interaction_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -82,19 +83,25 @@ def create_research_task(
         processor: Processor tier (see RESEARCH_PROCESSORS).
         api_key: Optional API key.
         source: Client source identifier for User-Agent.
+        previous_interaction_id: Interaction ID from a previous task to reuse as context.
 
     Returns:
-        Dict with run_id, result_url, and other task metadata.
+        Dict with run_id, interaction_id, result_url, and other task metadata.
     """
     client = create_client(api_key, source)
 
-    task = client.task_run.create(
-        input=query[:15000],
-        processor=processor,
-    )
+    create_kwargs: dict[str, Any] = {
+        "input": query[:15000],
+        "processor": processor,
+    }
+    if previous_interaction_id:
+        create_kwargs["previous_interaction_id"] = previous_interaction_id
+
+    task = client.task_run.create(**create_kwargs)
 
     return {
         "run_id": task.run_id,
+        "interaction_id": getattr(task, "interaction_id", task.run_id),
         "result_url": f"{PLATFORM_BASE}/play/deep-research/{task.run_id}",
         "processor": processor,
         "status": getattr(task, "status", "pending"),
@@ -114,13 +121,14 @@ def get_research_status(
         source: Client source identifier for User-Agent.
 
     Returns:
-        Dict with status and other task info.
+        Dict with status, interaction_id, and other task info.
     """
     client = create_client(api_key, source)
     status = client.task_run.retrieve(run_id=run_id)
 
     return {
         "run_id": run_id,
+        "interaction_id": getattr(status, "interaction_id", run_id),
         "status": status.status,
         "result_url": f"{PLATFORM_BASE}/play/deep-research/{run_id}",
     }
@@ -162,6 +170,7 @@ def _poll_until_complete(
     timeout: int,
     poll_interval: int,
     on_status: Callable[[str, str], None] | None,
+    interaction_id: str | None = None,
 ) -> dict[str, Any]:
     """Poll a research task until completion and return the result.
 
@@ -172,6 +181,7 @@ def _poll_until_complete(
         timeout: Maximum wait time in seconds.
         poll_interval: Seconds between status checks.
         on_status: Optional callback called with (status, run_id) on each poll.
+        interaction_id: Known interaction ID (updated from poll responses).
 
     Returns:
         Dict with content and metadata.
@@ -180,9 +190,15 @@ def _poll_until_complete(
         TimeoutError: If the task doesn't complete within timeout.
         RuntimeError: If the task fails or is cancelled.
     """
+    # Track interaction_id from poll responses
+    poll_state = {"interaction_id": interaction_id}
 
     def retrieve():
-        return client.task_run.retrieve(run_id=run_id)
+        response = client.task_run.retrieve(run_id=run_id)
+        # Capture interaction_id from the latest response
+        if hasattr(response, "interaction_id") and response.interaction_id:
+            poll_state["interaction_id"] = response.interaction_id
+        return response
 
     def extract_status(response):
         return response.status
@@ -193,6 +209,7 @@ def _poll_until_complete(
         output_data = _serialize_output(output)
         return {
             "run_id": run_id,
+            "interaction_id": poll_state["interaction_id"] or run_id,
             "result_url": result_url,
             "status": "completed",
             "output": output_data,
@@ -226,6 +243,7 @@ def run_research(
     poll_interval: int = 45,
     on_status: Callable[[str, str], None] | None = None,
     source: ClientSource = "python",
+    previous_interaction_id: str | None = None,
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -240,6 +258,7 @@ def run_research(
         poll_interval: Seconds between status checks (default: 45).
         on_status: Optional callback called with (status, run_id) on each poll.
         source: Client source identifier for User-Agent.
+        previous_interaction_id: Interaction ID from a previous task to reuse as context.
 
     Returns:
         Dict with content and metadata.
@@ -250,17 +269,24 @@ def run_research(
     """
     client = create_client(api_key, source)
 
-    task = client.task_run.create(
-        input=query[:15000],
-        processor=processor,
-    )
+    create_kwargs: dict[str, Any] = {
+        "input": query[:15000],
+        "processor": processor,
+    }
+    if previous_interaction_id:
+        create_kwargs["previous_interaction_id"] = previous_interaction_id
+
+    task = client.task_run.create(**create_kwargs)
     run_id = task.run_id
+    interaction_id = getattr(task, "interaction_id", run_id)
     result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"
 
     if on_status:
         on_status("created", run_id)
 
-    return _poll_until_complete(client, run_id, result_url, timeout, poll_interval, on_status)
+    return _poll_until_complete(
+        client, run_id, result_url, timeout, poll_interval, on_status, interaction_id=interaction_id
+    )
 
 
 def poll_research(
@@ -284,7 +310,7 @@ def poll_research(
         source: Client source identifier for User-Agent.
 
     Returns:
-        Dict with content and metadata.
+        Dict with content and metadata including interaction_id.
     """
     client = create_client(api_key, source)
     result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"

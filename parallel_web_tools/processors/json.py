@@ -10,7 +10,9 @@ from parallel_web_tools.core.batch import create_task_group
 logger = logging.getLogger(__name__)
 
 
-def process_json(schema: InputSchema, no_wait: bool = False) -> dict[str, Any] | None:
+def process_json(
+    schema: InputSchema, no_wait: bool = False, previous_interaction_id: str | None = None
+) -> dict[str, Any] | None:
     """Process JSON file and enrich data."""
     logger.info("Processing JSON file: %s", schema.source)
 
@@ -21,10 +23,14 @@ def process_json(schema: InputSchema, no_wait: bool = False) -> dict[str, Any] |
         data = json.load(f)
 
     if no_wait:
-        return create_task_group(data, InputModel, OutputModel, schema.processor)
+        return create_task_group(
+            data, InputModel, OutputModel, schema.processor, previous_interaction_id=previous_interaction_id
+        )
 
     # Process all rows in batch
-    output_rows = run_tasks(data, InputModel, OutputModel, schema.processor)
+    output_rows = run_tasks(
+        data, InputModel, OutputModel, schema.processor, previous_interaction_id=previous_interaction_id
+    )
 
     # Write results to target JSON
     with open(schema.target, "w") as f:

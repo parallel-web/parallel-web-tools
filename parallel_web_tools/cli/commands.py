@@ -960,6 +960,10 @@ def enrich():
 @click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option("--json", "output_json", is_flag=True, help="Output results as JSON to stdout")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option(
+    "--previous-interaction-id",
+    help="Interaction ID from a previous task to reuse as context",
+)
 def enrich_run(
     config_file: str | None,
     source_type: str | None,
@@ -974,6 +978,7 @@ def enrich_run(
     dry_run: bool,
     output_json: bool,
     output_file: str | None,
+    previous_interaction_id: str | None,
 ):
     """Run data enrichment from YAML config or CLI arguments.
 
@@ -1043,7 +1048,7 @@ def enrich_run(
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
-            result = run_enrichment(config_file, no_wait=no_wait)
+            result = run_enrichment(config_file, no_wait=no_wait, previous_interaction_id=previous_interaction_id)
         else:
             # After validation, these are guaranteed non-None
             assert source_type is not None
@@ -1134,7 +1139,7 @@ def enrich_run(
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
-            result = run_enrichment_from_dict(config, no_wait=no_wait)
+            result = run_enrichment_from_dict(config, no_wait=no_wait, previous_interaction_id=previous_interaction_id)
 
         if no_wait and result:
             if output_json:
@@ -1572,6 +1577,10 @@ def research():
     "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
 )
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+@click.option(
+    "--previous-interaction-id",
+    help="Interaction ID from a previous task to reuse as context",
+)
 def research_run(
     query: str | None,
     input_file: str | None,
@@ -1582,11 +1591,15 @@ def research_run(
     dry_run: bool,
     output_file: str | None,
     output_json: bool,
+    previous_interaction_id: str | None,
 ):
     """Run deep research on a question or topic.
 
     QUERY is the research question (max 15,000 chars). Alternatively, use --input-file
     or pass "-" as QUERY to read from stdin.
+
+    Use --previous-interaction-id to continue research from a prior task's context.
+    The interaction ID is shown in the output of every research run.
 
     Examples:
 
@@ -1595,6 +1608,9 @@ def research_run(
         parallel-cli research run -f question.txt --processor ultra -o report
 
         echo "My research question" | parallel-cli research run - --json
+
+        # Follow-up research using context from a previous task:
+        parallel-cli research run "What are the implications?" --previous-interaction-id trun_abc123
     """
     # Read from stdin if "-" is passed
     if query == "-":
@@ -1634,13 +1650,18 @@ def research_run(
             # Create task and return immediately
             if not output_json:
                 console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
-            result = create_research_task(query, processor=processor, source="cli")
+            result = create_research_task(
+                query, processor=processor, source="cli", previous_interaction_id=previous_interaction_id
+            )
 
             if not output_json:
                 console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
+                if result.get("interaction_id"):
+                    console.print(f"Interaction ID: {result['interaction_id']}")
                 console.print(f"Track progress: {result['result_url']}")
                 console.print("\n[dim]Use 'parallel-cli research status <run_id>' to check status[/dim]")
                 console.print("[dim]Use 'parallel-cli research poll <run_id>' to wait for results[/dim]")
+                console.print("[dim]Use '--previous-interaction-id' on a new run to continue this research[/dim]")
 
             if output_json:
                 print(json.dumps(result, indent=2))
@@ -1673,6 +1694,7 @@ def research_run(
                 poll_interval=poll_interval,
                 on_status=on_status,
                 source="cli",
+                previous_interaction_id=previous_interaction_id,
             )
 
             _output_research_result(result, output_file, output_json)
@@ -1715,11 +1737,13 @@ def research_status(run_id: str, output_json: bool):
             }.get(status, "white")
 
             console.print(f"[bold]Task:[/bold] {run_id}")
+            console.print(f"[bold]Interaction ID:[/bold] {result.get('interaction_id', run_id)}")
             console.print(f"[bold]Status:[/bold] [{status_color}]{status}[/{status_color}]")
             console.print(f"[bold]URL:[/bold] {result['result_url']}")
 
             if status == "completed":
                 console.print("\n[dim]Use 'parallel-cli research poll <run_id>' to retrieve results[/dim]")
+                console.print("[dim]Use '--previous-interaction-id' on a new run to continue this research[/dim]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
@@ -1915,6 +1939,7 @@ def _output_research_result(
     output = result.get("output", {})
     output_data = {
         "run_id": result.get("run_id"),
+        "interaction_id": result.get("interaction_id"),
         "result_url": result.get("result_url"),
         "status": result.get("status"),
         "output": output.copy() if isinstance(output, dict) else output,
@@ -1957,6 +1982,7 @@ def _output_research_result(
     else:
         console.print("\n[bold green]Research Complete![/bold green]")
         console.print(f"[dim]Task: {result.get('run_id')}[/dim]")
+        console.print(f"[dim]Interaction ID: {result.get('interaction_id')}[/dim]")
         console.print(f"[dim]URL: {result.get('result_url')}[/dim]\n")
 
         # Show executive summary if available
@@ -1973,6 +1999,9 @@ def _output_research_result(
 
         if not output_file:
             console.print("[dim]Use --output to save full results to a file, or --json to print to stdout[/dim]")
+        interaction_id = result.get("interaction_id")
+        if interaction_id:
+            console.print(f"[dim]Use '--previous-interaction-id {interaction_id}' to continue this research[/dim]")
 
 
 # =============================================================================

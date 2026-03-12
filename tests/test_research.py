@@ -294,6 +294,7 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
             mock_create.return_value = {
                 "run_id": "trun_123",
+                "interaction_id": "trun_123",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "pending",
             }
@@ -310,6 +311,7 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
             mock_create.return_value = {
                 "run_id": "trun_123",
+                "interaction_id": "trun_123",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "pending",
             }
@@ -325,6 +327,7 @@ class TestResearchRunCommand:
         with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
             mock_create.return_value = {
                 "run_id": "trun_123",
+                "interaction_id": "trun_123",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "pending",
             }
@@ -361,6 +364,104 @@ class TestResearchRunCommand:
             assert result.exit_code == 0
             assert "Research Complete" in result.output
             mock_run.assert_called_once()
+
+    def test_research_run_with_previous_interaction_id_no_wait(self, runner):
+        """Should pass previous_interaction_id to create_research_task."""
+        with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
+            mock_create.return_value = {
+                "run_id": "trun_456",
+                "interaction_id": "trun_456",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_456",
+                "status": "pending",
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "research",
+                    "run",
+                    "Follow-up question?",
+                    "--no-wait",
+                    "--previous-interaction-id",
+                    "trun_123",
+                ],
+            )
+
+            assert result.exit_code == 0
+            mock_create.assert_called_once()
+            call_kwargs = mock_create.call_args
+            assert call_kwargs.kwargs.get("previous_interaction_id") == "trun_123"
+
+    def test_research_run_with_previous_interaction_id_wait(self, runner):
+        """Should pass previous_interaction_id to run_research."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_456",
+                "interaction_id": "trun_456",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_456",
+                "status": "completed",
+                "output": {"content": {"text": "Follow-up findings"}},
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "research",
+                    "run",
+                    "Follow-up question?",
+                    "--poll-interval",
+                    "1",
+                    "--previous-interaction-id",
+                    "trun_123",
+                ],
+            )
+
+            assert result.exit_code == 0
+            mock_run.assert_called_once()
+            call_kwargs = mock_run.call_args
+            assert call_kwargs.kwargs.get("previous_interaction_id") == "trun_123"
+
+    def test_research_run_shows_interaction_id(self, runner):
+        """Should display interaction_id in no-wait output."""
+        with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
+            mock_create.return_value = {
+                "run_id": "trun_123",
+                "interaction_id": "trun_int_abc",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
+                "status": "pending",
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--no-wait"])
+
+            assert result.exit_code == 0
+            assert "trun_int_abc" in result.output
+            assert "previous-interaction-id" in result.output
+
+    def test_research_run_json_includes_interaction_id(self, runner):
+        """Should include interaction_id in JSON output."""
+        with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
+            mock_create.return_value = {
+                "run_id": "trun_123",
+                "interaction_id": "trun_int_abc",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
+                "status": "pending",
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--no-wait", "--json"])
+
+            assert result.exit_code == 0
+            lines = result.output.strip().split("\n")
+            json_lines = []
+            in_json = False
+            for line in lines:
+                if line.strip().startswith("{"):
+                    in_json = True
+                if in_json:
+                    json_lines.append(line)
+                if in_json and line.strip().startswith("}"):
+                    break
+            output = json.loads("\n".join(json_lines))
+            assert output["interaction_id"] == "trun_int_abc"
 
 
 class TestResearchStatusCommand:

@@ -11,7 +11,9 @@ from parallel_web_tools.core.batch import create_task_group
 from parallel_web_tools.core.sql_utils import quote_identifier
 
 
-def process_duckdb(schema: InputSchema, no_wait: bool = False) -> dict[str, Any] | None:
+def process_duckdb(
+    schema: InputSchema, no_wait: bool = False, previous_interaction_id: str | None = None
+) -> dict[str, Any] | None:
     """Process DuckDB table and enrich data."""
     InputModel, OutputModel = parse_input_and_output_models(schema)
     duckdb_file = os.getenv("DUCKDB_FILE")
@@ -25,9 +27,13 @@ def process_duckdb(schema: InputSchema, no_wait: bool = False) -> dict[str, Any]
         data = con.sql(f"SELECT * from {source_quoted}").pl().to_dicts()
 
         if no_wait:
-            return create_task_group(data, InputModel, OutputModel, schema.processor)
+            return create_task_group(
+                data, InputModel, OutputModel, schema.processor, previous_interaction_id=previous_interaction_id
+            )
 
-        output_rows = run_tasks(data, InputModel, OutputModel, schema.processor)
+        output_rows = run_tasks(
+            data, InputModel, OutputModel, schema.processor, previous_interaction_id=previous_interaction_id
+        )
 
         # Write output_rows to the target table
         df = pl.DataFrame(output_rows)  # noqa: F841

@@ -46,7 +46,9 @@ def fetch_all(conn: Connection, table: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def process_bigquery(schema: InputSchema, no_wait: bool = False) -> dict[str, Any] | None:
+def process_bigquery(
+    schema: InputSchema, no_wait: bool = False, previous_interaction_id: str | None = None
+) -> dict[str, Any] | None:
     """Process BigQuery table and enrich data."""
     InputModel, OutputModel = parse_input_and_output_models(schema)
 
@@ -57,9 +59,13 @@ def process_bigquery(schema: InputSchema, no_wait: bool = False) -> dict[str, An
         data = fetch_all(conn, schema.source)
 
     if no_wait:
-        return create_task_group(data, InputModel, OutputModel, schema.processor)
+        return create_task_group(
+            data, InputModel, OutputModel, schema.processor, previous_interaction_id=previous_interaction_id
+        )
 
-    output_rows = run_tasks(data, InputModel, OutputModel, schema.processor)
+    output_rows = run_tasks(
+        data, InputModel, OutputModel, schema.processor, previous_interaction_id=previous_interaction_id
+    )
     df = pl.DataFrame(output_rows)
 
     _project, dataset, table = split_bq_name(schema.target)
