@@ -960,6 +960,10 @@ def enrich():
 @click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option("--json", "output_json", is_flag=True, help="Output results as JSON to stdout")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
+@click.option(
+    "--previous-interaction-id",
+    help="Interaction ID from a previous task to reuse as context",
+)
 def enrich_run(
     config_file: str | None,
     source_type: str | None,
@@ -974,6 +978,7 @@ def enrich_run(
     dry_run: bool,
     output_json: bool,
     output_file: str | None,
+    previous_interaction_id: str | None,
 ):
     """Run data enrichment from YAML config or CLI arguments.
 
@@ -1043,7 +1048,7 @@ def enrich_run(
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment from {config_file}...[/bold cyan]\n")
-            result = run_enrichment(config_file, no_wait=no_wait)
+            result = run_enrichment(config_file, no_wait=no_wait, previous_interaction_id=previous_interaction_id)
         else:
             # After validation, these are guaranteed non-None
             assert source_type is not None
@@ -1134,7 +1139,7 @@ def enrich_run(
 
             if not output_json:
                 console.print(f"[bold cyan]Running enrichment: {source} -> {target}[/bold cyan]\n")
-            result = run_enrichment_from_dict(config, no_wait=no_wait)
+            result = run_enrichment_from_dict(config, no_wait=no_wait, previous_interaction_id=previous_interaction_id)
 
         if no_wait and result:
             if output_json:

@@ -731,6 +731,7 @@ class TestEnrichSingle:
                 timeout=300,
                 include_basis=True,
                 source="python",
+                previous_interaction_id=None,
             )
             assert result == {"ceo_name": "Test CEO"}
 

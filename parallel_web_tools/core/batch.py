@@ -99,6 +99,7 @@ def enrich_batch(
     poll_interval: int = 5,
     include_basis: bool = True,
     source: ClientSource = "python",
+    previous_interaction_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Enrich multiple inputs using the Parallel Task Group API.
 
@@ -111,6 +112,7 @@ def enrich_batch(
         poll_interval: Seconds between status polls
         include_basis: Whether to include citations
         source: Client source identifier for User-Agent (default: python)
+        previous_interaction_id: Interaction ID from a previous task to reuse as context.
 
     Returns:
         List of result dictionaries in same order as inputs.
@@ -131,7 +133,13 @@ def enrich_batch(
         taskgroup_id = task_group.task_group_id
 
         # Add runs - use SDK type for proper typing
-        run_inputs: list[BetaRunInputParam] = [{"input": inp, "processor": processor} for inp in inputs]
+        def _make_run_input(inp: dict[str, Any]) -> BetaRunInputParam:
+            entry: BetaRunInputParam = {"input": inp, "processor": processor}
+            if previous_interaction_id:
+                entry["previous_interaction_id"] = previous_interaction_id
+            return entry
+
+        run_inputs: list[BetaRunInputParam] = [_make_run_input(inp) for inp in inputs]
         response = client.beta.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
@@ -187,6 +195,7 @@ def enrich_single(
     timeout: int = 300,
     include_basis: bool = True,
     source: ClientSource = "python",
+    previous_interaction_id: str | None = None,
 ) -> dict[str, Any]:
     """Enrich a single input using the Parallel API."""
     results = enrich_batch(
@@ -197,6 +206,7 @@ def enrich_single(
         timeout=timeout,
         include_basis=include_basis,
         source=source,
+        previous_interaction_id=previous_interaction_id,
     )
     return results[0] if results else {"error": "No result"}
 
@@ -207,6 +217,7 @@ def create_task_group(
     OutputModel,
     processor: str = "core-fast",
     source: ClientSource = "python",
+    previous_interaction_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a task group and add runs without waiting for completion.
 
@@ -216,6 +227,7 @@ def create_task_group(
         OutputModel: Pydantic model for output schema.
         processor: Parallel processor (default: core-fast).
         source: Client source identifier for User-Agent.
+        previous_interaction_id: Interaction ID from a previous task to reuse as context.
 
     Returns:
         Dict with taskgroup_id, url, and num_runs.
@@ -238,12 +250,19 @@ def create_task_group(
     taskgroup_id = task_group.task_group_id
     logger.info(f"Created taskgroup id {taskgroup_id}")
 
+    # Build run input helper
+    def _make_run_input(row: dict[str, Any]) -> BetaRunInputParam:
+        entry: BetaRunInputParam = {"input": row, "processor": processor}
+        if previous_interaction_id:
+            entry["previous_interaction_id"] = previous_interaction_id
+        return entry
+
     # Add runs in batches
     batch_size = 100
     total_created = 0
     for i in range(0, len(input_data), batch_size):
         batch = input_data[i : i + batch_size]
-        run_inputs: list[BetaRunInputParam] = [{"input": row, "processor": processor} for row in batch]
+        run_inputs: list[BetaRunInputParam] = [_make_run_input(row) for row in batch]
         response = client.beta.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
@@ -361,6 +380,7 @@ def run_tasks(
     processor: str = "core-fast",
     source: ClientSource = "python",
     timeout: int = 3600,
+    previous_interaction_id: str | None = None,
 ) -> list[Any]:
     """Run batch tasks using Pydantic models for schema.
 
@@ -368,6 +388,7 @@ def run_tasks(
 
     Args:
         timeout: Max seconds to wait for completion (default: 3600 = 1 hour).
+        previous_interaction_id: Interaction ID from a previous task to reuse as context.
     """
     logger = logging.getLogger(__name__)
 
@@ -375,7 +396,9 @@ def run_tasks(
     logger.info(f"Generated batch_id: {batch_id}")
 
     # Create task group and add runs
-    tg_info = create_task_group(input_data, InputModel, OutputModel, processor, source)
+    tg_info = create_task_group(
+        input_data, InputModel, OutputModel, processor, source, previous_interaction_id=previous_interaction_id
+    )
     taskgroup_id = tg_info["taskgroup_id"]
 
     # Wait for completion
