@@ -3033,14 +3033,6 @@ def completion_install(shell_name: str | None):
         parallel-cli completion install
         parallel-cli completion install --shell zsh
     """
-    if _STANDALONE_MODE:
-        console.print(
-            "[yellow]Shell completions are not supported in standalone binary mode.[/yellow]\n"
-            "Install via pip to use completions: "
-            "[cyan]pip install parallel-web-tools[/cyan]"
-        )
-        sys.exit(EXIT_BAD_INPUT)
-
     if shell_name is None:
         shell_name = _detect_shell()
         if shell_name is None:

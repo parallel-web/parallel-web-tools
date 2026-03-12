@@ -1918,8 +1918,18 @@ class TestCompletion:
         assert result.exit_code == 0
         assert "already installed" in result.output
 
-    def test_completion_install_standalone_rejected(self, runner):
-        """Should reject install in standalone binary mode."""
-        with mock.patch("parallel_web_tools.cli.commands._STANDALONE_MODE", True):
+    def test_completion_install_works_in_standalone(self, runner, tmp_path):
+        """Should install completions even in standalone binary mode."""
+        config_file = tmp_path / ".bashrc"
+        config_file.write_text("")
+        with (
+            mock.patch("parallel_web_tools.cli.commands._STANDALONE_MODE", True),
+            mock.patch(
+                "parallel_web_tools.cli.commands._SHELL_CONFIG_FILES",
+                {"bash": str(config_file), "zsh": str(tmp_path / ".zshrc"), "fish": str(tmp_path / "config.fish")},
+            ),
+        ):
             result = runner.invoke(main, ["completion", "install", "--shell", "bash"])
-        assert result.exit_code != 0
+        assert result.exit_code == 0
+        content = config_file.read_text()
+        assert "# parallel-cli shell completion" in content
