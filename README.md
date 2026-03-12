@@ -13,6 +13,7 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 - **Web Search** - AI-powered search with domain filtering and date ranges
 - **Content Extraction** - Extract clean markdown from any URL
 - **Data Enrichment** - Enrich CSV, JSON, DuckDB, and BigQuery data with AI
+- **Follow-up Context** - Chain research and enrichment tasks using `--previous-interaction-id`
 - **AI-Assisted Planning** - Use natural language to define what data you want
 - **Multiple Integrations** - Polars, DuckDB, Snowflake, BigQuery, Spark
 
@@ -208,12 +209,40 @@ echo "What is the latest funding for Anthropic?" | parallel-cli search - --json
 echo "Research question" | parallel-cli research run - --json
 
 # Async: launch then poll separately
-parallel-cli research run "question" --no-wait --json   # returns run_id
+parallel-cli research run "question" --no-wait --json   # returns run_id + interaction_id
 parallel-cli research status trun_xxx --json             # check status
 parallel-cli research poll trun_xxx --json               # wait and get result
 
+# Follow-up: reuse context from a previous task
+parallel-cli research run "follow-up question" --previous-interaction-id trun_xxx --json
+parallel-cli enrich run --data '[...]' --previous-interaction-id trun_xxx --json
+
 # Exit codes: 0=ok, 2=bad input, 3=auth error, 4=api error, 5=timeout
 ```
+
+### Follow-up research with context reuse
+
+Tasks return an `interaction_id` that can be passed as `--previous-interaction-id` on a subsequent research or enrichment run. The new task inherits the context from the prior one, so follow-up questions can reference earlier results without repeating them.
+
+```bash
+# Step 1: Run initial research (interaction_id is in the JSON output)
+parallel-cli research run "What are the top 3 AI companies?" --json --processor lite-fast
+# → { "run_id": "trun_abc", "interaction_id": "trun_abc", ... }
+
+# Step 2: Follow-up research referencing the first task's context
+parallel-cli research run "What products does the #1 company make?" \
+    --previous-interaction-id trun_abc --json
+
+# Step 3: Use research context for enrichment
+parallel-cli enrich run \
+    --data '[{"company": "Anthropic"}, {"company": "OpenAI"}]' \
+    --target enriched.csv \
+    --source-columns '[{"name": "company", "description": "Company name"}]' \
+    --enriched-columns '[{"name": "products", "description": "Main products"}]' \
+    --previous-interaction-id trun_abc --json
+```
+
+The `interaction_id` is shown in both human-readable and `--json` output for `research run`, `research status`, and `research poll`.
 
 ### More examples
 
