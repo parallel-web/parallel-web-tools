@@ -656,7 +656,11 @@ def config_cmd(key: str | None, value: str | None, output_json: bool):
 @click.argument("objective", required=False)
 @click.option("-q", "--query", multiple=True, help="Keyword search query (can be repeated)")
 @click.option(
-    "--mode", type=click.Choice(["one-shot", "agentic"]), default="agentic", help="Search mode", show_default=True
+    "--mode",
+    type=click.Choice(["one-shot", "agentic", "fast"]),
+    default="agentic",
+    help="Search mode",
+    show_default=True,
 )
 @click.option("--max-results", type=int, default=10, help="Maximum results", show_default=True)
 @click.option("--include-domains", multiple=True, help="Only search these domains (comma-separated or repeated)")
