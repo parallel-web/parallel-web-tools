@@ -9,11 +9,14 @@ and returns analyst-grade intelligence reports.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from parallel_web_tools.core.auth import create_client
 from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
+
+# Output schema types supported for deep research
+OutputSchemaType = Literal["auto", "text"]
 
 # Base URL for viewing results
 PLATFORM_BASE = "https://platform.parallel.ai"
@@ -69,11 +72,24 @@ def _serialize_output(output: Any) -> dict[str, Any]:
     return {"raw": str(output)}
 
 
+def _build_task_spec(output_schema: OutputSchemaType) -> Any:
+    """Build task_spec kwargs for the SDK based on output schema type.
+
+    Returns None for auto schema (SDK default), or a TaskSpecParam for text.
+    """
+    if output_schema == "text":
+        from parallel.types import TaskSpecParam, TextSchemaParam
+
+        return TaskSpecParam(output_schema=TextSchemaParam(type="text"))
+    return None
+
+
 def create_research_task(
     query: str,
     processor: str = "pro-fast",
     api_key: str | None = None,
     source: ClientSource = "python",
+    output_schema: OutputSchemaType = "auto",
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -82,16 +98,22 @@ def create_research_task(
         processor: Processor tier (see RESEARCH_PROCESSORS).
         api_key: Optional API key.
         source: Client source identifier for User-Agent.
+        output_schema: Output schema type - "auto" for structured JSON, "text" for markdown.
 
     Returns:
         Dict with run_id, result_url, and other task metadata.
     """
     client = create_client(api_key, source)
 
-    task = client.task_run.create(
-        input=query[:15000],
-        processor=processor,
-    )
+    create_kwargs: dict[str, Any] = {
+        "input": query[:15000],
+        "processor": processor,
+    }
+    task_spec = _build_task_spec(output_schema)
+    if task_spec is not None:
+        create_kwargs["task_spec"] = task_spec
+
+    task = client.task_run.create(**create_kwargs)
 
     return {
         "run_id": task.run_id,
@@ -226,6 +248,7 @@ def run_research(
     poll_interval: int = 45,
     on_status: Callable[[str, str], None] | None = None,
     source: ClientSource = "python",
+    output_schema: OutputSchemaType = "auto",
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -240,6 +263,7 @@ def run_research(
         poll_interval: Seconds between status checks (default: 45).
         on_status: Optional callback called with (status, run_id) on each poll.
         source: Client source identifier for User-Agent.
+        output_schema: Output schema type - "auto" for structured JSON, "text" for markdown.
 
     Returns:
         Dict with content and metadata.
@@ -250,10 +274,15 @@ def run_research(
     """
     client = create_client(api_key, source)
 
-    task = client.task_run.create(
-        input=query[:15000],
-        processor=processor,
-    )
+    create_kwargs: dict[str, Any] = {
+        "input": query[:15000],
+        "processor": processor,
+    }
+    task_spec = _build_task_spec(output_schema)
+    if task_spec is not None:
+        create_kwargs["task_spec"] = task_spec
+
+    task = client.task_run.create(**create_kwargs)
     run_id = task.run_id
     result_url = f"{PLATFORM_BASE}/play/deep-research/{run_id}"
 
