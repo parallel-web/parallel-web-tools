@@ -1111,10 +1111,12 @@ class TestExtractCommandMocked:
         mock_page = mock.MagicMock()
         mock_page.url = "https://example.com"
         mock_page.title = "Example Page"
+        mock_page.publish_date = "2025-01-15"
         mock_page.excerpts = ["Some excerpt"]
         mock_page.full_content = None
         mock_extract_result.results = [mock_page]
         mock_extract_result.errors = []
+        mock_extract_result.warnings = None
 
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
             with mock.patch.dict("sys.modules"):
@@ -1134,6 +1136,80 @@ class TestExtractCommandMocked:
         assert output["status"] == "ok"
         assert len(output["results"]) == 1
         assert output["results"][0]["url"] == "https://example.com"
+        assert output["results"][0]["publish_date"] == "2025-01-15"
+        assert output["warnings"] == []
+
+    def test_extract_warnings_serialized_in_json_output(self, runner):
+        """Should serialize SDK Warning objects as dicts in JSON output."""
+        mock_extract_result = mock.MagicMock()
+        mock_extract_result.extract_id = "ext_456"
+        mock_page = mock.MagicMock()
+        mock_page.url = "https://example.com"
+        mock_page.title = "Example"
+        mock_page.publish_date = None
+        mock_page.excerpts = ["An excerpt"]
+        mock_page.full_content = None
+        mock_extract_result.results = [mock_page]
+        mock_extract_result.errors = []
+        warning_obj = mock.MagicMock()
+        warning_obj.type = "input_validation_warning"
+        warning_obj.message = "Excerpts truncated"
+        warning_obj.detail = {"max_chars_total": 500}
+        mock_extract_result.warnings = [warning_obj]
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.extract.return_value = mock_extract_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert len(output["warnings"]) == 1
+        warning = output["warnings"][0]
+        assert warning["type"] == "input_validation_warning"
+        assert warning["message"] == "Excerpts truncated"
+        assert warning["detail"] == {"max_chars_total": 500}
+
+    def test_extract_errors_serialized_in_json_output(self, runner):
+        """Should serialize extract errors with correct API field names."""
+        mock_extract_result = mock.MagicMock()
+        mock_extract_result.extract_id = "ext_789"
+        mock_extract_result.results = []
+        mock_error = mock.MagicMock()
+        mock_error.url = "https://example.com/broken"
+        mock_error.error_type = "fetch_error"
+        mock_error.http_status_code = 500
+        mock_error.content = "Internal Server Error"
+        mock_extract_result.errors = [mock_error]
+        mock_extract_result.warnings = None
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.beta.extract.return_value = mock_extract_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["extract", "https://example.com/broken", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert len(output["errors"]) == 1
+        error = output["errors"][0]
+        assert error["url"] == "https://example.com/broken"
+        assert error["error_type"] == "fetch_error"
+        assert error["http_status_code"] == 500
+        assert error["content"] == "Internal Server Error"
 
 
 class TestEnrichDeploySnowflake:
