@@ -49,6 +49,7 @@ from parallel_web_tools.core.monitor import (
 )
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
+    OutputSchemaType,
     create_research_task,
     get_research_result,
     get_research_status,
@@ -123,6 +124,7 @@ __all__ = [
     "run_enrichment_from_dict",
     # Research
     "RESEARCH_PROCESSORS",
+    "OutputSchemaType",
     "create_research_task",
     "get_research_result",
     "get_research_status",
