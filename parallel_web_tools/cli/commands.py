@@ -753,7 +753,11 @@ def search(
                 {"url": r.url, "title": r.title, "publish_date": r.publish_date, "excerpts": r.excerpts}
                 for r in result.results
             ],
-            "warnings": result.warnings if hasattr(result, "warnings") else [],
+            "warnings": [
+                {"type": w.type, "message": w.message, "detail": getattr(w, "detail", None)} for w in result.warnings
+            ]
+            if hasattr(result, "warnings") and result.warnings
+            else [],
         }
 
         write_json_output(output_data, output_file, output_json)
