@@ -658,7 +658,7 @@ def config_cmd(key: str | None, value: str | None, output_json: bool):
 @click.option(
     "--mode",
     type=click.Choice(["one-shot", "agentic", "fast"]),
-    default="one-shot",
+    default="fast",
     help="Search mode",
     show_default=True,
 )
