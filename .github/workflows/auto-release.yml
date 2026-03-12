@@ -4,6 +4,8 @@ name: Auto Release
 on:
   push:
     branches: [main]
+    paths:
+      - 'pyproject.toml'
 
 permissions:
   contents: write
