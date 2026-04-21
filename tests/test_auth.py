@@ -50,14 +50,14 @@ class TestPKCE:
 
 
 class TestTokenStorage:
-    """Tests for token storage functions."""
+    """Tests for token storage functions (now backed by credentials module)."""
 
     def test_save_and_load_token(self, tmp_path):
         """Token should be saveable and loadable."""
         test_token = "test_token_12345"
-        token_file = tmp_path / "tokens.json"
+        token_file = tmp_path / "credentials.json"
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
             _save_token(test_token)
 
             # File should exist with correct permissions
@@ -72,7 +72,7 @@ class TestTokenStorage:
         """Loading from nonexistent file should return None."""
         token_file = tmp_path / "nonexistent.json"
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
             loaded = _load_stored_token()
             assert loaded is None
 
@@ -81,9 +81,25 @@ class TestTokenStorage:
         token_file = tmp_path / "corrupted.json"
         token_file.write_text("not valid json {{{")
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
             loaded = _load_stored_token()
             assert loaded is None
+
+    def test_load_v0_token_migrates(self, tmp_path):
+        """Legacy v0 credentials file should be readable and migrated in place."""
+        token_file = tmp_path / "credentials.json"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(json.dumps({"access_token": "legacy_token"}))
+
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
+            loaded = _load_stored_token()
+            assert loaded == "legacy_token"
+
+            # File should now be in v1 format.
+            on_disk = json.loads(token_file.read_text())
+            assert on_disk["version"] == 1
+            assert on_disk["selected_org_id"] == "legacy"
+            assert on_disk["orgs"]["legacy"]["api_key"] == "legacy_token"
 
 
 class TestGetApiKey:
@@ -95,7 +111,7 @@ class TestGetApiKey:
         token_file = tmp_path / "tokens.json"
 
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": env_key}):
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 result = get_api_key()
                 assert result == env_key
 
@@ -110,7 +126,7 @@ class TestGetApiKey:
             # Remove PARALLEL_API_KEY if it exists
             os.environ.pop("PARALLEL_API_KEY", None)
 
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 result = get_api_key()
                 assert result == stored_token
 
@@ -120,7 +136,7 @@ class TestGetApiKey:
         token_file = tmp_path / "tokens.json"
 
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": env_key}):
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 with mock.patch("parallel_web_tools.core.auth._do_oauth_flow") as mock_oauth:
                     with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
                         mock_oauth.return_value = "new_oauth_token"
@@ -151,11 +167,14 @@ class TestAuthStatus:
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
 
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 status = get_auth_status()
                 assert status["authenticated"] is True
                 assert status["method"] == "oauth"
                 assert status["token_file"] == str(token_file)
+                # v1 status should surface version and selected org.
+                assert status["version"] == 1
+                assert status["selected_org_id"] == "legacy"
 
     def test_status_not_authenticated(self, tmp_path):
         """Status should show not authenticated when nothing configured."""
@@ -164,7 +183,7 @@ class TestAuthStatus:
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
 
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 status = get_auth_status()
                 assert status["authenticated"] is False
                 assert status["method"] is None
@@ -179,7 +198,7 @@ class TestLogout:
         token_file.parent.mkdir(parents=True, exist_ok=True)
         token_file.write_text(json.dumps({"access_token": "test"}))
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
             result = logout()
             assert result is True
             assert not token_file.exists()
@@ -188,7 +207,7 @@ class TestLogout:
         """Logout should return False if no token exists."""
         token_file = tmp_path / "nonexistent.json"
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
             result = logout()
             assert result is False
 
@@ -222,7 +241,7 @@ class TestCreateClient:
 
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 with pytest.raises(ValueError, match="Parallel API key required"):
                     create_client()
 
@@ -252,7 +271,7 @@ class TestResolveApiKeyInAuth:
 
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 result = resolve_api_key()
                 assert result == "stored-token"
 
@@ -522,7 +541,7 @@ class TestGetApiKeyDeviceFlow:
 
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
                     mock_device.return_value = "device-token"
 
@@ -537,7 +556,7 @@ class TestGetApiKeyDeviceFlow:
 
         with mock.patch.dict(os.environ, {"SSH_CLIENT": "1.2.3.4 54321 22"}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
                     mock_device.return_value = "ssh-device-token"
 
@@ -557,7 +576,7 @@ class TestGetApiKeyDeviceFlow:
         env["DISPLAY"] = ":0"  # Ensure Linux display check passes
 
         with mock.patch.dict(os.environ, env, clear=True):
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 with mock.patch("os.path.exists", return_value=False):
                     with mock.patch("parallel_web_tools.core.auth._do_oauth_flow") as mock_oauth:
                         mock_oauth.return_value = "browser-token"
@@ -574,7 +593,7 @@ class TestGetApiKeyDeviceFlow:
 
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 with mock.patch("parallel_web_tools.core.auth._do_device_flow") as mock_device:
                     mock_device.return_value = "callback-token"
 

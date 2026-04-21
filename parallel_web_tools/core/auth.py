@@ -16,17 +16,16 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 from parallel import AsyncParallel, Parallel
 
+from parallel_web_tools.core import credentials
 from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
 
 # OAuth Configuration
 OAUTH_PROVIDER_HOST = "platform.parallel.ai"
 OAUTH_PROVIDER_PATH_PREFIX = "/getKeys"
 OAUTH_SCOPE = "key:read"
-TOKEN_FILE = Path.home() / ".config" / "parallel-web-tools" / "credentials.json"
 
 # Device flow grant type (RFC 8628)
 DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
@@ -67,23 +66,18 @@ def _generate_code_challenge(verifier: str) -> str:
 
 
 def _load_stored_token() -> str | None:
-    """Load stored OAuth token from file."""
-    if not TOKEN_FILE.exists():
-        return None
-    try:
-        with open(TOKEN_FILE) as f:
-            data = json.load(f)
-            return data.get("access_token")
-    except (OSError, json.JSONDecodeError):
-        return None
+    """Load stored API key for the currently selected org."""
+    return credentials.get_selected_api_key()
 
 
 def _save_token(access_token: str) -> None:
-    """Save OAuth token to file with secure permissions."""
-    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(TOKEN_FILE, "w") as f:
-        json.dump({"access_token": access_token}, f)
-    os.chmod(TOKEN_FILE, 0o600)
+    """Save a token minted by the existing OAuth flow.
+
+    The flow today doesn't know the real org id, so tokens land in the
+    ``legacy`` placeholder org. The future control-API login flow will write
+    into a properly-keyed org and flip ``selected_org_id``.
+    """
+    credentials.set_api_key_for_org(credentials.LEGACY_ORG_ID, access_token)
 
 
 class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -492,21 +486,25 @@ def get_async_client(
 
 
 def logout() -> bool:
-    """Remove stored OAuth token."""
-    if TOKEN_FILE.exists():
-        TOKEN_FILE.unlink()
-        return True
-    return False
+    """Remove stored credentials."""
+    return credentials.delete()
 
 
-def get_auth_status() -> dict[str, str | bool | None]:
+def get_auth_status() -> dict:
     """Get current authentication status."""
     api_key = os.environ.get("PARALLEL_API_KEY")
     if api_key:
         return {"authenticated": True, "method": "environment", "token_file": None}
 
-    stored_token = _load_stored_token()
-    if stored_token:
-        return {"authenticated": True, "method": "oauth", "token_file": str(TOKEN_FILE)}
+    creds = credentials.load()
+    org = creds.selected_org() if creds else None
+    if org and org.api_key:
+        return {
+            "authenticated": True,
+            "method": "oauth",
+            "token_file": str(credentials.CREDENTIALS_FILE),
+            "version": creds.version,
+            "selected_org_id": creds.selected_org_id,
+        }
 
     return {"authenticated": False, "method": None, "token_file": None}
