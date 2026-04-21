@@ -62,7 +62,13 @@ async def _enrich_all_async(
     from parallel import AsyncParallel
     from parallel.types import JsonSchemaParam, TaskSpecParam
 
-    client = AsyncParallel(api_key=api_key, default_headers=get_default_headers("duckdb"))
+    from parallel_web_tools.core.endpoints import get_api_url
+
+    client = AsyncParallel(
+        base_url=get_api_url(),
+        api_key=api_key,
+        default_headers=get_default_headers("duckdb"),
+    )
     output_schema = build_output_schema(output_columns)
     task_spec = TaskSpecParam(output_schema=JsonSchemaParam(type="json", json_schema=output_schema))
 

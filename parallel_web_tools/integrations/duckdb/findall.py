@@ -29,6 +29,7 @@ import duckdb
 from parallel_web_tools.core.findall import run_findall
 from parallel_web_tools.core.result import EnrichmentResult
 from parallel_web_tools.core.sql_utils import quote_identifier
+from parallel_web_tools.integrations.duckdb._relation import wrap_relation
 
 
 def _unpack_output(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -165,7 +166,7 @@ def findall_table(
 
     if not col_names:
         # No results — return an empty relation
-        rel = conn.sql("SELECT 1 WHERE 1=0")
+        rel = wrap_relation(conn.sql("SELECT 1 WHERE 1=0"))
         return EnrichmentResult(
             result=rel,
             success_count=0,
@@ -193,9 +194,9 @@ def findall_table(
     if result_table:
         result_quoted = quote_identifier(result_table)
         conn.execute(f"CREATE OR REPLACE TABLE {result_quoted} AS SELECT * FROM {temp_quoted}")
-        rel = conn.sql(f"SELECT * FROM {result_quoted}")
+        rel = wrap_relation(conn.sql(f"SELECT * FROM {result_quoted}"))
     else:
-        rel = conn.sql(f"SELECT * FROM {temp_quoted}")
+        rel = wrap_relation(conn.sql(f"SELECT * FROM {temp_quoted}"))
 
     return EnrichmentResult(
         result=rel,

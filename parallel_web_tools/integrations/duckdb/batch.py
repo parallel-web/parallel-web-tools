@@ -31,6 +31,7 @@ import duckdb
 
 from parallel_web_tools.core import EnrichmentResult, build_output_schema, enrich_batch
 from parallel_web_tools.core.sql_utils import quote_identifier
+from parallel_web_tools.integrations.duckdb._relation import wrap_relation
 
 if TYPE_CHECKING:
     DuckDBEnrichmentResult = EnrichmentResult[duckdb.DuckDBPyRelation]
@@ -119,7 +120,7 @@ def enrich_table(
         if include_basis:
             empty_cols += ", NULL::VARCHAR AS _basis"
         empty_query = f"SELECT {select_cols}, {empty_cols} FROM {quote_identifier(source_table)} WHERE 1=0"
-        rel = conn.sql(empty_query)
+        rel = wrap_relation(conn.sql(empty_query))
 
         return EnrichmentResult(
             result=rel,
@@ -209,9 +210,9 @@ def enrich_table(
     if result_table:
         result_quoted = quote_identifier(result_table)
         conn.execute(f"CREATE TABLE {result_quoted} AS SELECT * FROM {temp_quoted}")
-        rel = conn.sql(f"SELECT * FROM {result_quoted}")
+        rel = wrap_relation(conn.sql(f"SELECT * FROM {result_quoted}"))
     else:
-        rel = conn.sql(f"SELECT * FROM {temp_quoted}")
+        rel = wrap_relation(conn.sql(f"SELECT * FROM {temp_quoted}"))
 
     elapsed = time.time() - start_time
 

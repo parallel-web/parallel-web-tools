@@ -29,17 +29,18 @@ class TestResolveApiKey:
         assert result == "test-key-123"
 
     def test_env_var_fallback(self):
-        """Should use PARALLEL_API_KEY env var when no explicit key."""
+        """Should use PARALLEL_API_KEY env var when no stored credentials."""
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "env-key-456"}):
-            result = resolve_api_key()
-            assert result == "env-key-456"
+            with mock.patch("parallel_web_tools.core.credentials.get_selected_api_key", return_value=None):
+                result = resolve_api_key()
+                assert result == "env-key-456"
 
     def test_oauth_fallback(self):
         """Should use stored OAuth credentials when no env var."""
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
 
-            with mock.patch("parallel_web_tools.core.auth._load_stored_token") as mock_load:
+            with mock.patch("parallel_web_tools.core.credentials.get_selected_api_key") as mock_load:
                 mock_load.return_value = "oauth-key-789"
                 result = resolve_api_key()
                 assert result == "oauth-key-789"
@@ -49,7 +50,7 @@ class TestResolveApiKey:
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
 
-            with mock.patch("parallel_web_tools.core.auth._load_stored_token") as mock_load:
+            with mock.patch("parallel_web_tools.core.credentials.get_selected_api_key") as mock_load:
                 mock_load.return_value = None
 
                 with pytest.raises(ValueError) as exc_info:
