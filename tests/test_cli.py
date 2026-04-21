@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 from unittest import mock
 
 import pytest
@@ -242,12 +241,14 @@ class TestMainCLI:
 class TestAuthCommand:
     """Tests for the auth command."""
 
-    def test_auth_with_env_var(self, runner):
-        """Should show authenticated via environment."""
+    def test_auth_with_env_var(self, runner, tmp_path):
+        """Should show authenticated via environment when no stored credentials."""
+        token_file = tmp_path / "nonexistent.json"
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}):
-            result = runner.invoke(main, ["auth"])
-            assert result.exit_code == 0
-            assert "PARALLEL_API_KEY" in result.output or "environment" in result.output
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
+                result = runner.invoke(main, ["auth"])
+                assert result.exit_code == 0
+                assert "PARALLEL_API_KEY" in result.output or "environment" in result.output
 
     def test_auth_not_authenticated(self, runner, tmp_path):
         """Should show not authenticated when no credentials."""
@@ -255,7 +256,7 @@ class TestAuthCommand:
 
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
                 result = runner.invoke(main, ["auth"])
                 assert result.exit_code == 0
                 assert "Not authenticated" in result.output or "not" in result.output.lower()
@@ -268,7 +269,7 @@ class TestLogoutCommand:
         """Should handle logout when no credentials exist."""
         token_file = tmp_path / "nonexistent.json"
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file):
             result = runner.invoke(main, ["logout"])
             assert result.exit_code == 0
             assert "No stored credentials" in result.output or "no" in result.output.lower()
@@ -987,17 +988,10 @@ class TestSearchCommandMocked:
         ]
         mock_search_result.warnings = []
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.search.return_value = mock_search_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.search.return_value = mock_search_result
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["search", "test query", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1025,17 +1019,10 @@ class TestSearchCommandMocked:
         warning_obj.detail = {"max_chars_total": 500}
         mock_search_result.warnings = [warning_obj]
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.search.return_value = mock_search_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.search.return_value = mock_search_result
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["search", "test query", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1047,17 +1034,10 @@ class TestSearchCommandMocked:
 
     def test_search_api_error_json_mode(self, runner):
         """Should output JSON error when API fails in --json mode."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.search.side_effect = RuntimeError("API unavailable")
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.search.side_effect = RuntimeError("API unavailable")
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["search", "test query", "--json"])
 
         assert result.exit_code == EXIT_API_ERROR
         output = json.loads(result.output)
@@ -1066,17 +1046,10 @@ class TestSearchCommandMocked:
 
     def test_search_api_error_console_mode(self, runner):
         """Should output formatted error when API fails in console mode."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.search.side_effect = RuntimeError("API unavailable")
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.search.side_effect = RuntimeError("API unavailable")
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["search", "test query"])
 
         assert result.exit_code == EXIT_API_ERROR
         assert "API unavailable" in result.output
@@ -1087,17 +1060,10 @@ class TestExtractCommandMocked:
 
     def test_extract_api_error_json_mode(self, runner):
         """Should output JSON error when extract API fails in --json mode."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.extract.side_effect = ConnectionError("Network error")
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.extract.side_effect = ConnectionError("Network error")
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == EXIT_API_ERROR
         output = json.loads(result.output)
@@ -1118,17 +1084,10 @@ class TestExtractCommandMocked:
         mock_extract_result.errors = []
         mock_extract_result.warnings = None
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.extract.return_value = mock_extract_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.extract.return_value = mock_extract_result
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1157,17 +1116,10 @@ class TestExtractCommandMocked:
         warning_obj.detail = {"max_chars_total": 500}
         mock_extract_result.warnings = [warning_obj]
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.extract.return_value = mock_extract_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.extract.return_value = mock_extract_result
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1190,17 +1142,10 @@ class TestExtractCommandMocked:
         mock_extract_result.errors = [mock_error]
         mock_extract_result.warnings = None
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.beta.extract.return_value = mock_extract_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com/broken", "--json"])
-
-                del sys.modules["parallel"]
+        mock_client = mock.MagicMock()
+        mock_client.beta.extract.return_value = mock_extract_result
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=mock_client):
+            result = runner.invoke(main, ["extract", "https://example.com/broken", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)

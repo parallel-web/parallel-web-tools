@@ -468,45 +468,80 @@ def auth(output_json: bool):
         console.print("  Or set PARALLEL_API_KEY environment variable")
 
 
-@main.command()
-@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-@click.option("--device", is_flag=True, help="Use device authorization flow (for SSH, containers, etc.)")
-def login(output_json: bool, device: bool):
-    """Authenticate with Parallel API."""
+def _run_login(output_json: bool, email: str | None) -> None:
+    """Shared body of `parallel-cli login` and `parallel-cli login email <addr>`."""
+    import webbrowser
+
+    from parallel_web_tools.core.auth import _build_verification_uri, _is_headless
+
     if not output_json:
-        if device:
-            console.print("[bold cyan]Authenticating with Parallel (device flow)...[/bold cyan]\n")
-        else:
-            console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
+        console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
 
     def _on_device_code(info):
+        enriched_uri = _build_verification_uri(info.verification_uri_complete, email)
         if output_json:
             print(
                 json.dumps(
                     {
                         "status": "waiting_for_authorization",
                         "verification_uri": info.verification_uri,
-                        "verification_uri_complete": info.verification_uri_complete,
+                        "verification_uri_complete": enriched_uri,
                         "user_code": info.user_code,
                         "expires_in": info.expires_in,
                     }
                 ),
                 flush=True,
             )
-        else:
-            console.print(f"Visit: [bold cyan]{info.verification_uri}[/bold cyan]")
-            console.print(f"Enter code: [bold yellow]{info.user_code}[/bold yellow]\n")
-            console.print(f"Or open: [link={info.verification_uri_complete}]{info.verification_uri_complete}[/link]\n")
-            console.print("Waiting for authorization...")
+            return
+
+        console.print(f"Visit: [bold cyan]{info.verification_uri}[/bold cyan]")
+        console.print(f"Enter code: [bold yellow]{info.user_code}[/bold yellow]\n")
+        console.print(f"Or open: [link={enriched_uri}]{enriched_uri}[/link]\n")
+        console.print("Confirm the code matches what your browser shows, then authorize.")
+        console.print("Waiting for authorization...")
+
+        # Providing an on_device_code callback suppresses auth.py's default
+        # browser-launch branch, so open it here for interactive CLI use.
+        if not _is_headless():
+            try:
+                webbrowser.open(enriched_uri)
+            except Exception:
+                pass
 
     try:
-        get_api_key(force_login=True, device=device, on_device_code=_on_device_code)
+        get_api_key(force_login=True, on_device_code=_on_device_code, email=email)
         if output_json:
             print(json.dumps({"status": "authenticated"}))
         else:
             console.print("\n[bold green]Authentication successful![/bold green]")
     except Exception as e:
         _handle_error(e, output_json=output_json, exit_code=EXIT_AUTH_ERROR, prefix="Authentication failed")
+
+
+@main.group(invoke_without_command=True)
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def login(ctx: click.Context, output_json: bool):
+    """Authenticate with Parallel API (device authorization flow).
+
+    \b
+    Examples:
+      parallel-cli login                        # standard device flow
+      parallel-cli login email you@example.com  # pre-fill email on the SSO page
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["output_json"] = output_json
+    if ctx.invoked_subcommand is None:
+        _run_login(output_json=output_json, email=None)
+
+
+@login.command("email")
+@click.argument("user_email")
+@click.pass_context
+def login_email(ctx: click.Context, user_email: str):
+    """Authenticate with an email hint pre-filled on the SSO page."""
+    output_json = ctx.obj.get("output_json", False) if ctx.obj else False
+    _run_login(output_json=output_json, email=user_email)
 
 
 @main.command(name="logout")
@@ -705,12 +740,9 @@ def search(
         raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
     try:
-        from parallel import Parallel
+        from parallel_web_tools.core.auth import get_client
 
-        from parallel_web_tools.core import get_default_headers
-
-        api_key = get_api_key()
-        client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
+        client = get_client(source="cli")
 
         search_kwargs: dict[str, Any] = {"mode": mode, "max_results": max_results}
         if objective:
@@ -818,12 +850,9 @@ def extract(
 ):
     """Extract content from URLs as clean markdown."""
     try:
-        from parallel import Parallel
+        from parallel_web_tools.core.auth import get_client
 
-        from parallel_web_tools.core import get_default_headers
-
-        api_key = get_api_key()
-        client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
+        client = get_client(source="cli")
 
         extract_kwargs: dict[str, Any] = {
             "urls": list(urls),

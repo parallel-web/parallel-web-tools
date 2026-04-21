@@ -79,6 +79,7 @@ class TestLoad:
     def test_load_v1_roundtrip(self, creds_file):
         original = Credentials(
             selected_org_id="org_abc",
+            client_id="cid_registered",
             orgs={
                 "org_abc": OrgCredentials(
                     api_key="sk_test",
@@ -97,6 +98,16 @@ class TestLoad:
 
         loaded = load()
         assert loaded == original
+        assert loaded is not None and loaded.client_id == "cid_registered"
+
+    def test_migrated_v0_has_no_client_id(self, creds_file):
+        # v0 files never carried a client_id — migration must leave it unset
+        # so _ensure_client_id knows to register on the next login.
+        creds_file.parent.mkdir(parents=True, exist_ok=True)
+        creds_file.write_text(json.dumps({"access_token": "tok_v0"}))
+        loaded = load()
+        assert loaded is not None
+        assert loaded.client_id is None
 
 
 class TestSave:
@@ -166,6 +177,7 @@ class TestHelpers:
     def test_set_api_key_for_org_creates_and_selects(self, creds_file):
         set_api_key_for_org("org_new", "sk_xyz")
         creds = load()
+        assert creds is not None
         assert creds.selected_org_id == "org_new"
         assert creds.orgs["org_new"].api_key == "sk_xyz"
 
@@ -173,6 +185,7 @@ class TestHelpers:
         set_api_key_for_org("org_a", "sk_a")  # becomes selected
         set_api_key_for_org("org_b", "sk_b")  # should NOT change selection
         creds = load()
+        assert creds is not None
         assert creds.selected_org_id == "org_a"
         assert creds.orgs["org_a"].api_key == "sk_a"
         assert creds.orgs["org_b"].api_key == "sk_b"
@@ -181,6 +194,7 @@ class TestHelpers:
         set_api_key_for_org("org_a", "old_key")
         set_api_key_for_org("org_a", "new_key")
         creds = load()
+        assert creds is not None
         assert creds.orgs["org_a"].api_key == "new_key"
 
     def test_set_api_key_for_org_preserves_control_api(self, creds_file):
@@ -202,6 +216,7 @@ class TestHelpers:
         set_api_key_for_org("org_a", "new")
 
         creds = load()
+        assert creds is not None
         assert creds.orgs["org_a"].api_key == "new"
         assert creds.orgs["org_a"].control_api.access_token == "atk"
         assert creds.orgs["org_a"].control_api.refresh_token == "rtk"

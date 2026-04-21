@@ -39,6 +39,11 @@ class Credentials:
     version: int = CURRENT_VERSION
     selected_org_id: str | None = None
     orgs: dict[str, OrgCredentials] = field(default_factory=dict)
+    # Dynamically-registered OAuth client_id returned by
+    # ``/getServiceKeys/register``. ``None`` means registration hasn't
+    # succeeded yet (first boot, migrated v0 file, or prior failure) — the
+    # next login attempt will retry and fall back to a hardcoded id on error.
+    client_id: str | None = None
 
     def selected_org(self) -> OrgCredentials | None:
         if self.selected_org_id is None:
@@ -84,6 +89,7 @@ def _credentials_from_dict(data: dict) -> Credentials:
         version=data.get("version", CURRENT_VERSION),
         selected_org_id=data.get("selected_org_id"),
         orgs=orgs,
+        client_id=data.get("client_id"),
     )
 
 

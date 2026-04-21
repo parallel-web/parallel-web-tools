@@ -98,6 +98,7 @@ dev = [
     "pre-commit>=4.0.0",
     "ruff>=0.14.0",
     "ty>=0.0.21",
+    "datamodel-code-generator[ruff]>=0.26.0",
 ]
 
 [tool.hatch.build.targets.wheel]

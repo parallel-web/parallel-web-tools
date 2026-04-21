@@ -179,7 +179,10 @@ def enrich_streaming_batch(
     try:
         from parallel import Parallel
 
+        from parallel_web_tools.core.endpoints import get_api_url
+
         client = Parallel(
+            base_url=get_api_url(),
             api_key=resolve_api_key(api_key),
             default_headers=get_default_headers("spark"),
         )

@@ -12,6 +12,7 @@ wheels/
 # Environment files
 .env.local
 .env
+.envrc
 
 # Data files
 data/

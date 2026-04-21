@@ -2,11 +2,13 @@
 
 from parallel_web_tools.core.auth import (
     DeviceCodeInfo,
+    ReauthenticationRequired,
     create_client,
     get_api_key,
     get_async_client,
     get_auth_status,
     get_client,
+    get_control_api_access_token,
     logout,
     poll_device_token,
     request_device_code,
@@ -83,11 +85,13 @@ from parallel_web_tools.core.user_agent import (
 __all__ = [
     # Auth
     "DeviceCodeInfo",
+    "ReauthenticationRequired",
     "create_client",
     "get_api_key",
+    "get_async_client",
     "get_auth_status",
     "get_client",
-    "get_async_client",
+    "get_control_api_access_token",
     "logout",
     "poll_device_token",
     "request_device_code",

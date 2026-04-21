@@ -1,13 +1,21 @@
-"""OAuth Authentication for Parallel API."""
+"""Device-flow authentication for parallel-cli.
 
-import base64
-import hashlib
-import html
-import http.server
+Authentication happens exclusively via the OAuth 2.0 Device Authorization Grant
+(RFC 8628) against the platform's ``/getServiceKeys/*`` endpoints. After a
+successful device flow the CLI additionally provisions a data-API key against
+the service API so that subsequent commands (search, extract, etc.) have a key
+to use.
+
+All endpoints are built from :mod:`parallel_web_tools.core.endpoints`, so a
+local dev stack can be reached via ``PARALLEL_PLATFORM_URL`` /
+``PARALLEL_SERVICE_API_URL`` env vars.
+"""
+
+from __future__ import annotations
+
 import json
 import os
-import secrets
-import socketserver
+import platform as _platform
 import sys
 import time
 import urllib.error
@@ -19,16 +27,31 @@ from dataclasses import dataclass
 
 from parallel import AsyncParallel, Parallel
 
-from parallel_web_tools.core import credentials
+from parallel_web_tools.core import credentials, service
+from parallel_web_tools.core.endpoints import (
+    CLIENT_ID,
+    DEFAULT_SCOPE,
+    get_api_url,
+    get_platform_url,
+)
 from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
 
-# OAuth Configuration
-OAUTH_PROVIDER_HOST = "platform.parallel.ai"
-OAUTH_PROVIDER_PATH_PREFIX = "/getKeys"
-OAUTH_SCOPE = "key:read"
-
-# Device flow grant type (RFC 8628)
 DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+REFRESH_TOKEN_GRANT_TYPE = "refresh_token"
+
+# Proactively refresh when the access token is within this many seconds of its
+# absolute expiry, so callers don't get a token that dies mid-request under clock
+# skew or network latency.
+ACCESS_TOKEN_SKEW_SECONDS = 30
+
+
+class ReauthenticationRequired(Exception):
+    """Raised when the control-API grant can no longer be refreshed silently.
+
+    The caller must run ``parallel-cli login`` before any control-API call
+    will succeed — the authorization grant, the refresh token, or both have
+    expired (or never existed), so no silent refresh is possible.
+    """
 
 
 @dataclass
@@ -36,216 +59,154 @@ class DeviceCodeInfo:
     """Response from the device authorization endpoint (RFC 8628)."""
 
     device_code: str
-    """Opaque code used to poll the token endpoint. Never shown to user."""
-
     user_code: str
-    """Human-readable code the user enters at the verification URL (e.g. BCDF-GHJK)."""
-
     verification_uri: str
-    """URL the user visits to enter the code."""
-
     verification_uri_complete: str
-    """URL with user_code pre-filled as a query parameter."""
-
     expires_in: int
-    """Seconds until the device code expires (default 600)."""
-
     interval: int
-    """Minimum polling interval in seconds (default 5)."""
 
 
-def _generate_code_verifier() -> str:
-    """Generate a random code verifier for PKCE."""
-    return secrets.token_urlsafe(32)
+@dataclass
+class TokenResponse:
+    """Response from ``/getServiceKeys/token`` (device or refresh grant)."""
+
+    access_token: str
+    refresh_token: str
+    expires_in: int
+    refresh_token_expires_in: int
+    authorization_expires_in: int
+    org_id: str
+    scope: str = ""
+    token_type: str = "Bearer"
+
+    @property
+    def scopes(self) -> list[str]:
+        return self.scope.split() if self.scope else []
 
 
-def _generate_code_challenge(verifier: str) -> str:
-    """Generate code challenge from verifier using S256."""
-    digest = hashlib.sha256(verifier.encode()).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
-
-
-def _load_stored_token() -> str | None:
-    """Load stored API key for the currently selected org."""
-    return credentials.get_selected_api_key()
-
-
-def _save_token(access_token: str) -> None:
-    """Save a token minted by the existing OAuth flow.
-
-    The flow today doesn't know the real org id, so tokens land in the
-    ``legacy`` placeholder org. The future control-API login flow will write
-    into a properly-keyed org and flip ``selected_org_id``.
-    """
-    credentials.set_api_key_for_org(credentials.LEGACY_ORG_ID, access_token)
-
-
-class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
-    """HTTP handler to receive OAuth callback."""
-
-    auth_code: str | None = None
-    error: str | None = None
-
-    def log_message(self, format, *args):
-        pass
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        params = urllib.parse.parse_qs(parsed.query)
-
-        if "code" in params:
-            OAuthCallbackHandler.auth_code = params["code"][0]
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                b"""
-                <html><body style="font-family: system-ui; text-align: center; padding: 50px;">
-                <h1>Authentication Successful!</h1>
-                <p>You can close this window and return to the terminal.</p>
-                </body></html>
-            """
-            )
-        elif "error" in params:
-            OAuthCallbackHandler.error = params.get("error_description", params["error"])[0]
-            self.send_response(400)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(
-                f"""
-                <html><body style="font-family: system-ui; text-align: center; padding: 50px;">
-                <h1>Authentication Failed</h1>
-                <p>{html.escape(OAuthCallbackHandler.error)}</p>
-                </body></html>
-            """.encode()
-            )
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-
-def _do_oauth_flow() -> str:
-    """Perform OAuth authorization code flow with PKCE."""
-    OAuthCallbackHandler.auth_code = None
-    OAuthCallbackHandler.error = None
-
-    with socketserver.TCPServer(("127.0.0.1", 0), OAuthCallbackHandler) as httpd:
-        port = httpd.server_address[1]
-        redirect_uri = f"http://localhost:{port}/callback"
-
-        code_verifier = _generate_code_verifier()
-        code_challenge = _generate_code_challenge(code_verifier)
-
-        auth_params = {
-            "client_id": "localhost",
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": OAUTH_SCOPE,
-            "resource": f"http://localhost:{port}",
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
-        }
-        auth_url = f"https://{OAUTH_PROVIDER_HOST}{OAUTH_PROVIDER_PATH_PREFIX}/authorize?" + urllib.parse.urlencode(
-            auth_params
-        )
-
-        print("\nOpening browser for authentication...", file=sys.stderr)
-        print(f"If browser doesn't open, visit: {auth_url}", file=sys.stderr)
-
-        webbrowser.open(auth_url)
-        httpd.timeout = 300
-
-        while OAuthCallbackHandler.auth_code is None and OAuthCallbackHandler.error is None:
-            httpd.handle_request()
-
-        if OAuthCallbackHandler.error:
-            raise Exception(f"OAuth error: {OAuthCallbackHandler.error}")
-
-        auth_code = OAuthCallbackHandler.auth_code
-
-    token_url = f"https://{OAUTH_PROVIDER_HOST}{OAUTH_PROVIDER_PATH_PREFIX}/token"
-    token_data = urllib.parse.urlencode(
-        {
-            "grant_type": "authorization_code",
-            "code": auth_code,
-            "client_id": "localhost",
-            "redirect_uri": redirect_uri,
-            "code_verifier": code_verifier,
-            "resource": f"http://localhost:{port}",
-        }
-    ).encode()
-
-    req = urllib.request.Request(
-        token_url,
-        data=token_data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            token_response = json.loads(response.read().decode())
-            access_token = token_response.get("access_token")
-            if not access_token:
-                raise Exception("No access token in response")
-            return access_token
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
-        raise Exception(f"Token exchange failed: {e.code} - {error_body}") from e
+def _platform_path(path: str) -> str:
+    return f"{get_platform_url()}{path}"
 
 
 def _is_headless() -> bool:
-    """Detect if the environment cannot open a browser for OAuth.
-
-    Returns True for SSH sessions, containers, CI, and other headless
-    environments where the authorization code flow won't work.
-    """
-    # SSH session
+    """Detect if the environment cannot open a browser."""
     if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
         return True
-
-    # CI environments
     if os.environ.get("CI"):
         return True
-
-    # No display on Linux
     if sys.platform == "linux" and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         return True
-
-    # Container indicators
     if os.path.exists("/.dockerenv") or os.environ.get("container"):
         return True
-
     return False
 
 
-def request_device_code() -> DeviceCodeInfo:
-    """Request a device code from the authorization server (RFC 8628 Step 1).
+def _post_form(url: str, data: dict[str, str], headers: dict[str, str] | None = None, timeout: int = 30) -> dict:
+    """POST a form-encoded request, return parsed JSON body.
 
-    Returns a DeviceCodeInfo with the user_code, verification URL, and device_code
-    needed for the rest of the flow. Callers should present the verification_uri and
-    user_code to the user, then call poll_device_token() to wait for authorization.
-
-    Example::
-
-        info = request_device_code()
-        print(f"Visit {info.verification_uri} and enter code: {info.user_code}")
-        token = poll_device_token(info)
+    Raises ``urllib.error.HTTPError`` on HTTP error (body still readable via ``e.read()``).
     """
-    device_code_url = f"https://{OAUTH_PROVIDER_HOST}{OAUTH_PROVIDER_PATH_PREFIX}/device/code"
+    body = urllib.parse.urlencode(data).encode()
+    req_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, data=body, headers=req_headers)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode())
 
-    request_data = urllib.parse.urlencode({"client_id": "localhost", "scope": OAUTH_SCOPE}).encode()
+
+def _post_json(url: str, body: dict, timeout: int = 30) -> dict:
+    """POST a JSON body, return parsed JSON response."""
+    data = json.dumps(body).encode()
     req = urllib.request.Request(
-        device_code_url,
-        data=request_data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode())
 
+
+def _get_platform_info() -> dict[str, str]:
+    """Best-effort OS/arch metadata for the registration payload.
+
+    Mirrors the TS ``ClientPlatform`` type: every field is optional. We drop
+    any key whose value is falsy (e.g. ``platform.processor()`` returns ``""``
+    on some Linux distros), so the payload only carries meaningful fields.
+    """
+    raw = {
+        "system": _platform.system(),
+        "release": _platform.release(),
+        "machine": _platform.machine(),
+        "processor": _platform.processor(),
+        "version": _platform.version(),
+        "os_name": os.name,
+    }
+    return {k: v for k, v in raw.items() if v}
+
+
+def register_client(client_name: str = "parallel-cli") -> str:
+    """Register this CLI install with the platform and return the new ``client_id``.
+
+    POSTs to ``/getServiceKeys/register`` with the client name and OS platform
+    metadata. The platform assigns and returns a unique ``client_id`` used on
+    subsequent OAuth calls.
+    """
+    url = _platform_path("/getServiceKeys/register")
+    body: dict = {"client_name": client_name, "platform": _get_platform_info()}
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            data = json.loads(response.read().decode())
+        data = _post_json(url, body)
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
-        raise Exception(f"Device code request failed: {e.code} - {error_body}") from e
+        err_body = e.read().decode()
+        raise Exception(f"Client registration failed: {e.code} - {err_body}") from e
+    return data["client_id"]
+
+
+def _ensure_client_id() -> str:
+    """Return a registered ``client_id``, registering if none is stored yet.
+
+    - If the credentials file already has a ``client_id``, returns it.
+    - Otherwise calls :func:`register_client` and persists the result.
+    - If registration fails, emits a single-line stderr warning and falls
+      back to the hardcoded ``CLIENT_ID``. The stored ``client_id`` stays
+      unset so the next login attempt retries transparently.
+    """
+    creds = credentials.load() or credentials.Credentials()
+    if creds.client_id:
+        return creds.client_id
+    try:
+        client_id = register_client()
+    except Exception as e:
+        print(f"Warning: client registration failed ({e}); using fallback client_id.", file=sys.stderr)
+        return CLIENT_ID
+    creds.client_id = client_id
+    credentials.save(creds)
+    return client_id
+
+
+def _build_verification_uri(base: str, email_hint: str | None) -> str:
+    """Append ``agent=true`` and an optional ``login_hint`` to a verification URI.
+
+    The login hint encodes ``login=email,e=<user_email>`` — a compound value the
+    platform's SSO page uses to route the user through magic-email login with the
+    address pre-filled.
+    """
+    parsed = urllib.parse.urlparse(base)
+    query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query.append(("agent", "true"))
+    if email_hint:
+        query.append(("login_hint", f"login=email,e={email_hint}"))
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
+
+
+def request_device_code(scope: str = DEFAULT_SCOPE, client_id: str | None = None) -> DeviceCodeInfo:
+    """Request a device code from ``/getServiceKeys/device/code`` (RFC 8628 Step 1)."""
+    url = _platform_path("/getServiceKeys/device/code")
+    try:
+        data = _post_form(url, {"client_id": client_id or CLIENT_ID, "scope": scope})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        raise Exception(f"Device code request failed: {e.code} - {body}") from e
 
     return DeviceCodeInfo(
         device_code=data["device_code"],
@@ -257,254 +218,349 @@ def request_device_code() -> DeviceCodeInfo:
     )
 
 
-def poll_device_token(info: DeviceCodeInfo) -> str:
-    """Poll the token endpoint until the user authorizes (RFC 8628 Step 3).
+def _parse_token_response(data: dict) -> TokenResponse:
+    return TokenResponse(
+        access_token=data["access_token"],
+        refresh_token=data["refresh_token"],
+        expires_in=int(data.get("expires_in", 0)),
+        refresh_token_expires_in=int(data.get("refresh_token_expires_in", 0)),
+        authorization_expires_in=int(data.get("authorization_expires_in", 0)),
+        org_id=data["org_id"],
+        scope=data.get("scope", ""),
+        token_type=data.get("token_type", "Bearer"),
+    )
 
-    Args:
-        info: DeviceCodeInfo from request_device_code().
 
-    Returns:
-        The access token string.
+def poll_device_token(info: DeviceCodeInfo, client_id: str | None = None) -> TokenResponse:
+    """Poll ``/getServiceKeys/token`` until the user authorizes (RFC 8628 Step 3).
 
-    Raises:
-        Exception: On expiry, denial, or other errors.
+    Polls the token endpoint immediately on entry, then waits ``interval``
+    seconds between subsequent polls. RFC 8628 only requires waiting *between*
+    requests, so polling right away makes fast authorizations feel snappy
+    instead of eating a silent ``interval``-second delay.
     """
-    token_url = f"https://{OAUTH_PROVIDER_HOST}{OAUTH_PROVIDER_PATH_PREFIX}/token"
+    url = _platform_path("/getServiceKeys/token")
     interval = info.interval
     deadline = time.monotonic() + info.expires_in
 
     while time.monotonic() < deadline:
-        time.sleep(interval)
-
-        poll_data = urllib.parse.urlencode(
-            {
-                "grant_type": DEVICE_CODE_GRANT_TYPE,
-                "device_code": info.device_code,
-                "client_id": "localhost",
-            }
-        ).encode()
-
-        poll_req = urllib.request.Request(
-            token_url,
-            data=poll_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-
         try:
-            with urllib.request.urlopen(poll_req, timeout=30) as response:
-                token_response = json.loads(response.read().decode())
-                access_token = token_response.get("access_token")
-                if access_token:
-                    return access_token
-                raise Exception("No access token in response")
+            data = _post_form(
+                url,
+                {
+                    "grant_type": DEVICE_CODE_GRANT_TYPE,
+                    "device_code": info.device_code,
+                    "client_id": client_id or CLIENT_ID,
+                },
+            )
+            return _parse_token_response(data)
         except urllib.error.HTTPError as e:
-            error_body = json.loads(e.read().decode())
-            error_code = error_body.get("error", "")
-
+            body = json.loads(e.read().decode())
+            error_code = body.get("error", "")
             if error_code == "authorization_pending":
-                continue
+                pass
             elif error_code == "slow_down":
                 interval += 5
-                continue
             elif error_code == "expired_token":
                 raise Exception("Device code expired. Please try again.") from e
             elif error_code == "access_denied":
                 raise Exception("Authorization denied by user.") from e
             else:
-                raise Exception(f"Token exchange failed: {error_body.get('error_description', error_code)}") from e
+                raise Exception(f"Token exchange failed: {body.get('error_description', error_code)}") from e
+        time.sleep(interval)
 
     raise Exception("Device code expired (timeout). Please try again.")
 
 
-def _do_device_flow(on_device_code: Callable[[DeviceCodeInfo], None] | None = None) -> str:
-    """Perform the full device authorization flow (request + poll).
+def refresh_access_token(refresh_token: str, client_id: str | None = None) -> TokenResponse:
+    """Exchange a refresh token for a new access+refresh token pair."""
+    url = _platform_path("/getServiceKeys/token")
+    try:
+        data = _post_form(
+            url,
+            {
+                "grant_type": REFRESH_TOKEN_GRANT_TYPE,
+                "refresh_token": refresh_token,
+                "client_id": client_id or CLIENT_ID,
+            },
+        )
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        raise Exception(f"Token refresh failed: {e.code} - {body}") from e
+    return _parse_token_response(data)
 
-    Args:
-        on_device_code: Optional callback invoked with the DeviceCodeInfo after requesting
-            the device code. Use this to present the verification URL and user code to the
-            user in a custom way (e.g., in a chat message). If not provided, prints
-            instructions to stderr and attempts to open the browser.
+
+def revoke_token(refresh_token: str) -> None:
+    """Revoke a refresh token via form-encoded POST.
+
+    Body shape: ``refresh_token=<token>`` (application/x-www-form-urlencoded).
+    The endpoint identifies the caller from the token itself — no bearer auth.
     """
-    info = request_device_code()
+    url = _platform_path("/getServiceKeys/token/revoke")
+    body = urllib.parse.urlencode({"refresh_token": refresh_token}).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            pass
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode()
+        raise Exception(f"Token revocation failed: {e.code} - {err_body}") from e
+
+
+def _do_device_flow(
+    email_hint: str | None = None,
+    on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
+    client_id: str | None = None,
+) -> TokenResponse:
+    """Run the full device authorization flow (request + poll) and return tokens."""
+    info = request_device_code(client_id=client_id)
+
+    enriched_uri = _build_verification_uri(info.verification_uri_complete, email_hint)
 
     if on_device_code:
         on_device_code(info)
     else:
-        # Default: print to stderr and try to open browser
         print(f"\nTo authenticate, visit: {info.verification_uri}", file=sys.stderr)
         print(f"And enter code: {info.user_code}\n", file=sys.stderr)
-        print(f"Or open: {info.verification_uri_complete}\n", file=sys.stderr)
+        print(f"Or open: {enriched_uri}\n", file=sys.stderr)
         print(f"Waiting for authorization (expires in {info.expires_in // 60} minutes)...", file=sys.stderr)
 
-        try:
-            webbrowser.open(info.verification_uri_complete)
-        except Exception:
-            pass
+        if not _is_headless():
+            try:
+                webbrowser.open(enriched_uri)
+            except Exception:
+                pass
 
-    return poll_device_token(info)
+    return poll_device_token(info, client_id=client_id)
+
+
+def _persist_token_response(resp: TokenResponse) -> None:
+    """Write a TokenResponse into credentials under its org_id, selecting it."""
+    now = int(time.time())
+    creds = credentials.load() or credentials.Credentials()
+    org = creds.orgs.get(resp.org_id) or credentials.OrgCredentials()
+    org.control_api = credentials.ControlApiTokens(
+        access_token=resp.access_token,
+        access_token_expires_at=now + resp.expires_in,
+        access_token_scopes=resp.scopes,
+        refresh_token=resp.refresh_token,
+        refresh_token_expires_at=now + resp.refresh_token_expires_in,
+        authorization_expires_at=now + resp.authorization_expires_in,
+    )
+    creds.orgs[resp.org_id] = org
+    creds.selected_org_id = resp.org_id
+    credentials.save(creds)
+
+
+def get_control_api_access_token() -> str:
+    """Return a currently-valid control-API access token for the selected org.
+
+    Transparently refreshes the access token when it has expired (or is about
+    to expire within ``ACCESS_TOKEN_SKEW_SECONDS``), persisting the refreshed
+    tokens back to the credentials file.
+
+    Raises:
+        ReauthenticationRequired: The caller must run ``parallel-cli login``.
+            Reasons: no stored credentials, no control-API tokens for the
+            selected org, ``authorization_expires_at`` in the past, or
+            ``refresh_token_expires_at`` in the past.
+    """
+    creds = credentials.load()
+    org = creds.selected_org() if creds else None
+    if org is None:
+        raise ReauthenticationRequired("not logged in; run 'parallel-cli login'")
+
+    tokens = org.control_api
+    access_token = tokens.access_token
+    if not access_token:
+        raise ReauthenticationRequired("not logged in; run 'parallel-cli login'")
+
+    now = int(time.time())
+
+    if tokens.authorization_expires_at is not None and now >= tokens.authorization_expires_at:
+        raise ReauthenticationRequired("authorization grant has expired; run 'parallel-cli login'")
+
+    # Fast path: current access token still valid beyond the skew buffer.
+    if tokens.access_token_expires_at is None or now < tokens.access_token_expires_at - ACCESS_TOKEN_SKEW_SECONDS:
+        return access_token
+
+    # Access token is (about to be) expired. Can we refresh?
+    refresh_token_value = tokens.refresh_token
+    if not refresh_token_value:
+        raise ReauthenticationRequired("no refresh token available; run 'parallel-cli login'")
+    if tokens.refresh_token_expires_at is not None and now >= tokens.refresh_token_expires_at:
+        raise ReauthenticationRequired("refresh token has expired; run 'parallel-cli login'")
+
+    new_tokens = refresh_access_token(refresh_token_value, client_id=_ensure_client_id())
+    _persist_token_response(new_tokens)
+    return new_tokens.access_token
+
+
+def login_flow(
+    email: str | None = None,
+    on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
+) -> str:
+    """Run the full CLI login: register client → device flow → persist tokens → auto-mint data API key.
+
+    Returns the newly-minted data API key.
+    """
+    client_id = _ensure_client_id()
+    token_resp = _do_device_flow(email_hint=email, on_device_code=on_device_code, client_id=client_id)
+    _persist_token_response(token_resp)
+
+    api_key, key_name = service.provision_cli_api_key(token_resp.access_token, client_id=client_id)
+
+    creds = credentials.load()
+    assert creds is not None and creds.selected_org_id == token_resp.org_id
+    creds.orgs[token_resp.org_id].api_key = api_key
+    # Drop the v0→v1 legacy placeholder org now that the user is properly
+    # authenticated against a real org. It only existed for backwards compat
+    # during migration; keeping it around after login would be dead state.
+    if credentials.LEGACY_ORG_ID != token_resp.org_id:
+        creds.orgs.pop(credentials.LEGACY_ORG_ID, None)
+    credentials.save(creds)
+
+    if not on_device_code:
+        print(f"Authentication successful! Provisioned data API key: {key_name}", file=sys.stderr)
+
+    return api_key
 
 
 def resolve_api_key(api_key: str | None = None) -> str:
-    """Resolve API key from parameter, environment, or stored credentials.
+    """Resolve API key from parameter, stored credentials, or environment.
 
-    This is the non-interactive version that raises an error if no key is found.
-    Use get_api_key() if you want interactive OAuth flow as a fallback.
-
-    Args:
-        api_key: Optional API key. If provided, returns it directly.
-
-    Returns:
-        The resolved API key string.
-
-    Raises:
-        ValueError: If no API key can be found.
+    Priority: explicit ``api_key`` argument → stored credentials → ``PARALLEL_API_KEY``.
+    Raises ``ValueError`` if no key is available.
     """
     if api_key:
         return api_key
-
+    stored = credentials.get_selected_api_key()
+    if stored:
+        return stored
     env_key = os.environ.get("PARALLEL_API_KEY")
     if env_key:
         return env_key
-
-    stored_token = _load_stored_token()
-    if stored_token:
-        return stored_token
-
     raise ValueError(
-        "Parallel API key required. Provide via api_key parameter, "
-        "PARALLEL_API_KEY environment variable, or run 'parallel-cli login'."
+        "Parallel API key required. Run 'parallel-cli login', set the "
+        "PARALLEL_API_KEY environment variable, or pass api_key explicitly."
     )
 
 
 def get_api_key(
     force_login: bool = False,
-    device: bool = False,
     on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
+    email: str | None = None,
 ) -> str:
-    """Get API key/token for Parallel API with interactive OAuth fallback.
+    """Get API key, triggering device-flow login + auto-mint as a fallback.
 
-    Priority:
-    1. PARALLEL_API_KEY environment variable
-    2. Stored OAuth token
-    3. Interactive OAuth flow (or device flow if headless/requested)
-
-    Args:
-        force_login: Force a new login flow, ignoring stored credentials.
-        device: Force device authorization flow instead of browser-based PKCE.
-        on_device_code: Callback invoked with DeviceCodeInfo when using device flow.
-            Use this to present the verification URL and user code to the user
-            programmatically (e.g., in a chat message from an AI agent). If not
-            provided, instructions are printed to stderr.
+    Priority (when not ``force_login``): stored credentials → ``PARALLEL_API_KEY``
+    → service-API key provisioning from stored control-API tokens.
     """
-    api_key = os.environ.get("PARALLEL_API_KEY")
-    if api_key and not force_login:
-        return api_key
-
     if not force_login:
-        stored_token = _load_stored_token()
-        if stored_token:
-            return stored_token
+        stored = credentials.get_selected_api_key()
+        if stored:
+            return stored
+        env_key = os.environ.get("PARALLEL_API_KEY")
+        if env_key:
+            return env_key
 
-    use_device = device or _is_headless()
+        # If we still have valid control-API auth but no data API key saved,
+        # mint a new data key via service API before forcing an interactive
+        # device-authorization flow.
+        try:
+            access_token = get_control_api_access_token()
+            client_id = _ensure_client_id()
+            minted_api_key, _ = service.provision_cli_api_key(access_token, client_id=client_id)
+            creds = credentials.load()
+            if creds is not None:
+                org = creds.selected_org()
+                if org is not None:
+                    org.api_key = minted_api_key
+                    credentials.save(creds)
+            return minted_api_key
+        except ReauthenticationRequired:
+            pass
+        except service.ServiceApiError:
+            pass
 
-    if use_device:
-        if not on_device_code:
-            print("Starting device authorization...", file=sys.stderr)
-        access_token = _do_device_flow(on_device_code=on_device_code)
-    else:
-        print("Starting authentication...", file=sys.stderr)
-        access_token = _do_oauth_flow()
-
-    _save_token(access_token)
     if not on_device_code:
-        print("Authentication successful! Credentials saved.", file=sys.stderr)
+        print("Starting device authorization...", file=sys.stderr)
+    return login_flow(email=email, on_device_code=on_device_code)
 
-    return access_token
 
-
-def create_client(
-    api_key: str | None = None,
-    source: ClientSource = "python",
-) -> Parallel:
-    """Create a configured Parallel client, resolving the API key if not provided.
-
-    Unlike get_client(), this uses resolve_api_key() which raises ValueError
-    instead of triggering interactive OAuth if no key is found.
-
-    Args:
-        api_key: Optional API key. Resolved from env/stored credentials if not provided.
-        source: Source identifier for User-Agent (cli, duckdb, bigquery, etc.)
-
-    Returns:
-        A configured Parallel client.
-    """
+def create_client(api_key: str | None = None, source: ClientSource = "python") -> Parallel:
+    """Create a configured Parallel client, resolving the API key if not provided."""
     return Parallel(
+        base_url=get_api_url(),
         api_key=resolve_api_key(api_key),
         default_headers=get_default_headers(source),
     )
 
 
-def get_client(
-    force_login: bool = False,
-    source: ClientSource = "python",
-) -> Parallel:
-    """Get a configured Parallel client with interactive OAuth fallback.
-
-    Args:
-        force_login: Force a new OAuth login flow.
-        source: Source identifier for User-Agent (cli, duckdb, bigquery, etc.)
-
-    Returns:
-        A configured Parallel client.
-    """
-    api_key = get_api_key(force_login=force_login)
+def get_client(force_login: bool = False, source: ClientSource = "python") -> Parallel:
+    """Get a configured Parallel client with interactive device-flow fallback."""
     return Parallel(
-        api_key=api_key,
+        base_url=get_api_url(),
+        api_key=get_api_key(force_login=force_login),
         default_headers=get_default_headers(source),
     )
 
 
-def get_async_client(
-    force_login: bool = False,
-    source: ClientSource = "python",
-) -> AsyncParallel:
-    """Get a configured async Parallel client with User-Agent header.
-
-    Args:
-        force_login: Force a new OAuth login flow.
-        source: Source identifier for User-Agent (cli, duckdb, bigquery, etc.)
-
-    Returns:
-        A configured async Parallel client.
-    """
-    api_key = get_api_key(force_login=force_login)
+def get_async_client(force_login: bool = False, source: ClientSource = "python") -> AsyncParallel:
+    """Get a configured async Parallel client."""
     return AsyncParallel(
-        base_url="https://api.parallel.ai",
-        api_key=api_key,
+        base_url=get_api_url(),
+        api_key=get_api_key(force_login=force_login),
         default_headers=get_default_headers(source),
     )
 
 
 def logout() -> bool:
-    """Remove stored credentials."""
+    """Revoke the stored refresh token (best-effort) and remove the credentials file."""
+    creds = credentials.load()
+    if creds is not None:
+        org = creds.selected_org()
+        refresh_token = org.control_api.refresh_token if org else None
+        if refresh_token:
+            try:
+                revoke_token(refresh_token)
+            except Exception as e:
+                print(
+                    f"Warning: refresh token revocation failed ({e}); removing local credentials anyway.",
+                    file=sys.stderr,
+                )
     return credentials.delete()
 
 
 def get_auth_status() -> dict:
-    """Get current authentication status."""
+    """Get current authentication status.
+
+    Priority matches :func:`resolve_api_key`: stored credentials beat the
+    ``PARALLEL_API_KEY`` env var.
+    """
+    creds = credentials.load()
+    if creds is not None:
+        org = creds.selected_org()
+        if org and org.api_key:
+            return {
+                "authenticated": True,
+                "method": "oauth",
+                "token_file": str(credentials.CREDENTIALS_FILE),
+                "version": creds.version,
+                "selected_org_id": creds.selected_org_id,
+                "has_control_api_tokens": bool(org.control_api.refresh_token),
+            }
+
     api_key = os.environ.get("PARALLEL_API_KEY")
     if api_key:
         return {"authenticated": True, "method": "environment", "token_file": None}
-
-    creds = credentials.load()
-    org = creds.selected_org() if creds else None
-    if org and org.api_key:
-        return {
-            "authenticated": True,
-            "method": "oauth",
-            "token_file": str(credentials.CREDENTIALS_FILE),
-            "version": creds.version,
-            "selected_org_id": creds.selected_org_id,
-        }
 
     return {"authenticated": False, "method": None, "token_file": None}
