@@ -1871,6 +1871,254 @@ class TestCompletion:
 
 
 # ---------------------------------------------------------------------------
+# login email <addr> → magic link
+# ---------------------------------------------------------------------------
+
+
+def _device_info():
+    from parallel_web_tools.core.auth import DeviceCodeInfo
+
+    return DeviceCodeInfo(
+        device_code="dc_xyz",
+        user_code="ABCD-1234",
+        verification_uri="http://verif.example",
+        verification_uri_complete="http://verif.example?user_code=ABCD-1234",
+        expires_in=600,
+        interval=5,
+    )
+
+
+def _fake_get_api_key(info):
+    """Factory: a get_api_key stub that invokes on_device_code(info) then returns."""
+
+    def fake(force_login=False, on_device_code=None, login_hint=None, **_):
+        # Match auth.get_api_key's signature loosely so both kwargs- and args-based calls work.
+        assert on_device_code is not None
+        on_device_code(info)
+        return "sk_fake"
+
+    return fake
+
+
+class TestLoginEmailCommand:
+    def test_sends_magic_link_and_skips_browser(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        mock_send.assert_called_once_with(client_id="cid_xyz", email="u@example.com", user_code="ABCD-1234")
+        mock_browser.assert_not_called()
+        assert "Magic link sent to u@example.com" in result.output
+        # Still shows the code as a fallback path.
+        assert "ABCD-1234" in result.output
+
+    def test_json_mode_reports_magic_link_sent(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link"),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "--json", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        mock_browser.assert_not_called()
+        # First line is the waiting_for_authorization payload; the trailing
+        # "authenticated" line is appended by _run_login.
+        first_line = result.output.splitlines()[0]
+        payload = json.loads(first_line)
+        assert payload["status"] == "waiting_for_authorization"
+        assert payload["magic_link_sent"] is True
+        assert payload["user_code"] == "ABCD-1234"
+
+    def test_falls_back_when_magic_link_fails(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch(
+                "parallel_web_tools.core.auth.send_magic_link",
+                side_effect=Exception("SMTP unavailable"),
+            ),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch(
+                "parallel_web_tools.core.auth._is_headless",
+                return_value=True,  # keep the test hermetic: don't attempt real browser open
+            ),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        # Magic-link failure path falls through to the manual-flow display.
+        assert "Could not send magic link" in result.output
+        assert "SMTP unavailable" in result.output
+        assert "ABCD-1234" in result.output
+        # Headless env: browser must not open even in the fallback path.
+        mock_browser.assert_not_called()
+
+    def test_json_mode_reports_magic_link_error(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch(
+                "parallel_web_tools.core.auth.send_magic_link",
+                side_effect=Exception("SMTP unavailable"),
+            ),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["login", "--json", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        first_line = result.output.splitlines()[0]
+        payload = json.loads(first_line)
+        assert payload["magic_link_sent"] is False
+        assert "SMTP unavailable" in payload["magic_link_error"]
+
+
+class TestLoginWithoutEmailUnchanged:
+    def test_no_email_still_opens_browser(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login"])
+
+        assert result.exit_code == 0
+        # No email → no magic-link call.
+        mock_send.assert_not_called()
+        # Browser still opens in the plain `login` flow.
+        mock_browser.assert_called_once()
+
+
+class TestLoginGoogleCommand:
+    def test_opens_browser_with_google_login_hint(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "google"])
+
+        assert result.exit_code == 0
+        # No magic-link send on google login.
+        mock_send.assert_not_called()
+        # Browser opens with the google hint.
+        mock_browser.assert_called_once()
+        opened_url = mock_browser.call_args.args[0]
+        assert "login_hint=login%3Dgoogle" in opened_url
+
+
+class TestLoginSsoCommand:
+    def test_opens_browser_with_sso_hint_and_separate_email_param(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "sso", "u@example.com"])
+
+        assert result.exit_code == 0
+        # SSO still uses browser-based auth, no magic link.
+        mock_send.assert_not_called()
+        mock_browser.assert_called_once()
+        opened_url = mock_browser.call_args.args[0]
+        # URL-encoded login=sso (no comma-email inside the hint).
+        assert "login_hint=login%3Dsso" in opened_url
+        # Email is a separate top-level query param.
+        assert "email=u%40example.com" in opened_url
+        # And the old bundled form must not leak through.
+        assert "login%3Dsso%2Ce" not in opened_url
+
+
+class TestBuildLoginHint:
+    def test_email_hint_does_not_include_email(self):
+        # Email travels as a separate `email=…` query param via _login_extra_params.
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint("email", "u@example.com") == "login=email"
+
+    def test_login_extra_params_carries_email_for_email_and_sso(self):
+        from parallel_web_tools.cli.commands import _login_extra_params
+
+        assert _login_extra_params("email", "u@example.com") == {"email": "u@example.com"}
+        assert _login_extra_params("sso", "u@example.com") == {"email": "u@example.com"}
+        # google / plain carry no identity → no extra param.
+        assert _login_extra_params("google", None) is None
+        assert _login_extra_params(None, None) is None
+
+    def test_google_ignores_email(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint("google", None) == "login=google"
+
+    def test_sso_hint_does_not_include_email(self):
+        # SSO email travels as a separate `email=…` query param (see _login_extra_params),
+        # NOT embedded in the hint value.
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint("sso", "u@example.com") == "login=sso"
+
+    def test_none_method_returns_none(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint(None, None) is None
+        assert _build_login_hint(None, "u@example.com") is None
+
+    def test_sso_without_email_errors(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        with pytest.raises(ValueError, match="requires an email"):
+            _build_login_hint("sso", None)
+
+    def test_email_without_email_errors(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        with pytest.raises(ValueError, match="requires an email"):
+            _build_login_hint("email", None)
+
+    def test_unknown_method_errors(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        with pytest.raises(ValueError, match="Unknown login_method"):
+            _build_login_hint("saml", None)
+
+
+# ---------------------------------------------------------------------------
 # balance get / balance add
 # ---------------------------------------------------------------------------
 

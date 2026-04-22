@@ -34,6 +34,7 @@ from parallel_web_tools.core.auth import (
     request_device_code,
     resolve_api_key,
     revoke_token,
+    send_magic_link,
 )
 
 # ---------------------------------------------------------------------------
@@ -168,19 +169,25 @@ def _token_response(**overrides) -> TokenResponse:
 class TestBuildVerificationUri:
     def test_appends_agent_true(self):
         url = _build_verification_uri("http://localhost:3000/getServiceKeys/device?user_code=ABCD", None)
-        assert "agent=true" in url
         assert "user_code=ABCD" in url
 
-    def test_appends_login_hint_with_email(self):
+    def test_passes_login_hint_through_url_encoded(self):
         url = _build_verification_uri(
             "http://localhost:3000/getServiceKeys/device?user_code=ABCD",
-            "user@example.com",
+            "login=email,e=user@example.com",
         )
-        assert "agent=true" in url
-        # The hint value is URL-encoded: ','→'%2C', '='→'%3D'
+        # The hint value is URL-encoded: ','→'%2C', '='→'%3D', '@'→'%40'
         assert "login_hint=login%3Demail%2Ce%3Duser%40example.com" in url
 
-    def test_no_email_omits_login_hint(self):
+    def test_supports_non_email_methods(self):
+        # google: no email needed
+        google_url = _build_verification_uri("http://localhost:3000/d", "login=google")
+        assert "login_hint=login%3Dgoogle" in google_url
+        # sso: email carried as ,e=…
+        sso_url = _build_verification_uri("http://localhost:3000/d", "login=sso,e=u@example.com")
+        assert "login_hint=login%3Dsso%2Ce%3Du%40example.com" in sso_url
+
+    def test_no_hint_omits_login_hint(self):
         url = _build_verification_uri("http://localhost:3000/getServiceKeys/device", None)
         assert "login_hint" not in url
 
@@ -256,6 +263,50 @@ class TestEnsureClientId:
         assert creds is None or creds.client_id is None
         err = capsys.readouterr().err
         assert "client registration failed" in err
+
+
+# ---------------------------------------------------------------------------
+# send_magic_link
+# ---------------------------------------------------------------------------
+
+
+class TestSendMagicLink:
+    def test_happy_path(self):
+        with _patch_auth_urlopen({"ok": True}):
+            # No return value; success = no exception.
+            send_magic_link(client_id="cid_xyz", email="u@example.com", user_code="ABCD-1234")
+
+    def test_posts_expected_payload(self):
+        captured: dict = {}
+        with _patch_auth_urlopen({"ok": True}, capture=captured):
+            send_magic_link(client_id="cid_xyz", email="u@example.com", user_code="ABCD-1234")
+
+        assert captured["method"] == "POST"
+        assert captured["url"].endswith("/api/auth/send-magic-link")
+        body = json.loads(captured["body"])
+        assert body == {
+            "client_id": "cid_xyz",
+            "email": "u@example.com",
+            "emailType": "deviceCode",
+            "queryParams": {"user_code": "ABCD-1234"},
+        }
+        assert any(v == "application/json" for v in captured["headers"].values())
+
+    def test_custom_email_type(self):
+        captured: dict = {}
+        with _patch_auth_urlopen({"ok": True}, capture=captured):
+            send_magic_link(
+                client_id="cid_xyz",
+                email="u@example.com",
+                user_code="ABCD-1234",
+                email_type="customType",
+            )
+        assert json.loads(captured["body"])["emailType"] == "customType"
+
+    def test_raises_on_http_error(self):
+        with _patch_auth_urlopen(_http_error(422, {"error": "invalid_email"})):
+            with pytest.raises(Exception, match="Magic link send failed: 422"):
+                send_magic_link(client_id="cid_xyz", email="bad@x", user_code="ABCD-1234")
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +458,6 @@ class TestDoDeviceFlow:
             resp = _do_device_flow()
         assert isinstance(resp, TokenResponse)
         mock_browser_open.assert_called_once()
-        assert "agent=true" in mock_browser_open.call_args.args[0]
 
     @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
     @mock.patch("parallel_web_tools.core.auth._is_headless", return_value=True)
@@ -418,12 +468,11 @@ class TestDoDeviceFlow:
 
     @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
     @mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False)
-    def test_opens_browser_with_email_hint(self, _headless, mock_browser_open, no_sleep):
+    def test_opens_browser_with_login_hint(self, _headless, mock_browser_open, no_sleep):
         with _patch_auth_urlopen([DEVICE_RESPONSE, TOKEN_RESPONSE_JSON]):
-            _do_device_flow(email_hint="user@example.com")
+            _do_device_flow(login_hint="login=email,e=user@example.com")
         opened_url = mock_browser_open.call_args.args[0]
         assert "login_hint=login%3Demail%2Ce%3Duser%40example.com" in opened_url
-        assert "agent=true" in opened_url
 
     @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
     def test_callback_receives_device_code_info(self, mock_browser_open, no_sleep):
@@ -475,7 +524,7 @@ class TestLoginFlow:
                 return_value=("sk_minted", "cid_test-2026-04-21-1432"),
             ) as mock_provision,
         ):
-            api_key = login_flow(email="user@example.com")
+            api_key = login_flow(login_hint="login=email,e=user@example.com")
 
         assert api_key == "sk_minted"
         # The registered client_id must be threaded into both the device flow
@@ -572,9 +621,9 @@ class TestGetApiKey:
     def test_force_login_runs_login_flow(self, creds_file, monkeypatch):
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")  # should still be ignored with force_login
         with mock.patch("parallel_web_tools.core.auth.login_flow", return_value="minted_key") as mock_flow:
-            result = get_api_key(force_login=True, email="u@example.com")
+            result = get_api_key(force_login=True, login_hint="login=google")
         assert result == "minted_key"
-        assert mock_flow.call_args.kwargs.get("email") == "u@example.com"
+        assert mock_flow.call_args.kwargs.get("login_hint") == "login=google"
 
     def test_provisions_via_service_api_when_stored_api_key_missing(self, creds_file, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)

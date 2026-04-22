@@ -162,6 +162,35 @@ def register_client(client_name: str = "parallel-cli") -> str:
     return data["client_id"]
 
 
+def send_magic_link(client_id: str, email: str, user_code: str, email_type: str = "deviceCode") -> None:
+    """Ask the platform to email a magic link that auto-authorizes ``user_code``.
+
+    POSTs to ``/api/auth/send-magic-link`` with:
+
+    - ``client_id`` — the registered CLI client.
+    - ``email`` — recipient.
+    - ``emailType`` — ``"deviceCode"`` routes the template that confirms a
+      pending device-flow user code.
+    - ``queryParams.user_code`` — echoed into the magic-link URL so the
+      landing page can pre-confirm the CLI's device code in one click.
+
+    Raises ``Exception`` on any HTTP error so the caller can fall back to
+    the manual URL-and-code flow.
+    """
+    url = f"{get_platform_url()}/api/auth/send-magic-link"
+    body = {
+        "client_id": client_id,
+        "email": email,
+        "emailType": email_type,
+        "queryParams": {"user_code": user_code},
+    }
+    try:
+        _post_json(url, body)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode()
+        raise Exception(f"Magic link send failed: {e.code} - {err_body}") from e
+
+
 def _ensure_client_id() -> str:
     """Return a registered ``client_id``, registering if none is stored yet.
 
@@ -184,18 +213,29 @@ def _ensure_client_id() -> str:
     return client_id
 
 
-def _build_verification_uri(base: str, email_hint: str | None) -> str:
-    """Append ``agent=true`` and an optional ``login_hint`` to a verification URI.
+def _build_verification_uri(
+    base: str,
+    login_hint: str | None,
+    extra_params: dict[str, str] | None = None,
+) -> str:
+    """Append ``agent=true``, an optional ``login_hint``, and any ``extra_params``.
 
-    The login hint encodes ``login=email,e=<user_email>`` — a compound value the
-    platform's SSO page uses to route the user through magic-email login with the
-    address pre-filled.
+    ``login_hint`` is appended verbatim as a query param. Callers format it
+    per the platform's scheme — e.g. ``login=email``, ``login=google``,
+    ``login=sso`` — so the landing page can route the user to the right
+    identity provider.
+
+    ``extra_params`` appends additional top-level query params (e.g.
+    ``email=<addr>``) alongside ``login_hint``. Used by the email and SSO
+    flows where the identity lives outside the ``login_hint`` value.
     """
     parsed = urllib.parse.urlparse(base)
     query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    query.append(("agent", "true"))
-    if email_hint:
-        query.append(("login_hint", f"login=email,e={email_hint}"))
+    query.append(("onboard_variant", "agent"))
+    if login_hint:
+        query.append(("login_hint", login_hint))
+    for k, v in (extra_params or {}).items():
+        query.append((k, v))
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
 
 
@@ -316,14 +356,20 @@ def revoke_token(refresh_token: str) -> None:
 
 
 def _do_device_flow(
-    email_hint: str | None = None,
+    login_hint: str | None = None,
     on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
     client_id: str | None = None,
 ) -> TokenResponse:
-    """Run the full device authorization flow (request + poll) and return tokens."""
+    """Run the full device authorization flow (request + poll) and return tokens.
+
+    ``login_hint`` — if set — is appended to the verification URI so the
+    platform login page can pre-fill / auto-submit the right identity
+    provider. Only observable in the default (no-callback) fallback path;
+    callers that provide ``on_device_code`` build their own enriched URI.
+    """
     info = request_device_code(client_id=client_id)
 
-    enriched_uri = _build_verification_uri(info.verification_uri_complete, email_hint)
+    enriched_uri = _build_verification_uri(info.verification_uri_complete, login_hint)
 
     if on_device_code:
         on_device_code(info)
@@ -405,15 +451,16 @@ def get_control_api_access_token() -> str:
 
 
 def login_flow(
-    email: str | None = None,
+    login_hint: str | None = None,
     on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
 ) -> str:
     """Run the full CLI login: register client → device flow → persist tokens → auto-mint data API key.
 
-    Returns the newly-minted data API key.
+    ``login_hint`` is forwarded to the device flow's URL enrichment (see
+    :func:`_build_verification_uri`). Returns the newly-minted data API key.
     """
     client_id = _ensure_client_id()
-    token_resp = _do_device_flow(email_hint=email, on_device_code=on_device_code, client_id=client_id)
+    token_resp = _do_device_flow(login_hint=login_hint, on_device_code=on_device_code, client_id=client_id)
     _persist_token_response(token_resp)
 
     api_key, key_name = service.provision_cli_api_key(token_resp.access_token, client_id=client_id)
@@ -457,12 +504,15 @@ def resolve_api_key(api_key: str | None = None) -> str:
 def get_api_key(
     force_login: bool = False,
     on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
-    email: str | None = None,
+    login_hint: str | None = None,
 ) -> str:
     """Get API key, triggering device-flow login + auto-mint as a fallback.
 
     Priority (when not ``force_login``): stored credentials → ``PARALLEL_API_KEY``
     → service-API key provisioning from stored control-API tokens.
+
+    ``login_hint`` is forwarded to :func:`login_flow` — see
+    :func:`_build_verification_uri` for the supported hint format.
     """
     if not force_login:
         stored = credentials.get_selected_api_key()
@@ -493,7 +543,7 @@ def get_api_key(
 
     if not on_device_code:
         print("Starting device authorization...", file=sys.stderr)
-    return login_flow(email=email, on_device_code=on_device_code)
+    return login_flow(login_hint=login_hint, on_device_code=on_device_code)
 
 
 def create_client(api_key: str | None = None, source: ClientSource = "python") -> Parallel:

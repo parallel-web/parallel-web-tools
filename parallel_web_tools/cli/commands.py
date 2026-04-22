@@ -470,31 +470,118 @@ def auth(output_json: bool):
         console.print("  Or set PARALLEL_API_KEY environment variable")
 
 
-def _run_login(output_json: bool, email: str | None) -> None:
-    """Shared body of `parallel-cli login` and `parallel-cli login email <addr>`."""
+def _build_login_hint(login_method: str | None, email: str | None) -> str | None:
+    """Format a platform-compatible ``login_hint`` query value.
+
+    Scheme — the hint always names the method only; any email travels as a
+    separate top-level query param (see :func:`_login_extra_params`):
+
+    - ``"email"`` → ``login=email`` (requires an email; passed as ``&email=…``)
+    - ``"google"`` → ``login=google``
+    - ``"sso"`` → ``login=sso`` (requires an email; passed as ``&email=…``)
+
+    Returns ``None`` when ``login_method`` is ``None`` so the caller can
+    skip the query param entirely.
+    """
+    if login_method is None:
+        return None
+    if login_method in ("email", "sso"):
+        if not email:
+            raise ValueError(f"login_method={login_method!r} requires an email")
+        return f"login={login_method}"
+    if login_method == "google":
+        return "login=google"
+    raise ValueError(f"Unknown login_method: {login_method!r}")
+
+
+def _login_extra_params(login_method: str | None, email: str | None) -> dict[str, str] | None:
+    """Extra query params to append alongside ``login_hint``.
+
+    Returns ``{"email": <email>}`` for identity-bearing methods (``email``
+    and ``sso``) so the platform's login page receives the address as a
+    top-level param, e.g. ``...&login_hint=login=sso&email=you@example.com``.
+    Returns ``None`` for methods that carry no identity (``google``, or
+    none at all).
+    """
+    if login_method in ("email", "sso") and email:
+        return {"email": email}
+    return None
+
+
+def _run_login(output_json: bool, email: str | None, login_method: str | None) -> None:
+    """Shared body for all ``parallel-cli login`` variants.
+
+    ``login_method`` selects the identity-provider hint and UX flavor:
+
+    - ``None``            → plain device flow: print URL + code, open browser.
+    - ``"email"``         → email magic-link: POST ``/api/auth/send-magic-link``,
+                            tell the user to check their inbox, do NOT open
+                            the browser. Falls back to manual display on
+                            magic-link failure.
+    - ``"google"``        → append ``login_hint=login=google`` to the URL
+                            and open the browser.
+    - ``"sso"``           → append ``login_hint=login=sso,e=<email>`` to the
+                            URL and open the browser.
+    """
     import webbrowser
 
-    from parallel_web_tools.core.auth import _build_verification_uri, _is_headless
+    from parallel_web_tools.core.auth import (
+        _build_verification_uri,
+        _ensure_client_id,
+        _is_headless,
+        send_magic_link,
+    )
+
+    login_hint = _build_login_hint(login_method, email)
+    extra_params = _login_extra_params(login_method, email)
 
     if not output_json:
         console.print("[bold cyan]Authenticating with Parallel...[/bold cyan]\n")
 
     def _on_device_code(info):
-        enriched_uri = _build_verification_uri(info.verification_uri_complete, email)
+        magic_link_sent = False
+        magic_link_error: str | None = None
+        if login_method == "email" and email:
+            try:
+                send_magic_link(client_id=_ensure_client_id(), email=email, user_code=info.user_code)
+                magic_link_sent = True
+            except Exception as e:
+                magic_link_error = str(e)
+
+        enriched_uri = _build_verification_uri(info.verification_uri_complete, login_hint, extra_params=extra_params)
+
         if output_json:
-            print(
-                json.dumps(
-                    {
-                        "status": "waiting_for_authorization",
-                        "verification_uri": info.verification_uri,
-                        "verification_uri_complete": enriched_uri,
-                        "user_code": info.user_code,
-                        "expires_in": info.expires_in,
-                    }
-                ),
-                flush=True,
-            )
+            payload = {
+                "status": "waiting_for_authorization",
+                "verification_uri": info.verification_uri,
+                "verification_uri_complete": enriched_uri,
+                "user_code": info.user_code,
+                "expires_in": info.expires_in,
+            }
+            if login_method == "email":
+                payload["magic_link_sent"] = magic_link_sent
+                if magic_link_error:
+                    payload["magic_link_error"] = magic_link_error
+            print(json.dumps(payload), flush=True)
             return
+
+        if magic_link_sent:
+            # Email login succeeded: tell the user to check their inbox.
+            # Still print the URL + code as a fallback in case the mail is
+            # slow or lands in spam. Do NOT open the browser.
+            console.print(f"[green]Magic link sent to {email}.[/green] Check your inbox to authorize.")
+            console.print(
+                f"\nOr visit [bold cyan]{info.verification_uri}[/bold cyan] "
+                f"and enter code [bold yellow]{info.user_code}[/bold yellow]."
+            )
+            console.print("Waiting for authorization...")
+            return
+
+        if magic_link_error:
+            console.print(
+                f"[yellow]Could not send magic link ({magic_link_error}); "
+                "falling back to manual authorization.[/yellow]\n"
+            )
 
         console.print(f"Visit: [bold cyan]{info.verification_uri}[/bold cyan]")
         console.print(f"Enter code: [bold yellow]{info.user_code}[/bold yellow]\n")
@@ -511,7 +598,7 @@ def _run_login(output_json: bool, email: str | None) -> None:
                 pass
 
     try:
-        get_api_key(force_login=True, on_device_code=_on_device_code, email=email)
+        get_api_key(force_login=True, on_device_code=_on_device_code, login_hint=login_hint)
         if output_json:
             print(json.dumps({"status": "authenticated"}))
         else:
@@ -528,22 +615,56 @@ def login(ctx: click.Context, output_json: bool):
 
     \b
     Examples:
-      parallel-cli login                        # standard device flow
-      parallel-cli login email you@example.com  # pre-fill email on the SSO page
+      parallel-cli login                         # opens browser for SSO
+      parallel-cli login email you@example.com   # sends a magic-link email
+      parallel-cli login google                  # opens browser, hints Google SSO
+      parallel-cli login sso you@example.com     # opens browser, hints SSO + email
     """
     ctx.ensure_object(dict)
     ctx.obj["output_json"] = output_json
     if ctx.invoked_subcommand is None:
-        _run_login(output_json=output_json, email=None)
+        _run_login(output_json=output_json, email=None, login_method=None)
 
 
 @login.command("email")
 @click.argument("user_email")
 @click.pass_context
 def login_email(ctx: click.Context, user_email: str):
-    """Authenticate with an email hint pre-filled on the SSO page."""
+    """Send a magic-link email to USER_EMAIL that auto-confirms the CLI's device code.
+
+    No browser is opened — the link in the email handles authorization. If the
+    email can't be sent, the CLI falls back to printing the URL and code for
+    manual entry.
+    """
     output_json = ctx.obj.get("output_json", False) if ctx.obj else False
-    _run_login(output_json=output_json, email=user_email)
+    _run_login(output_json=output_json, email=user_email, login_method="email")
+
+
+@login.command("google")
+@click.pass_context
+def login_google(ctx: click.Context):
+    """Authenticate via Google SSO.
+
+    Opens the browser on a verification URL that hints ``login=google`` so the
+    landing page auto-routes to Google's SSO (and auto-submits where it can
+    if the user is already signed in).
+    """
+    output_json = ctx.obj.get("output_json", False) if ctx.obj else False
+    _run_login(output_json=output_json, email=None, login_method="google")
+
+
+@login.command("sso")
+@click.argument("user_email")
+@click.pass_context
+def login_sso(ctx: click.Context, user_email: str):
+    """Authenticate via enterprise SSO for USER_EMAIL.
+
+    Opens the browser on a verification URL that hints ``login=sso,e=<email>``
+    so the landing page resolves the right SSO tenant for the email domain
+    and pre-fills the address.
+    """
+    output_json = ctx.obj.get("output_json", False) if ctx.obj else False
+    _run_login(output_json=output_json, email=user_email, login_method="sso")
 
 
 @main.command(name="logout")
