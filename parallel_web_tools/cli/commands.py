@@ -22,6 +22,7 @@ from parallel_web_tools.core import (
     MONITOR_CADENCES,
     MONITOR_EVENT_TYPES,
     RESEARCH_PROCESSORS,
+    ReauthenticationRequired,
     cancel_findall_run,
     create_findall_run,
     create_monitor,
@@ -31,6 +32,7 @@ from parallel_web_tools.core import (
     extend_findall,
     get_api_key,
     get_auth_status,
+    get_control_api_access_token,
     get_findall_result,
     get_findall_schema,
     get_findall_status,
@@ -555,6 +557,106 @@ def logout_cmd(output_json: bool):
         console.print("[green]Logged out successfully[/green]")
     else:
         console.print("[yellow]No stored credentials found[/yellow]")
+
+
+def _format_cents(cents: int | float) -> str:
+    """Render a cents amount as ``$X.YZ (N¢)``."""
+    return f"${cents / 100:.2f} ({int(cents)}¢)"
+
+
+def _derive_idempotency_key(amount_cents: int) -> str:
+    """Build a deterministic idempotency key for ``balance add``.
+
+    Format: ``{client_id}-{amount_cents}-{five_min_bucket}``, where
+    ``five_min_bucket`` is the current unix time rounded down to the nearest
+    300 seconds. Identical repeat requests inside the same 5-minute window
+    reuse the same key, so Stripe's idempotency dedupes them server-side.
+    """
+    from parallel_web_tools.core.auth import _ensure_client_id
+
+    client_id = _ensure_client_id()
+    five_min_bucket = int(time.time() // 300) * 300
+    return f"{client_id}-{amount_cents}-{five_min_bucket}"
+
+
+def _render_balance(resp, output_json: bool, *, prefix_lines: list[str] | None = None) -> None:
+    """Render a :class:`BalanceResponse` in JSON or Rich-console form."""
+    if output_json:
+        print(json.dumps(resp.model_dump(), indent=2))
+        return
+
+    for line in prefix_lines or []:
+        console.print(line)
+    console.print(f"Organization: [cyan]{resp.org_id}[/cyan]")
+    console.print(f"Credit balance: [bold green]{_format_cents(resp.credit_balance_cents)}[/bold green]")
+    pending = resp.pending_debit_balance_cents or 0
+    if pending:
+        console.print(f"Pending debit:  [yellow]{_format_cents(pending)}[/yellow]")
+    if resp.will_invoice:
+        console.print("[dim]Billed by invoice (postpaid)[/dim]")
+
+
+@main.group(name="balance")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def balance(ctx: click.Context, output_json: bool):
+    """Inspect or top up the org's prepaid credit balance."""
+    ctx.ensure_object(dict)
+    ctx.obj["output_json"] = output_json
+
+
+@balance.command("get")
+@click.pass_context
+def balance_get(ctx: click.Context):
+    """Show the current credit balance."""
+    from parallel_web_tools.core import service
+
+    output_json = ctx.obj.get("output_json", False) if ctx.obj else False
+    try:
+        token = get_control_api_access_token()
+        resp = service.get_balance(token)
+    except ReauthenticationRequired as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_AUTH_ERROR, prefix="Authentication required")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Balance API error")
+        return
+
+    _render_balance(resp, output_json)
+
+
+@balance.command("add")
+@click.argument("amount_cents", type=int)
+@click.option(
+    "--idempotency-key",
+    "idempotency_key_override",
+    default=None,
+    help="Override the auto-derived idempotency key. Defaults to "
+    "{client_id}-{amount_cents}-{5min_bucket} so repeat attempts inside "
+    "the same 5-minute window dedupe server-side.",
+)
+@click.pass_context
+def balance_add(ctx: click.Context, amount_cents: int, idempotency_key_override: str | None):
+    """Charge and top up the prepaid balance by AMOUNT_CENTS."""
+    from parallel_web_tools.core import service
+
+    output_json = ctx.obj.get("output_json", False) if ctx.obj else False
+    idempotency_key = idempotency_key_override or _derive_idempotency_key(amount_cents)
+    try:
+        token = get_control_api_access_token()
+        resp = service.add_balance(token, amount_cents, idempotency_key)
+    except ReauthenticationRequired as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_AUTH_ERROR, prefix="Authentication required")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Balance API error")
+        return
+
+    _render_balance(
+        resp,
+        output_json,
+        prefix_lines=[f"[green]Added {_format_cents(amount_cents)} to balance.[/green]"],
+    )
 
 
 @main.command(name="update")

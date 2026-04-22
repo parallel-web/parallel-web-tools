@@ -1,4 +1,4 @@
-"""Tests for the service API client (list apps + create api key)."""
+"""Tests for the service API client (apps + keys + balance)."""
 
 import io
 import json
@@ -13,7 +13,9 @@ from parallel_web_tools.core import service
 from parallel_web_tools.core.service import (
     ServiceApiError,
     _build_key_name,
+    add_balance,
     create_api_key,
+    get_balance,
     list_apps,
     provision_cli_api_key,
 )
@@ -87,6 +89,18 @@ def _api_key_response(raw_api_key: str | None = "sk_minted", name: str = "parall
 def _apps(*names_and_ids: tuple[str, str]) -> dict:
     """Shorthand for a GetAppsForOrgResponseModel payload."""
     return {"apps": [_app_item(name, app_id=app_id) for name, app_id in names_and_ids]}
+
+
+def _balance_response(**overrides) -> dict:
+    """Build a BalanceResponse payload."""
+    base = {
+        "org_id": "org_abc",
+        "credit_balance_cents": 1500,
+        "pending_debit_balance_cents": 0,
+        "will_invoice": False,
+    }
+    base.update(overrides)
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -239,3 +253,85 @@ class TestBuildKeyName:
         name = _build_key_name(client_id="cid_abc123")
         # Same date suffix, but the client_id now carries the entropy.
         assert re.match(r"^cid_abc123-\d{4}-\d{2}-\d{2}-\d{4}$", name), name
+
+
+# ---------------------------------------------------------------------------
+# get_balance
+# ---------------------------------------------------------------------------
+
+
+class TestGetBalance:
+    def test_parses_balance_response(self):
+        payload = _balance_response(
+            credit_balance_cents=1234,
+            pending_debit_balance_cents=56,
+            will_invoice=False,
+        )
+        with _patch_urlopen(payload):
+            resp = get_balance("at_xyz")
+        assert resp.org_id == "org_abc"
+        assert resp.credit_balance_cents == 1234
+        assert resp.pending_debit_balance_cents == 56
+        assert resp.will_invoice is False
+
+    def test_defaults_optional_fields_when_omitted(self):
+        # pending_debit_balance_cents and will_invoice are optional.
+        with _patch_urlopen({"org_id": "org_x", "credit_balance_cents": 0}):
+            resp = get_balance("at_xyz")
+        assert resp.pending_debit_balance_cents == 0
+        assert resp.will_invoice is False
+
+    def test_sends_bearer_auth_to_balance_endpoint(self):
+        captured: dict = {}
+        with _patch_urlopen(_balance_response(), capture=captured):
+            get_balance("at_xyz")
+
+        assert captured["method"] == "GET"
+        assert captured["url"].endswith("/service/v1/balance")
+        assert any(v == "Bearer at_xyz" for v in captured["headers"].values())
+
+    def test_respects_service_api_url_env(self, monkeypatch):
+        monkeypatch.setenv("PARALLEL_SERVICE_API_URL", "http://localhost:8090")
+        captured: dict = {}
+        with _patch_urlopen(_balance_response(), capture=captured):
+            get_balance("at_xyz")
+        assert captured["url"].startswith("http://localhost:8090/")
+
+    def test_raises_on_http_error(self):
+        with _patch_urlopen(_http_error(500, {"error": "internal"})):
+            with pytest.raises(ServiceApiError, match="failed: 500"):
+                get_balance("at_xyz")
+
+    def test_raises_on_malformed_payload(self):
+        # Missing required field org_id.
+        with _patch_urlopen({"credit_balance_cents": 10}):
+            with pytest.raises(ServiceApiError, match="Unexpected /service/v1/balance response"):
+                get_balance("at_xyz")
+
+
+# ---------------------------------------------------------------------------
+# add_balance
+# ---------------------------------------------------------------------------
+
+
+class TestAddBalance:
+    def test_posts_expected_body_and_parses_response(self):
+        captured: dict = {}
+        with _patch_urlopen(_balance_response(credit_balance_cents=1600), capture=captured):
+            resp = add_balance("at_xyz", amount_cents=100, idempotency_key="key_123")
+
+        assert captured["method"] == "POST"
+        assert captured["url"].endswith("/service/v1/balance/add")
+        assert json.loads(captured["body"]) == {"amount_cents": 100, "idempotency_key": "key_123"}
+        assert any(v == "Bearer at_xyz" for v in captured["headers"].values())
+        assert resp.credit_balance_cents == 1600
+
+    def test_raises_on_http_error(self):
+        with _patch_urlopen(_http_error(402, {"error": "card_declined"})):
+            with pytest.raises(ServiceApiError, match="failed: 402"):
+                add_balance("at_xyz", amount_cents=100, idempotency_key="k")
+
+    def test_raises_on_malformed_response(self):
+        with _patch_urlopen({"credit_balance_cents": 10}):
+            with pytest.raises(ServiceApiError, match="Unexpected /service/v1/balance/add response"):
+                add_balance("at_xyz", amount_cents=100, idempotency_key="k")

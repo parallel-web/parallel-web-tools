@@ -1,10 +1,11 @@
 """Service API client for parallel-cli.
 
-Wraps the subset of ``/service/v1/*`` endpoints the CLI needs to provision a
-data-API key for the currently-authenticated user:
+Wraps the subset of ``/service/v1/*`` endpoints the CLI consumes:
 
 - ``GET  /service/v1/apps``               — list apps for the caller's org
 - ``POST /service/v1/apps/{app_id}/keys`` — create an API key on an app
+- ``GET  /service/v1/balance``            — read the org's prepaid balance
+- ``POST /service/v1/balance/add``        — charge Stripe and top up balance
 
 Request and response shapes are parsed with the Pydantic models in
 :mod:`parallel_web_tools.core.service_types` (auto-generated from the OpenAPI
@@ -23,7 +24,9 @@ from pydantic import ValidationError
 
 from parallel_web_tools.core.endpoints import PARALLEL_CLI_APP_NAME, get_service_api_url
 from parallel_web_tools.core.service_types import (
+    AddBalanceRequest,
     AppItem,
+    BalanceResponse,
     CreateApiKeyRequestModel,
     CreateKeyResponse,
     GetAppsForOrgResponseModel,
@@ -89,6 +92,30 @@ def _build_key_name(client_id: str | None = None, now: float | None = None) -> s
     """
     prefix = client_id or "parallel-cli"
     return f"{prefix}-{time.strftime('%Y-%m-%d-%H%M', time.localtime(now))}"
+
+
+def get_balance(access_token: str) -> BalanceResponse:
+    """Return the caller's current org balance."""
+    data = _request("GET", "/service/v1/balance", access_token)
+    try:
+        return BalanceResponse.model_validate(data)
+    except ValidationError as e:
+        raise ServiceApiError(f"Unexpected /service/v1/balance response: {e}") from e
+
+
+def add_balance(access_token: str, amount_cents: int, idempotency_key: str) -> BalanceResponse:
+    """Charge the org's payment method and top up the prepaid balance.
+
+    Returns the updated :class:`BalanceResponse`. ``idempotency_key`` must be
+    high-entropy; the server dedupes repeat charges for at least 24h when the
+    same key is submitted.
+    """
+    body = AddBalanceRequest(amount_cents=amount_cents, idempotency_key=idempotency_key).model_dump()
+    data = _request("POST", "/service/v1/balance/add", access_token, body=body)
+    try:
+        return BalanceResponse.model_validate(data)
+    except ValidationError as e:
+        raise ServiceApiError(f"Unexpected /service/v1/balance/add response: {e}") from e
 
 
 def provision_cli_api_key(access_token: str, client_id: str | None = None) -> tuple[str, str]:

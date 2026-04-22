@@ -1868,3 +1868,248 @@ class TestCompletion:
         with mock.patch("parallel_web_tools.cli.commands._STANDALONE_MODE", True):
             result = runner.invoke(main, ["completion", "install", "--shell", "bash"])
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# balance get / balance add
+# ---------------------------------------------------------------------------
+
+
+def _balance_model(**overrides):
+    """Build a BalanceResponse pydantic instance for CLI-level mocking."""
+    from parallel_web_tools.core.service_types import BalanceResponse
+
+    base = BalanceResponse(
+        org_id="org_abc",
+        credit_balance_cents=1500,
+        pending_debit_balance_cents=0,
+        will_invoice=False,
+    )
+    return base.model_copy(update=overrides) if overrides else base
+
+
+class TestBalanceGroup:
+    def test_group_help_lists_subcommands(self, runner):
+        result = runner.invoke(main, ["balance", "--help"])
+        assert result.exit_code == 0
+        assert "get" in result.output
+        assert "add" in result.output
+
+    def test_get_help(self, runner):
+        result = runner.invoke(main, ["balance", "get", "--help"])
+        assert result.exit_code == 0
+        assert "credit balance" in result.output.lower()
+
+    def test_add_help(self, runner):
+        result = runner.invoke(main, ["balance", "add", "--help"])
+        assert result.exit_code == 0
+        assert "AMOUNT_CENTS" in result.output
+        assert "--idempotency-key" in result.output
+
+
+class TestBalanceGetCommand:
+    def test_json_output(self, runner):
+        balance = _balance_model(credit_balance_cents=1234, pending_debit_balance_cents=56)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", return_value=balance) as mock_get,
+        ):
+            result = runner.invoke(main, ["balance", "--json", "get"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("atk")
+        output = json.loads(result.output)
+        assert output["org_id"] == "org_abc"
+        assert output["credit_balance_cents"] == 1234
+        assert output["pending_debit_balance_cents"] == 56
+
+    def test_console_output(self, runner):
+        balance = _balance_model(credit_balance_cents=250)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", return_value=balance),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+
+        assert result.exit_code == 0
+        assert "org_abc" in result.output
+        # $2.50 with a cents-in-parens suffix.
+        assert "$2.50" in result.output
+        assert "250" in result.output
+
+    def test_will_invoice_flag_shown(self, runner):
+        balance = _balance_model(credit_balance_cents=0, will_invoice=True)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", return_value=balance),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+        assert result.exit_code == 0
+        assert "invoice" in result.output.lower()
+
+    def test_reauth_required_exits_auth_error(self, runner):
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        with mock.patch(
+            "parallel_web_tools.cli.commands.get_control_api_access_token",
+            side_effect=ReauthenticationRequired("not logged in"),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+
+        assert result.exit_code == EXIT_AUTH_ERROR
+        assert "Authentication required" in result.output
+
+    def test_service_api_error_exits_api_error(self, runner):
+        from parallel_web_tools.core.service import ServiceApiError
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", side_effect=ServiceApiError("boom")),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+
+        assert result.exit_code == EXIT_API_ERROR
+        assert "Balance API error" in result.output
+
+
+class TestBalanceAddCommand:
+    def test_json_output_derives_idempotency_key(self, runner):
+        balance = _balance_model(credit_balance_cents=1600)
+        captured_key: dict = {}
+
+        def fake_add(token, amount_cents, idempotency_key):
+            captured_key["key"] = idempotency_key
+            return balance
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=fake_add),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.cli.commands.time.time", return_value=1_700_000_123.0),
+        ):
+            result = runner.invoke(main, ["balance", "--json", "add", "100"])
+
+        assert result.exit_code == 0
+        # five_min_bucket = floor(1_700_000_123 / 300) * 300 = 1_700_000_100
+        assert captured_key["key"] == "cid_xyz-100-1700000100"
+        output = json.loads(result.output)
+        assert output["credit_balance_cents"] == 1600
+
+    def test_console_output_shows_charge_and_new_balance(self, runner):
+        balance = _balance_model(credit_balance_cents=1600)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "100"])
+
+        assert result.exit_code == 0
+        assert "$1.00" in result.output  # charge amount
+        assert "$16.00" in result.output  # new balance
+
+    def test_explicit_idempotency_key_overrides_derivation(self, runner):
+        balance = _balance_model()
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id") as mock_ensure,
+        ):
+            result = runner.invoke(main, ["balance", "add", "100", "--idempotency-key", "fixed-key"])
+
+        assert result.exit_code == 0
+        # _ensure_client_id must NOT be called when an explicit key was provided.
+        mock_ensure.assert_not_called()
+        assert mock_add.call_args.args[2] == "fixed-key"
+
+    def test_same_bucket_produces_same_key(self, runner):
+        """Two invocations inside the same 5-min bucket must derive the same key."""
+        keys: list[str] = []
+
+        def capture_key(token, amount_cents, idempotency_key):
+            keys.append(idempotency_key)
+            return _balance_model()
+
+        # 1_700_000_100 is 300-aligned (5_666_667 * 300). Both timestamps fall
+        # inside the [1_700_000_100, 1_700_000_400) bucket.
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=capture_key),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.cli.commands.time.time", side_effect=[1_700_000_100, 1_700_000_399]),
+        ):
+            assert runner.invoke(main, ["balance", "add", "100"]).exit_code == 0
+            assert runner.invoke(main, ["balance", "add", "100"]).exit_code == 0
+
+        assert keys[0] == keys[1] == "cid_xyz-100-1700000100"
+
+    def test_next_bucket_produces_different_key(self, runner):
+        keys: list[str] = []
+
+        def capture_key(token, amount_cents, idempotency_key):
+            keys.append(idempotency_key)
+            return _balance_model()
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=capture_key),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.cli.commands.time.time", side_effect=[1_700_000_100, 1_700_000_400]),
+        ):
+            runner.invoke(main, ["balance", "add", "100"])
+            runner.invoke(main, ["balance", "add", "100"])
+
+        assert keys[0] == "cid_xyz-100-1700000100"
+        assert keys[1] == "cid_xyz-100-1700000400"
+
+    def test_zero_amount_passes_through_to_service(self, runner):
+        balance = _balance_model()
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "0"])
+
+        assert result.exit_code == 0
+        assert mock_add.call_args.args[1] == 0
+
+    def test_large_amount_passes_through_to_service(self, runner):
+        balance = _balance_model()
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "1001"])
+
+        assert result.exit_code == 0
+        assert mock_add.call_args.args[1] == 1001
+
+    def test_reauth_required_exits_auth_error(self, runner):
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_control_api_access_token",
+                side_effect=ReauthenticationRequired("not logged in"),
+            ),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "100"])
+
+        assert result.exit_code == EXIT_AUTH_ERROR
+        assert "Authentication required" in result.output
+
+    def test_service_api_error_exits_api_error(self, runner):
+        from parallel_web_tools.core.service import ServiceApiError
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=ServiceApiError("card declined")),
+            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "100"])
+
+        assert result.exit_code == EXIT_API_ERROR
+        assert "Balance API error" in result.output
