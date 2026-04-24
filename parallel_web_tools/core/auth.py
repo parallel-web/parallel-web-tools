@@ -108,6 +108,7 @@ def _post_form(url: str, data: dict[str, str], headers: dict[str, str] | None = 
     """
     body = urllib.parse.urlencode(data).encode()
     req_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    req_headers.update(_platform_bypass_headers(url))
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, data=body, headers=req_headers)
@@ -118,13 +119,25 @@ def _post_form(url: str, data: dict[str, str], headers: dict[str, str] | None = 
 def _post_json(url: str, body: dict, timeout: int = 30) -> dict:
     """POST a JSON body, return parsed JSON response."""
     data = json.dumps(body).encode()
+    req_headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    req_headers.update(_platform_bypass_headers(url))
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=req_headers,
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode())
+
+
+def _platform_bypass_headers(url: str) -> dict[str, str]:
+    """Add Vercel protection bypass header for platform requests when configured."""
+    token = os.environ.get("VERCEL_PROTECTION_BYPASS_TOKEN")
+    if not token:
+        return {}
+    if not url.startswith(get_platform_url()):
+        return {}
+    return {"X-Vercel-Protection-Bypass": token}
 
 
 def _get_platform_info() -> dict[str, str]:
@@ -344,6 +357,7 @@ def revoke_token(refresh_token: str) -> None:
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json",
+            **_platform_bypass_headers(url),
         },
         method="POST",
     )

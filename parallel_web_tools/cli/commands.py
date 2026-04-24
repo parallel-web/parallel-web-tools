@@ -906,6 +906,139 @@ def config_cmd(key: str | None, value: str | None, output_json: bool):
 
 
 # =============================================================================
+# Skills Commands
+# =============================================================================
+
+
+@main.group()
+def skills():
+    """Install and manage Parallel agent skills."""
+    pass
+
+
+@skills.command(name="install")
+@click.option(
+    "--project",
+    is_flag=True,
+    help="Install to .agents/skills in detected project root (default is global install).",
+)
+@click.option("--skill", "skill_names", multiple=True, help="Skill name to install (repeatable). Defaults to all.")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def skills_install(project: bool, skill_names: tuple[str, ...], output_json: bool):
+    """Install Parallel skills from GitHub.
+
+    Defaults to global install path. Use ``--project`` to install into the
+    current project's ``.agents/skills`` directory.
+    """
+    from parallel_web_tools.core.skills import (
+        SkillsError,
+        SkillsInstallLocationError,
+        get_skills_repo_ref,
+        install_skills,
+        resolve_install_dir,
+    )
+
+    try:
+        install_dir = resolve_install_dir(project=project)
+        result = install_skills(
+            install_dir=install_dir,
+            selected_skills=list(skill_names) or None,
+            ref=get_skills_repo_ref(),
+        )
+    except SkillsInstallLocationError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Skills install failed")
+    except SkillsError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Skills install failed")
+    except Exception as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Skills install failed")
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    console.print("[bold green]Skills installed[/bold green]")
+    console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+    console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
+    console.print(f"Installed ({result['count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
+
+
+@skills.command(name="uninstall")
+@click.option(
+    "--project",
+    is_flag=True,
+    help="Uninstall from .agents/skills in detected project root (default is global install).",
+)
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def skills_uninstall(project: bool, output_json: bool):
+    """Uninstall skills previously installed by parallel-cli."""
+    from parallel_web_tools.core.skills import SkillsInstallLocationError, resolve_install_dir, uninstall_skills
+
+    try:
+        install_dir = resolve_install_dir(project=project)
+        result = uninstall_skills(install_dir=install_dir)
+    except SkillsInstallLocationError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Skills uninstall failed")
+    except Exception as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Skills uninstall failed")
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    if result["count"] == 0:
+        console.print("[yellow]No managed skills found to uninstall[/yellow]")
+        console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+        return
+
+    console.print("[bold green]Skills uninstalled[/bold green]")
+    console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+    console.print(f"Removed ({result['count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
+
+
+@skills.command(name="reinstall")
+@click.option(
+    "--project",
+    is_flag=True,
+    help="Reinstall in .agents/skills in detected project root (default is global install).",
+)
+@click.option("--skill", "skill_names", multiple=True, help="Skill name to reinstall (repeatable). Defaults to all.")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def skills_reinstall(project: bool, skill_names: tuple[str, ...], output_json: bool):
+    """Reinstall Parallel skills (uninstall managed set then install fresh)."""
+    from parallel_web_tools.core.skills import (
+        SkillsError,
+        SkillsInstallLocationError,
+        get_skills_repo_ref,
+        reinstall_skills,
+        resolve_install_dir,
+    )
+
+    try:
+        install_dir = resolve_install_dir(project=project)
+        result = reinstall_skills(
+            install_dir=install_dir,
+            selected_skills=list(skill_names) or None,
+            ref=get_skills_repo_ref(),
+        )
+    except SkillsInstallLocationError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Skills reinstall failed")
+    except SkillsError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Skills reinstall failed")
+    except Exception as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_API_ERROR, prefix="Skills reinstall failed")
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    console.print("[bold green]Skills reinstalled[/bold green]")
+    console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+    console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
+    console.print(f"Removed ({result['removed_count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
+    console.print(f"Installed ({result['installed_count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
+
+
+# =============================================================================
 # Search Command
 # =============================================================================
 

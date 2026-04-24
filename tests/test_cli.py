@@ -228,6 +228,7 @@ class TestMainCLI:
         assert "search" in result.output
         assert "extract" in result.output
         assert "enrich" in result.output
+        assert "skills" in result.output
 
     def test_version(self, runner):
         """Should show version."""
@@ -1868,6 +1869,106 @@ class TestCompletion:
         with mock.patch("parallel_web_tools.cli.commands._STANDALONE_MODE", True):
             result = runner.invoke(main, ["completion", "install", "--shell", "bash"])
         assert result.exit_code != 0
+
+
+class TestSkillsCommands:
+    def test_skills_install_global_default(self, runner):
+        with (
+            mock.patch(
+                "parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"
+            ) as mock_dir,
+            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
+            mock.patch(
+                "parallel_web_tools.core.skills.install_skills",
+                return_value={
+                    "install_dir": "/tmp/.agents/skills",
+                    "ref": "main",
+                    "installed_skills": ["parallel-web-search"],
+                    "count": 1,
+                },
+            ) as mock_install,
+        ):
+            result = runner.invoke(main, ["skills", "install", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["count"] == 1
+        mock_dir.assert_called_once_with(project=False)
+        mock_install.assert_called_once()
+
+    def test_skills_install_project_sets_project_flag(self, runner):
+        with (
+            mock.patch(
+                "parallel_web_tools.core.skills.resolve_install_dir", return_value="/repo/.agents/skills"
+            ) as mock_dir,
+            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="test-branch"),
+            mock.patch(
+                "parallel_web_tools.core.skills.install_skills",
+                return_value={
+                    "install_dir": "/repo/.agents/skills",
+                    "ref": "test-branch",
+                    "installed_skills": ["parallel-web-search"],
+                    "count": 1,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "install", "--project", "--json"])
+
+        assert result.exit_code == 0
+        mock_dir.assert_called_once_with(project=True)
+
+    def test_skills_install_project_root_not_found(self, runner):
+        from parallel_web_tools.core.skills import SkillsInstallLocationError
+
+        with mock.patch(
+            "parallel_web_tools.core.skills.resolve_install_dir",
+            side_effect=SkillsInstallLocationError("no project root"),
+        ):
+            result = runner.invoke(main, ["skills", "install", "--project", "--json"])
+
+        assert result.exit_code == EXIT_BAD_INPUT
+        payload = json.loads(result.output)
+        assert payload["error"]["message"] == "no project root"
+
+    def test_skills_uninstall_json(self, runner):
+        with (
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
+            mock.patch(
+                "parallel_web_tools.core.skills.uninstall_skills",
+                return_value={
+                    "install_dir": "/tmp/.agents/skills",
+                    "removed_skills": ["parallel-web-search"],
+                    "count": 1,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "uninstall", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["removed_skills"] == ["parallel-web-search"]
+
+    def test_skills_reinstall_json(self, runner):
+        with (
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
+            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
+            mock.patch(
+                "parallel_web_tools.core.skills.reinstall_skills",
+                return_value={
+                    "install_dir": "/tmp/.agents/skills",
+                    "ref": "main",
+                    "removed_skills": ["parallel-web-search"],
+                    "installed_skills": ["parallel-web-extract"],
+                    "removed_count": 1,
+                    "installed_count": 1,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "reinstall", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["installed_skills"] == ["parallel-web-extract"]
 
 
 # ---------------------------------------------------------------------------

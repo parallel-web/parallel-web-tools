@@ -441,6 +441,10 @@ uv sync --all-extras
 uv run pytest tests/ -v
 ```
 
+`uv build` produces Python package artifacts (sdist/wheel), not standalone CLI binaries.
+To build the standalone `parallel-cli` archive locally, use `uv run python scripts/build.py`.
+See `MAINTAINERS.md` for the full release-style binary build flow.
+
 ## License
 
 MIT

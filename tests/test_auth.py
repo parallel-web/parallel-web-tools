@@ -665,9 +665,9 @@ class TestGetApiKey:
             ),
             mock.patch("parallel_web_tools.core.auth.login_flow", return_value="sk_from_login") as mock_login,
         ):
-            assert get_api_key(email="user@example.com") == "sk_from_login"
+            assert get_api_key(login_hint="user@example.com") == "sk_from_login"
 
-        assert mock_login.call_args.kwargs.get("email") == "user@example.com"
+        assert mock_login.call_args.kwargs.get("login_hint") == "user@example.com"
 
 
 # ---------------------------------------------------------------------------

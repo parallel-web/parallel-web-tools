@@ -2,6 +2,32 @@
 
 Instructions for releasing and maintaining the parallel-web-tools package.
 
+## Development Setup
+
+From the repository root:
+
+```bash
+# Install maintainer/dev dependencies (includes pre-commit)
+uv sync --extra dev
+
+# Install git hooks
+uv run pre-commit install
+
+# Run hooks manually on all files
+uv run pre-commit run --all-files
+```
+
+Note: In this repository, `pre-commit` is defined in the optional dependency extra
+`dev` (`[project.optional-dependencies]`), so use `uv sync --extra dev` rather
+than `uv sync --dev`.
+
+If `uv run pre-commit` still fails after syncing, refresh the environment:
+
+```bash
+uv sync --extra dev --reinstall
+uv run pre-commit --version
+```
+
 ## Release Process
 
 ### Quick Release (Recommended)
@@ -82,6 +108,32 @@ uv run scripts/build.py
 # Test the binary (onedir mode - binary is in a folder)
 ./dist/parallel-cli/parallel-cli --version
 ```
+
+### `uv build` vs standalone binary
+
+`uv build` creates Python package distributions for PyPI (`.tar.gz` and `.whl`).
+It does not create the standalone `parallel-cli` binary archives used by the install script.
+
+To build release-style standalone artifacts locally:
+
+```bash
+# Install CLI build dependencies
+uv sync --extra cli
+uv pip install "pyinstaller>=6.0.0"
+
+# Build standalone archive for the current platform
+uv run python scripts/build.py --skip-deps
+
+# Smoke test binary
+./dist/parallel-cli/parallel-cli --version
+```
+
+Expected outputs in `dist/`:
+- `parallel-cli-<platform>.zip`
+- `parallel-cli-<platform>.zip.sha256`
+
+For distribution via `install-cli.sh`, upload both files to the GitHub Release tag (for example, `v0.3.0`).
+The release workflow (`.github/workflows/release.yml`) automates this across all supported platforms.
 
 ### Binary Size
 
