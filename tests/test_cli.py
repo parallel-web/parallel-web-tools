@@ -16,6 +16,8 @@ from parallel_web_tools.cli.commands import (
     _content_to_markdown,
     _handle_error,
     build_config_from_args,
+    build_extract_v1_kwargs,
+    build_search_v1_kwargs,
     main,
     parse_columns,
     parse_comma_separated,
@@ -991,7 +993,7 @@ class TestSearchCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.search.return_value = mock_search_result
+                mock_client.search.return_value = mock_search_result
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1029,7 +1031,7 @@ class TestSearchCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.search.return_value = mock_search_result
+                mock_client.search.return_value = mock_search_result
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1051,7 +1053,7 @@ class TestSearchCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.search.side_effect = RuntimeError("API unavailable")
+                mock_client.search.side_effect = RuntimeError("API unavailable")
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1070,7 +1072,7 @@ class TestSearchCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.search.side_effect = RuntimeError("API unavailable")
+                mock_client.search.side_effect = RuntimeError("API unavailable")
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1082,6 +1084,474 @@ class TestSearchCommandMocked:
         assert "API unavailable" in result.output
 
 
+class TestBuildSearchV1Kwargs:
+    """Tests for the Beta -> V1 search kwarg translator."""
+
+    def test_minimal_objective_only(self):
+        """Should fall back to using objective as the single search query."""
+        kwargs = build_search_v1_kwargs(
+            objective="latest news on AI",
+            query=(),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["search_queries"] == ["latest news on AI"]
+        assert kwargs["objective"] == "latest news on AI"
+        assert "advanced_settings" not in kwargs
+
+    def test_explicit_queries_override_objective_fallback(self):
+        """Should use explicit queries instead of falling back to objective."""
+        kwargs = build_search_v1_kwargs(
+            objective="overarching goal",
+            query=("first query", "second query"),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["search_queries"] == ["first query", "second query"]
+        assert kwargs["objective"] == "overarching goal"
+
+    def test_mode_fast_maps_to_basic(self):
+        """Should map old `fast` mode to V1 `basic`."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode="fast",
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["mode"] == "basic"
+
+    def test_mode_one_shot_maps_to_basic(self):
+        """Should map old `one-shot` mode to V1 `basic`."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode="one-shot",
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["mode"] == "basic"
+
+    def test_mode_agentic_maps_to_advanced(self):
+        """Should map old `agentic` mode to V1 `advanced`."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode="agentic",
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["mode"] == "advanced"
+
+    def test_new_mode_values_pass_through(self):
+        """Should accept V1-native `basic`/`advanced` values directly."""
+        for new_mode in ("basic", "advanced"):
+            kwargs = build_search_v1_kwargs(
+                objective=None,
+                query=("q",),
+                mode=new_mode,
+                max_results=None,
+                source_policy=None,
+                excerpt_max_chars_per_result=None,
+                excerpt_max_chars_total=None,
+                fetch_policy=None,
+            )
+            assert kwargs["mode"] == new_mode
+
+    def test_excerpt_total_promoted_to_top_level(self):
+        """Should move excerpt_max_chars_total to top-level max_chars_total."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=50000,
+            fetch_policy=None,
+        )
+        assert kwargs["max_chars_total"] == 50000
+
+    def test_excerpt_per_result_nested_under_advanced_settings(self):
+        """Should nest excerpt_max_chars_per_result under advanced_settings.excerpt_settings."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=2000,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["advanced_settings"]["excerpt_settings"] == {"max_chars_per_result": 2000}
+
+    def test_max_results_nested_under_advanced_settings(self):
+        """Should nest max_results under advanced_settings."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=25,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["advanced_settings"]["max_results"] == 25
+
+    def test_source_policy_nested_under_advanced_settings(self):
+        """Should nest source_policy under advanced_settings."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=None,
+            source_policy={"include_domains": ["example.com"]},
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["advanced_settings"]["source_policy"] == {"include_domains": ["example.com"]}
+
+    def test_fetch_policy_nested_under_advanced_settings(self):
+        """Should nest fetch_policy under advanced_settings."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy={"max_age_seconds": 3600},
+        )
+        assert kwargs["advanced_settings"]["fetch_policy"] == {"max_age_seconds": 3600}
+
+    def test_location_nested_under_advanced_settings(self):
+        """Should nest location under advanced_settings."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+            location="us",
+        )
+        assert kwargs["advanced_settings"]["location"] == "us"
+
+    def test_session_id_top_level(self):
+        """Should keep session_id at top level."""
+        kwargs = build_search_v1_kwargs(
+            objective=None,
+            query=("q",),
+            mode=None,
+            max_results=None,
+            source_policy=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+            session_id="sess_abc",
+        )
+        assert kwargs["session_id"] == "sess_abc"
+
+    def test_full_translation(self):
+        """Should produce a fully-shaped V1 payload from old-style inputs."""
+        kwargs = build_search_v1_kwargs(
+            objective="find recent papers",
+            query=("transformer architecture",),
+            mode="agentic",
+            max_results=15,
+            source_policy={"include_domains": ["arxiv.org"], "after_date": "2024-01-01"},
+            excerpt_max_chars_per_result=5000,
+            excerpt_max_chars_total=80000,
+            fetch_policy={"max_age_seconds": 7200, "disable_cache_fallback": True},
+            location="us",
+            session_id="sess_xyz",
+        )
+        assert kwargs["search_queries"] == ["transformer architecture"]
+        assert kwargs["objective"] == "find recent papers"
+        assert kwargs["mode"] == "advanced"
+        assert kwargs["max_chars_total"] == 80000
+        assert kwargs["session_id"] == "sess_xyz"
+        adv = kwargs["advanced_settings"]
+        assert adv["max_results"] == 15
+        assert adv["source_policy"]["include_domains"] == ["arxiv.org"]
+        assert adv["source_policy"]["after_date"] == "2024-01-01"
+        assert adv["fetch_policy"] == {"max_age_seconds": 7200, "disable_cache_fallback": True}
+        assert adv["excerpt_settings"] == {"max_chars_per_result": 5000}
+        assert adv["location"] == "us"
+
+
+class TestBuildExtractV1Kwargs:
+    """Tests for the Beta -> V1 extract kwarg translator."""
+
+    def test_minimal_urls_only(self):
+        """Should produce minimal kwargs with just urls."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=False,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs == {"urls": ["https://example.com"]}
+
+    def test_full_content_flag_nests_under_advanced_settings(self):
+        """Should put full_content=True under advanced_settings."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=True,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["advanced_settings"]["full_content"] is True
+
+    def test_full_content_max_chars_takes_precedence(self):
+        """full_content_max_chars should produce a settings dict, overriding the flag."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=True,
+            full_content_max_chars=20000,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["advanced_settings"]["full_content"] == {"max_chars_per_result": 20000}
+
+    def test_excerpt_total_promoted_to_top_level(self):
+        """excerpt_max_chars_total should become top-level max_chars_total."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=False,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=40000,
+            fetch_policy=None,
+        )
+        assert kwargs["max_chars_total"] == 40000
+
+    def test_excerpt_per_result_nested_under_advanced_settings(self):
+        """excerpt_max_chars_per_result nests under advanced_settings.excerpt_settings."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=False,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=3000,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["advanced_settings"]["excerpt_settings"] == {"max_chars_per_result": 3000}
+
+    def test_objective_and_queries_passed_through(self):
+        """Objective and search_queries stay top-level."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective="when was UN founded",
+            query=("united nations history",),
+            full_content=False,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+        )
+        assert kwargs["objective"] == "when was UN founded"
+        assert kwargs["search_queries"] == ["united nations history"]
+
+    def test_session_id_top_level(self):
+        """session_id stays top-level."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=False,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy=None,
+            session_id="sess_abc",
+        )
+        assert kwargs["session_id"] == "sess_abc"
+
+    def test_fetch_policy_nested_under_advanced_settings(self):
+        """fetch_policy nests under advanced_settings."""
+        kwargs = build_extract_v1_kwargs(
+            urls=("https://example.com",),
+            objective=None,
+            query=(),
+            full_content=False,
+            full_content_max_chars=None,
+            excerpt_max_chars_per_result=None,
+            excerpt_max_chars_total=None,
+            fetch_policy={"max_age_seconds": 1200},
+        )
+        assert kwargs["advanced_settings"]["fetch_policy"] == {"max_age_seconds": 1200}
+
+
+class TestSearchDeprecationWarnings:
+    """Tests for deprecation warnings in the search command."""
+
+    def _setup_mock_search(self, mock_client):
+        mock_result = mock.MagicMock()
+        mock_result.search_id = "search_dep"
+        mock_result.results = []
+        mock_result.warnings = []
+        mock_client.search.return_value = mock_result
+
+    @pytest.mark.parametrize(
+        "deprecated_mode,expected_new",
+        [
+            ("fast", "basic"),
+            ("one-shot", "basic"),
+            ("agentic", "advanced"),
+        ],
+    )
+    def test_deprecated_modes_emit_warning_to_stderr(self, runner, deprecated_mode, expected_new):
+        """Should warn on deprecated mode values and translate them."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                self._setup_mock_search(mock_client)
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(
+                    main,
+                    ["search", "test", "--mode", deprecated_mode, "--json"],
+                )
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        assert "[deprecated]" in result.stderr
+        assert deprecated_mode in result.stderr
+        assert expected_new in result.stderr
+        # JSON stdout must remain clean
+        json.loads(result.stdout)
+        # SDK call uses translated mode
+        call_kwargs = mock_client.search.call_args.kwargs
+        assert call_kwargs["mode"] == expected_new
+
+    @pytest.mark.parametrize("new_mode", ["basic", "advanced"])
+    def test_new_modes_do_not_emit_warning(self, runner, new_mode):
+        """Should not warn when V1-native mode values are used."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                self._setup_mock_search(mock_client)
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(
+                    main,
+                    ["search", "test", "--mode", new_mode, "--json"],
+                )
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        assert "[deprecated]" not in result.stderr
+
+
+class TestExtractDeprecationWarnings:
+    """Tests for deprecation warnings in the extract command."""
+
+    def _setup_mock_extract(self, mock_client, with_excerpts=True):
+        mock_result = mock.MagicMock()
+        mock_result.extract_id = "ext_dep"
+        page = mock.MagicMock()
+        page.url = "https://example.com"
+        page.title = "Example"
+        page.publish_date = None
+        page.excerpts = ["a server-side excerpt"] if with_excerpts else None
+        page.full_content = None
+        mock_result.results = [page]
+        mock_result.errors = []
+        mock_result.warnings = None
+        mock_client.extract.return_value = mock_result
+
+    def test_no_excerpts_emits_warning_and_strips_excerpts_from_output(self, runner):
+        """--no-excerpts should warn (semantics changed) and strip excerpts client-side."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                self._setup_mock_extract(mock_client)
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(
+                    main,
+                    ["extract", "https://example.com", "--no-excerpts", "--json"],
+                )
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        assert "[deprecated]" in result.stderr
+        assert "--no-excerpts" in result.stderr
+        output = json.loads(result.stdout)
+        # Excerpts should be stripped from the CLI output
+        assert "excerpts" not in output["results"][0]
+
+    def test_no_no_excerpts_keeps_excerpts_and_no_warning(self, runner):
+        """Default extract should not warn and should include excerpts."""
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                self._setup_mock_extract(mock_client)
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(
+                    main,
+                    ["extract", "https://example.com", "--json"],
+                )
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        assert "[deprecated]" not in result.stderr
+        output = json.loads(result.stdout)
+        assert output["results"][0]["excerpts"] == ["a server-side excerpt"]
+
+
 class TestExtractCommandMocked:
     """Tests for the extract command with mocked Parallel SDK."""
 
@@ -1091,7 +1561,7 @@ class TestExtractCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.extract.side_effect = ConnectionError("Network error")
+                mock_client.extract.side_effect = ConnectionError("Network error")
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1122,7 +1592,7 @@ class TestExtractCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.extract.return_value = mock_extract_result
+                mock_client.extract.return_value = mock_extract_result
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1161,7 +1631,7 @@ class TestExtractCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.extract.return_value = mock_extract_result
+                mock_client.extract.return_value = mock_extract_result
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 
@@ -1194,7 +1664,7 @@ class TestExtractCommandMocked:
             with mock.patch.dict("sys.modules"):
                 mock_parallel_mod = mock.MagicMock()
                 mock_client = mock.MagicMock()
-                mock_client.beta.extract.return_value = mock_extract_result
+                mock_client.extract.return_value = mock_extract_result
                 mock_parallel_mod.Parallel.return_value = mock_client
                 sys.modules["parallel"] = mock_parallel_mod
 

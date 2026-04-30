@@ -651,15 +651,80 @@ def config_cmd(key: str | None, value: str | None, output_json: bool):
 # Search Command
 # =============================================================================
 
+# Beta -> V1 mode mapping. Beta had three modes; V1 has two. We keep the old
+# values as accepted CLI inputs and translate them so existing scripts work.
+_SEARCH_MODE_MAP = {
+    "fast": "basic",
+    "one-shot": "basic",
+    "agentic": "advanced",
+    "basic": "basic",
+    "advanced": "advanced",
+}
+_DEPRECATED_SEARCH_MODES = {"fast", "one-shot", "agentic"}
+
+
+def _emit_deprecation(message: str) -> None:
+    """Print a deprecation notice to stderr so it doesn't pollute --json output."""
+    click.echo(f"[deprecated] {message}", err=True)
+
+
+def build_search_v1_kwargs(
+    *,
+    objective: str | None,
+    query: tuple[str, ...] | list[str],
+    mode: str | None,
+    max_results: int | None,
+    source_policy: dict[str, Any] | None,
+    excerpt_max_chars_per_result: int | None,
+    excerpt_max_chars_total: int | None,
+    fetch_policy: dict[str, Any] | None,
+    location: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Translate Beta-style search params to V1 client.search() kwargs.
+
+    V1 requires search_queries; if the caller only provided an objective, we
+    fall back to using it as the single query so older invocations keep working.
+    """
+    queries = list(query) if query else []
+    if not queries and objective:
+        queries = [objective]
+
+    kwargs: dict[str, Any] = {"search_queries": queries}
+    if objective:
+        kwargs["objective"] = objective
+    if mode:
+        kwargs["mode"] = _SEARCH_MODE_MAP.get(mode, mode)
+    if excerpt_max_chars_total is not None:
+        kwargs["max_chars_total"] = excerpt_max_chars_total
+    if session_id:
+        kwargs["session_id"] = session_id
+
+    advanced: dict[str, Any] = {}
+    if max_results is not None:
+        advanced["max_results"] = max_results
+    if source_policy:
+        advanced["source_policy"] = source_policy
+    if fetch_policy:
+        advanced["fetch_policy"] = fetch_policy
+    if excerpt_max_chars_per_result is not None:
+        advanced["excerpt_settings"] = {"max_chars_per_result": excerpt_max_chars_per_result}
+    if location:
+        advanced["location"] = location
+    if advanced:
+        kwargs["advanced_settings"] = advanced
+
+    return kwargs
+
 
 @main.command()
 @click.argument("objective", required=False)
 @click.option("-q", "--query", multiple=True, help="Keyword search query (can be repeated)")
 @click.option(
     "--mode",
-    type=click.Choice(["one-shot", "agentic", "fast"]),
-    default="fast",
-    help="Search mode",
+    type=click.Choice(list(_SEARCH_MODE_MAP.keys())),
+    default="basic",
+    help="Search mode (one-shot/fast → basic, agentic → advanced)",
     show_default=True,
 )
 @click.option("--max-results", type=int, default=10, help="Maximum results", show_default=True)
@@ -673,6 +738,8 @@ def config_cmd(key: str | None, value: str | None, output_json: bool):
 @click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
 @click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
 @click.option("--disable-cache-fallback", is_flag=True, help="Return error instead of stale cached content")
+@click.option("--location", help="ISO 3166-1 alpha-2 country code for geo-targeted results (e.g. us, gb, de)")
+@click.option("--session-id", help="Session ID to group related search/extract calls")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def search(
@@ -688,6 +755,8 @@ def search(
     max_age_seconds: int | None,
     timeout_seconds: float | None,
     disable_cache_fallback: bool,
+    location: str | None,
+    session_id: str | None,
     output_file: str | None,
     output_json: bool,
 ):
@@ -704,6 +773,13 @@ def search(
     if not objective and not query:
         raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
+    if mode in _DEPRECATED_SEARCH_MODES:
+        new_mode = _SEARCH_MODE_MAP[mode]
+        _emit_deprecation(
+            f"--mode {mode} is a Beta value and will stop working after the Beta API sunset (June 2026). "
+            f"Use --mode {new_mode} instead."
+        )
+
     try:
         from parallel import Parallel
 
@@ -712,12 +788,6 @@ def search(
         api_key = get_api_key()
         client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
 
-        search_kwargs: dict[str, Any] = {"mode": mode, "max_results": max_results}
-        if objective:
-            search_kwargs["objective"] = objective
-        if query:
-            search_kwargs["search_queries"] = list(query)
-
         source_policy: dict[str, Any] = {}
         if include_domains:
             source_policy["include_domains"] = parse_comma_separated(include_domains)
@@ -725,16 +795,7 @@ def search(
             source_policy["exclude_domains"] = parse_comma_separated(exclude_domains)
         if after_date:
             source_policy["after_date"] = after_date
-        if source_policy:
-            search_kwargs["source_policy"] = source_policy
 
-        # Excerpt settings (max_chars_total has a default, so always set)
-        excerpts_settings: dict[str, Any] = {"max_chars_total": excerpt_max_chars_total}
-        if excerpt_max_chars_per_result is not None:
-            excerpts_settings["max_chars_per_result"] = excerpt_max_chars_per_result
-        search_kwargs["excerpts"] = excerpts_settings
-
-        # Fetch policy
         fetch_policy: dict[str, Any] = {}
         if max_age_seconds is not None:
             fetch_policy["max_age_seconds"] = max_age_seconds
@@ -742,13 +803,24 @@ def search(
             fetch_policy["timeout_seconds"] = timeout_seconds
         if disable_cache_fallback:
             fetch_policy["disable_cache_fallback"] = True
-        if fetch_policy:
-            search_kwargs["fetch_policy"] = fetch_policy
+
+        search_kwargs = build_search_v1_kwargs(
+            objective=objective,
+            query=query,
+            mode=mode,
+            max_results=max_results,
+            source_policy=source_policy or None,
+            excerpt_max_chars_per_result=excerpt_max_chars_per_result,
+            excerpt_max_chars_total=excerpt_max_chars_total,
+            fetch_policy=fetch_policy or None,
+            location=location,
+            session_id=session_id,
+        )
 
         if not output_json:
             console.print("[dim]Searching...[/dim]\n")
 
-        result = client.beta.search(**search_kwargs)
+        result = client.search(**search_kwargs)
 
         output_data = {
             "search_id": result.search_id,
@@ -787,18 +859,62 @@ def search(
 # =============================================================================
 
 
+def build_extract_v1_kwargs(
+    *,
+    urls: tuple[str, ...] | list[str],
+    objective: str | None,
+    query: tuple[str, ...] | list[str],
+    full_content: bool,
+    full_content_max_chars: int | None,
+    excerpt_max_chars_per_result: int | None,
+    excerpt_max_chars_total: int | None,
+    fetch_policy: dict[str, Any] | None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Translate Beta-style extract params to V1 client.extract() kwargs.
+
+    Note: V1 always returns excerpts; the old `--no-excerpts` flag can no longer
+    disable them server-side. The CLI handles that flag by filtering excerpts out
+    of the output, not by passing it to the SDK.
+    """
+    kwargs: dict[str, Any] = {"urls": list(urls)}
+    if objective:
+        kwargs["objective"] = objective
+    if query:
+        kwargs["search_queries"] = list(query)
+    if excerpt_max_chars_total is not None:
+        kwargs["max_chars_total"] = excerpt_max_chars_total
+    if session_id:
+        kwargs["session_id"] = session_id
+
+    advanced: dict[str, Any] = {}
+    if excerpt_max_chars_per_result is not None:
+        advanced["excerpt_settings"] = {"max_chars_per_result": excerpt_max_chars_per_result}
+    if full_content_max_chars is not None:
+        advanced["full_content"] = {"max_chars_per_result": full_content_max_chars}
+    elif full_content:
+        advanced["full_content"] = True
+    if fetch_policy:
+        advanced["fetch_policy"] = fetch_policy
+    if advanced:
+        kwargs["advanced_settings"] = advanced
+
+    return kwargs
+
+
 @main.command()
 @click.argument("urls", nargs=-1, required=True)
 @click.option("--objective", help="Focus extraction on a specific goal")
 @click.option("-q", "--query", multiple=True, help="Keywords to prioritize (can be repeated)")
 @click.option("--full-content", is_flag=True, help="Include complete page content")
 @click.option("--full-content-max-chars", type=int, help="Max characters per result for full content")
-@click.option("--no-excerpts", is_flag=True, help="Exclude excerpts from output")
+@click.option("--no-excerpts", is_flag=True, help="Strip excerpts from output (V1 always returns them server-side)")
 @click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
 @click.option("--excerpt-max-chars-total", type=int, help="Max total characters for excerpts across all URLs")
 @click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
 @click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
 @click.option("--disable-cache-fallback", is_flag=True, help="Return error instead of stale cached content")
+@click.option("--session-id", help="Session ID to group related search/extract calls")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def extract(
@@ -813,10 +929,17 @@ def extract(
     max_age_seconds: int | None,
     timeout_seconds: float | None,
     disable_cache_fallback: bool,
+    session_id: str | None,
     output_file: str | None,
     output_json: bool,
 ):
     """Extract content from URLs as clean markdown."""
+    if no_excerpts:
+        _emit_deprecation(
+            "--no-excerpts no longer disables excerpts server-side (V1 always returns them); "
+            "the flag now just strips them from the CLI output."
+        )
+
     try:
         from parallel import Parallel
 
@@ -825,30 +948,6 @@ def extract(
         api_key = get_api_key()
         client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
 
-        extract_kwargs: dict[str, Any] = {
-            "urls": list(urls),
-        }
-
-        # Excerpt settings - can be bool or object with settings
-        if no_excerpts:
-            extract_kwargs["excerpts"] = False
-        elif excerpt_max_chars_per_result is not None or excerpt_max_chars_total is not None:
-            excerpts_settings: dict[str, Any] = {}
-            if excerpt_max_chars_per_result is not None:
-                excerpts_settings["max_chars_per_result"] = excerpt_max_chars_per_result
-            if excerpt_max_chars_total is not None:
-                excerpts_settings["max_chars_total"] = excerpt_max_chars_total
-            extract_kwargs["excerpts"] = excerpts_settings
-        else:
-            extract_kwargs["excerpts"] = True
-
-        # Full content settings - can be bool or object with settings
-        if full_content_max_chars is not None:
-            extract_kwargs["full_content"] = {"max_chars_per_result": full_content_max_chars}
-        else:
-            extract_kwargs["full_content"] = full_content
-
-        # Fetch policy
         fetch_policy: dict[str, Any] = {}
         if max_age_seconds is not None:
             fetch_policy["max_age_seconds"] = max_age_seconds
@@ -856,23 +955,28 @@ def extract(
             fetch_policy["timeout_seconds"] = timeout_seconds
         if disable_cache_fallback:
             fetch_policy["disable_cache_fallback"] = True
-        if fetch_policy:
-            extract_kwargs["fetch_policy"] = fetch_policy
 
-        if objective:
-            extract_kwargs["objective"] = objective
-        if query:
-            extract_kwargs["search_queries"] = list(query)
+        extract_kwargs = build_extract_v1_kwargs(
+            urls=urls,
+            objective=objective,
+            query=query,
+            full_content=full_content,
+            full_content_max_chars=full_content_max_chars,
+            excerpt_max_chars_per_result=excerpt_max_chars_per_result,
+            excerpt_max_chars_total=excerpt_max_chars_total,
+            fetch_policy=fetch_policy or None,
+            session_id=session_id,
+        )
 
         if not output_json:
             console.print(f"[dim]Extracting content from {len(urls)} URL(s)...[/dim]\n")
 
-        result = client.beta.extract(**extract_kwargs)
+        result = client.extract(**extract_kwargs)
 
         results_list = []
         for r in result.results:
             result_dict: dict[str, Any] = {"url": r.url, "title": r.title, "publish_date": r.publish_date}
-            if hasattr(r, "excerpts") and r.excerpts:
+            if not no_excerpts and hasattr(r, "excerpts") and r.excerpts:
                 result_dict["excerpts"] = r.excerpts
             if hasattr(r, "full_content") and r.full_content:
                 result_dict["full_content"] = r.full_content
@@ -914,7 +1018,7 @@ def extract(
                 console.print(f"[bold cyan]{r.title}[/bold cyan]")
                 console.print(f"[link={r.url}]{r.url}[/link]\n")
 
-                if hasattr(r, "excerpts") and r.excerpts:
+                if not no_excerpts and hasattr(r, "excerpts") and r.excerpts:
                     console.print("[dim]Excerpts:[/dim]")
                     for excerpt in r.excerpts[:3]:
                         text = excerpt[:300] + "..." if len(excerpt) > 300 else excerpt
