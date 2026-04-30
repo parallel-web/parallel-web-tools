@@ -318,12 +318,12 @@ def parse_inline_data(data_json: str) -> tuple[str, list[dict[str, str]]]:
         raise click.BadParameter("Data must be an array of objects")
 
     # Infer columns from the first row
-    columns = list(data[0].keys())
+    columns: list[str] = [str(k) for k in data[0].keys()]
     if not columns:
         raise click.BadParameter("Data objects must have at least one field")
 
     # Create source_columns with inferred descriptions
-    source_columns = [{"name": col, "description": f"The {col} field"} for col in columns]
+    source_columns: list[dict[str, str]] = [{"name": col, "description": f"The {col} field"} for col in columns]
 
     # Write to a temporary CSV file
     temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="")
