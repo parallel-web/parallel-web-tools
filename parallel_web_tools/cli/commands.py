@@ -788,6 +788,17 @@ def search(
             f"Use --mode {new_mode} instead."
         )
 
+    source_policy: dict[str, Any] = {}
+    if include_domains:
+        source_policy["include_domains"] = parse_comma_separated(include_domains)
+    if exclude_domains:
+        source_policy["exclude_domains"] = parse_comma_separated(exclude_domains)
+    domain_total = len(source_policy.get("include_domains", [])) + len(source_policy.get("exclude_domains", []))
+    if domain_total > 200:
+        raise click.UsageError(f"--include-domains and --exclude-domains combined must be <= 200 (got {domain_total}).")
+    if after_date:
+        source_policy["after_date"] = after_date
+
     try:
         from parallel import Parallel
 
@@ -795,19 +806,6 @@ def search(
 
         api_key = get_api_key()
         client = Parallel(api_key=api_key, default_headers=get_default_headers("cli"))
-
-        source_policy: dict[str, Any] = {}
-        if include_domains:
-            source_policy["include_domains"] = parse_comma_separated(include_domains)
-        if exclude_domains:
-            source_policy["exclude_domains"] = parse_comma_separated(exclude_domains)
-        domain_total = len(source_policy.get("include_domains", [])) + len(source_policy.get("exclude_domains", []))
-        if domain_total > 200:
-            raise click.UsageError(
-                f"--include-domains and --exclude-domains combined must be <= 200 (got {domain_total})."
-            )
-        if after_date:
-            source_policy["after_date"] = after_date
 
         fetch_policy: dict[str, Any] = {}
         if max_age_seconds is not None:
