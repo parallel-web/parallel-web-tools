@@ -92,12 +92,12 @@ all = [
 # Development
 dev = [
     "parallel-web-tools[all,spark]",
-    "pytest>=8.0.0",
-    "pytest-cov>=4.0.0",
-    "pyinstaller>=6.0.0",
-    "pre-commit>=4.0.0",
-    "ruff>=0.14.0",
-    "ty>=0.0.21",
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0",
+    "pyinstaller>=6.20.0",
+    "pre-commit>=4.6.0",
+    "ruff>=0.15.0",
+    "ty>=0.0.33",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -162,6 +162,6 @@ known-first-party = ["parallel_web_tools"]
 
 [dependency-groups]
 dev = [
-    "ipykernel>=7.1.0",
-    "ty>=0.0.21",
+    "ipykernel>=7.2.0",
+    "ty>=0.0.33",
 ]
