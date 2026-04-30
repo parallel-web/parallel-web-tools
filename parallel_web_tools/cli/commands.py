@@ -680,6 +680,7 @@ def build_search_v1_kwargs(
     fetch_policy: dict[str, Any] | None,
     location: str | None = None,
     session_id: str | None = None,
+    client_model: str | None = None,
 ) -> dict[str, Any]:
     """Translate Beta-style search params to V1 client.search() kwargs.
 
@@ -699,6 +700,8 @@ def build_search_v1_kwargs(
         kwargs["max_chars_total"] = excerpt_max_chars_total
     if session_id:
         kwargs["session_id"] = session_id
+    if client_model:
+        kwargs["client_model"] = client_model
 
     advanced: dict[str, Any] = {}
     if max_results is not None:
@@ -727,11 +730,11 @@ def build_search_v1_kwargs(
     help="Search mode (one-shot/fast → basic, agentic → advanced)",
     show_default=True,
 )
-@click.option("--max-results", type=int, default=10, help="Maximum results", show_default=True)
+@click.option("--max-results", type=int, help="Maximum results (defaults to server-side default of 10)")
 @click.option("--include-domains", multiple=True, help="Only search these domains (comma-separated or repeated)")
 @click.option("--exclude-domains", multiple=True, help="Exclude these domains (comma-separated or repeated)")
 @click.option("--after-date", help="Only results after this date (YYYY-MM-DD)")
-@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
 @click.option(
     "--excerpt-max-chars-total", type=int, default=60000, help="Max total characters for excerpts", show_default=True
 )
@@ -740,13 +743,17 @@ def build_search_v1_kwargs(
 @click.option("--disable-cache-fallback", is_flag=True, help="Return error instead of stale cached content")
 @click.option("--location", help="ISO 3166-1 alpha-2 country code for geo-targeted results (e.g. us, gb, de)")
 @click.option("--session-id", help="Session ID to group related search/extract calls")
+@click.option(
+    "--client-model",
+    help="The model generating this request and consuming the results (e.g. claude-opus-4-7, gpt-5.4, gemini-3.1-pro)",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def search(
     objective: str | None,
     query: tuple[str, ...],
     mode: str,
-    max_results: int,
+    max_results: int | None,
     include_domains: tuple[str, ...],
     exclude_domains: tuple[str, ...],
     after_date: str | None,
@@ -757,6 +764,7 @@ def search(
     disable_cache_fallback: bool,
     location: str | None,
     session_id: str | None,
+    client_model: str | None,
     output_file: str | None,
     output_json: bool,
 ):
@@ -793,6 +801,11 @@ def search(
             source_policy["include_domains"] = parse_comma_separated(include_domains)
         if exclude_domains:
             source_policy["exclude_domains"] = parse_comma_separated(exclude_domains)
+        domain_total = len(source_policy.get("include_domains", [])) + len(source_policy.get("exclude_domains", []))
+        if domain_total > 200:
+            raise click.UsageError(
+                f"--include-domains and --exclude-domains combined must be <= 200 (got {domain_total})."
+            )
         if after_date:
             source_policy["after_date"] = after_date
 
@@ -815,6 +828,7 @@ def search(
             fetch_policy=fetch_policy or None,
             location=location,
             session_id=session_id,
+            client_model=client_model,
         )
 
         if not output_json:
@@ -824,11 +838,13 @@ def search(
 
         output_data = {
             "search_id": result.search_id,
+            "session_id": getattr(result, "session_id", None),
             "status": "ok",
             "results": [
                 {"url": r.url, "title": r.title, "publish_date": r.publish_date, "excerpts": r.excerpts}
                 for r in result.results
             ],
+            "usage": [{"name": u.name, "count": u.count} for u in (getattr(result, "usage", None) or [])],
             "warnings": [
                 {"type": w.type, "message": w.message, "detail": getattr(w, "detail", None)} for w in result.warnings
             ]
@@ -870,6 +886,7 @@ def build_extract_v1_kwargs(
     excerpt_max_chars_total: int | None,
     fetch_policy: dict[str, Any] | None,
     session_id: str | None = None,
+    client_model: str | None = None,
 ) -> dict[str, Any]:
     """Translate Beta-style extract params to V1 client.extract() kwargs.
 
@@ -886,6 +903,8 @@ def build_extract_v1_kwargs(
         kwargs["max_chars_total"] = excerpt_max_chars_total
     if session_id:
         kwargs["session_id"] = session_id
+    if client_model:
+        kwargs["client_model"] = client_model
 
     advanced: dict[str, Any] = {}
     if excerpt_max_chars_per_result is not None:
@@ -915,6 +934,10 @@ def build_extract_v1_kwargs(
 @click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
 @click.option("--disable-cache-fallback", is_flag=True, help="Return error instead of stale cached content")
 @click.option("--session-id", help="Session ID to group related search/extract calls")
+@click.option(
+    "--client-model",
+    help="The model generating this request and consuming the results (e.g. claude-opus-4-7, gpt-5.4, gemini-3.1-pro)",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to file (JSON)")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 def extract(
@@ -930,6 +953,7 @@ def extract(
     timeout_seconds: float | None,
     disable_cache_fallback: bool,
     session_id: str | None,
+    client_model: str | None,
     output_file: str | None,
     output_json: bool,
 ):
@@ -939,6 +963,11 @@ def extract(
             "--no-excerpts no longer disables excerpts server-side (V1 always returns them); "
             "the flag now just strips them from the CLI output."
         )
+
+    if len(urls) > 20:
+        raise click.UsageError(f"V1 extract accepts at most 20 URLs per request (got {len(urls)}).")
+    if objective is not None and len(objective) > 5000:
+        raise click.UsageError(f"--objective must be 5000 characters or fewer (got {len(objective)}).")
 
     try:
         from parallel import Parallel
@@ -966,6 +995,7 @@ def extract(
             excerpt_max_chars_total=excerpt_max_chars_total,
             fetch_policy=fetch_policy or None,
             session_id=session_id,
+            client_model=client_model,
         )
 
         if not output_json:
@@ -996,9 +1026,11 @@ def extract(
 
         output_data = {
             "extract_id": result.extract_id,
+            "session_id": getattr(result, "session_id", None),
             "status": "ok",
             "results": results_list,
             "errors": errors_list,
+            "usage": [{"name": u.name, "count": u.count} for u in (getattr(result, "usage", None) or [])],
             "warnings": [
                 {"type": w.type, "message": w.message, "detail": getattr(w, "detail", None)} for w in result.warnings
             ]

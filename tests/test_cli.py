@@ -987,6 +987,8 @@ class TestSearchCommandMocked:
                 excerpts=["An excerpt"],
             )
         ]
+        mock_search_result.session_id = None
+        mock_search_result.usage = None
         mock_search_result.warnings = []
 
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
@@ -1025,6 +1027,8 @@ class TestSearchCommandMocked:
         warning_obj.type = "warning"
         warning_obj.message = "Excerpts truncated to 500 characters"
         warning_obj.detail = {"max_chars_total": 500}
+        mock_search_result.session_id = None
+        mock_search_result.usage = None
         mock_search_result.warnings = [warning_obj]
 
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
@@ -1421,13 +1425,144 @@ class TestBuildExtractV1Kwargs:
         assert kwargs["advanced_settings"]["fetch_policy"] == {"max_age_seconds": 1200}
 
 
+class TestSearchExtractV1Validation:
+    """Tests for V1 input validation (URL count, objective length, domain count)."""
+
+    def test_extract_rejects_more_than_20_urls(self, runner):
+        """V1 caps URLs at 20; extra URLs should fail fast with a clear message."""
+        urls = [f"https://example.com/{i}" for i in range(21)]
+        result = runner.invoke(main, ["extract", *urls, "--json"])
+        assert result.exit_code != 0
+        assert "20 URLs" in result.output
+
+    def test_extract_accepts_exactly_20_urls(self, runner):
+        """At-the-limit case should not be blocked by the check."""
+        urls = [f"https://example.com/{i}" for i in range(20)]
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_result = mock.MagicMock()
+                mock_result.extract_id = "ext_20"
+                mock_result.session_id = None
+                mock_result.results = []
+                mock_result.errors = []
+                mock_result.usage = None
+                mock_result.warnings = None
+                mock_client.extract.return_value = mock_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["extract", *urls, "--json"])
+
+                del sys.modules["parallel"]
+        assert result.exit_code == 0
+
+    def test_extract_rejects_objective_over_5000_chars(self, runner):
+        """V1 caps objective at 5000 characters."""
+        long_obj = "a" * 5001
+        result = runner.invoke(main, ["extract", "https://example.com", "--objective", long_obj, "--json"])
+        assert result.exit_code != 0
+        assert "5000 characters" in result.output
+
+    def test_search_rejects_combined_domain_count_over_200(self, runner):
+        """V1 caps include + exclude domains combined at 200."""
+        domains = ",".join(f"example{i}.com" for i in range(150))
+        more_domains = ",".join(f"other{i}.com" for i in range(60))
+        result = runner.invoke(
+            main,
+            [
+                "search",
+                "test",
+                "--include-domains",
+                domains,
+                "--exclude-domains",
+                more_domains,
+                "--json",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "200" in result.output
+
+
+class TestV1ResponseFieldsSurfaced:
+    """Tests that V1 response fields (session_id, usage) are surfaced in output."""
+
+    def test_search_output_includes_session_id_and_usage(self, runner):
+        """Search output should include session_id and usage fields when present."""
+        mock_result = mock.MagicMock()
+        mock_result.search_id = "search_v1"
+        mock_result.session_id = "sess_xyz"
+        mock_result.results = []
+        usage_item = mock.MagicMock()
+        usage_item.name = "search_basic"
+        usage_item.count = 1
+        mock_result.usage = [usage_item]
+        mock_result.warnings = []
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.search.return_value = mock_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["search", "test", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["session_id"] == "sess_xyz"
+        assert output["usage"] == [{"name": "search_basic", "count": 1}]
+
+    def test_extract_output_includes_session_id_and_usage(self, runner):
+        """Extract output should include session_id and usage fields when present."""
+        mock_result = mock.MagicMock()
+        mock_result.extract_id = "ext_v1"
+        mock_result.session_id = "sess_abc"
+        page = mock.MagicMock()
+        page.url = "https://example.com"
+        page.title = "Example"
+        page.publish_date = None
+        page.excerpts = []
+        page.full_content = None
+        mock_result.results = [page]
+        mock_result.errors = []
+        usage_item = mock.MagicMock()
+        usage_item.name = "extract"
+        usage_item.count = 1
+        mock_result.usage = [usage_item]
+        mock_result.warnings = None
+
+        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
+            with mock.patch.dict("sys.modules"):
+                mock_parallel_mod = mock.MagicMock()
+                mock_client = mock.MagicMock()
+                mock_client.extract.return_value = mock_result
+                mock_parallel_mod.Parallel.return_value = mock_client
+                sys.modules["parallel"] = mock_parallel_mod
+
+                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
+
+                del sys.modules["parallel"]
+
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["session_id"] == "sess_abc"
+        assert output["usage"] == [{"name": "extract", "count": 1}]
+
+
 class TestSearchDeprecationWarnings:
     """Tests for deprecation warnings in the search command."""
 
     def _setup_mock_search(self, mock_client):
         mock_result = mock.MagicMock()
         mock_result.search_id = "search_dep"
+        mock_result.session_id = None
         mock_result.results = []
+        mock_result.usage = None
         mock_result.warnings = []
         mock_client.search.return_value = mock_result
 
@@ -1494,6 +1629,7 @@ class TestExtractDeprecationWarnings:
     def _setup_mock_extract(self, mock_client, with_excerpts=True):
         mock_result = mock.MagicMock()
         mock_result.extract_id = "ext_dep"
+        mock_result.session_id = None
         page = mock.MagicMock()
         page.url = "https://example.com"
         page.title = "Example"
@@ -1502,6 +1638,7 @@ class TestExtractDeprecationWarnings:
         page.full_content = None
         mock_result.results = [page]
         mock_result.errors = []
+        mock_result.usage = None
         mock_result.warnings = None
         mock_client.extract.return_value = mock_result
 
@@ -1586,6 +1723,8 @@ class TestExtractCommandMocked:
         mock_page.full_content = None
         mock_extract_result.results = [mock_page]
         mock_extract_result.errors = []
+        mock_extract_result.session_id = None
+        mock_extract_result.usage = None
         mock_extract_result.warnings = None
 
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
@@ -1625,6 +1764,8 @@ class TestExtractCommandMocked:
         warning_obj.type = "input_validation_warning"
         warning_obj.message = "Excerpts truncated"
         warning_obj.detail = {"max_chars_total": 500}
+        mock_extract_result.session_id = None
+        mock_extract_result.usage = None
         mock_extract_result.warnings = [warning_obj]
 
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
@@ -1658,6 +1799,8 @@ class TestExtractCommandMocked:
         mock_error.http_status_code = 500
         mock_error.content = "Internal Server Error"
         mock_extract_result.errors = [mock_error]
+        mock_extract_result.session_id = None
+        mock_extract_result.usage = None
         mock_extract_result.warnings = None
 
         with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
