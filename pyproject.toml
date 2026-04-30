@@ -30,10 +30,10 @@ classifiers = [
 
 dependencies = [
     "parallel-web>=0.4.2",
-    "python-dotenv>=1.2.0",
+    "python-dotenv>=1.0.0",
     # CLI dependencies (minimal - search, extract, enrich with CLI args)
-    "click>=8.3.0",
-    "rich>=15.0.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
     "httpx>=0.25.0",
 ]
 
@@ -54,8 +54,8 @@ cli = [
 ]
 # Polars integration for data processing
 polars = [
-    "polars>=1.40.0",
-    "pyarrow>=24.0.0",
+    "polars>=1.37.0",
+    "pyarrow>=18.0.0",
 ]
 # Pandas integration (for Spark UDFs)
 pandas = [
@@ -64,17 +64,17 @@ pandas = [
 # DuckDB integration (includes polars for data handling)
 duckdb = [
     "parallel-web-tools[cli,polars]",
-    "duckdb>=1.5.0",
+    "duckdb>=1.0.0",
     "nest-asyncio>=1.6.0",
 ]
 # Snowflake integration
 snowflake = [
-    "snowflake-connector-python>=4.4.0",
+    "snowflake-connector-python>=3.0.0",
 ]
 # SQLAlchemy-based BigQuery connector (for YAML configs and ETL)
 bigquery = [
     "parallel-web-tools[cli]",
-    "sqlalchemy>=2.0.49",
+    "sqlalchemy>=2.0.0",
     "sqlalchemy-bigquery>=1.11.0",
 ]
 # BigQuery native UDF deployment (Cloud Functions + Remote Functions)
