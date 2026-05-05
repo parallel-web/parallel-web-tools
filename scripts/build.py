@@ -6,11 +6,16 @@ Usage:
     python scripts/build.py          # Build using current environment
     uv run scripts/build.py          # Build using uv (recommended)
 
+Prerequisites:
+    Install build dependencies in your project environment first.
+    Recommended: uv sync --extra dev
+
 This creates a standalone executable in dist/parallel-cli/
 The output is a folder (onedir mode) for fast startup times.
 """
 
 import hashlib
+import importlib.util
 import json
 import platform
 import shutil
@@ -19,33 +24,32 @@ import sys
 from pathlib import Path
 
 
-def has_uv() -> bool:
-    """Check if uv is available."""
-    try:
-        subprocess.run(["uv", "--version"], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
-
 def ensure_dependencies():
-    """Ensure build dependencies are installed."""
-    project_root = Path(__file__).parent.parent
+    """Validate build dependencies are already available in the active environment."""
+    missing: list[str] = []
 
-    if has_uv():
-        print("Using uv to install dependencies...")
-        subprocess.run(
-            ["uv", "pip", "install", "-e", ".[cli]", "pyinstaller>=6.0.0"],
-            cwd=project_root,
-            check=True,
-        )
-    else:
-        print("Using pip to install dependencies...")
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", ".[cli]", "pyinstaller>=6.0.0"],
-            cwd=project_root,
-            check=True,
-        )
+    if importlib.util.find_spec("PyInstaller") is None:
+        missing.append("pyinstaller>=6.0.0")
+    if importlib.util.find_spec("certifi") is None:
+        missing.append("certifi")
+
+    if not missing:
+        return
+
+    joined = ", ".join(missing)
+    print(f"Missing build dependencies: {joined}")
+    print()
+    print("Install them into your project environment first, then rerun the build.")
+    print("Recommended:")
+    print("  uv sync --extra dev")
+    print()
+    print("Minimal standalone build setup:")
+    print("  uv sync --extra cli")
+    print('  uv pip install "pyinstaller>=6.0.0"')
+    print()
+    print("Then build with:")
+    print("  uv run python scripts/build.py --skip-deps")
+    sys.exit(1)
 
 
 def get_platform_string() -> str:
@@ -123,7 +127,7 @@ def build(skip_deps: bool = False):
 
     # Ensure dependencies
     if not skip_deps:
-        print("\nInstalling dependencies...")
+        print("\nChecking dependencies...")
         ensure_dependencies()
 
     # Clean previous builds
