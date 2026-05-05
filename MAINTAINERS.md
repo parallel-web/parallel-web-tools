@@ -2,6 +2,56 @@
 
 Instructions for releasing and maintaining the parallel-web-tools package.
 
+# Development Setup
+
+From the repository root:
+
+## Install Option 1: Nix
+
+Put in the repo a envrc file with the following contents:
+`.envrc`
+
+```
+use flake;
+```
+
+## Install Option 2:
+
+Make sure you have the following installed:
+
+- uv
+- Python 3.12
+- Node 24
+- pnpm
+
+## First time setup
+
+Sets up python and install all deps, and setup pre-commit:
+
+```bash
+uv sync --extra dev
+
+# Install git hooks
+uv run pre-commit install
+
+# Run hooks manually on all files
+uv run pre-commit run --all-files
+```
+
+## Running development version of parallel-cli
+
+Just run:
+
+```
+uv run parallel-cli
+```
+
+If you want to build the binary for whatever reason:
+
+```
+uv run python scripts/build.py
+```
+
 ## Release Process
 
 ### Quick Release (Recommended)
@@ -20,12 +70,14 @@ From the `main` branch with a clean working tree:
 ```
 
 This script will:
+
 1. Calculate the next version
 2. Update all 4 version files
 3. Create a `release/vX.Y.Z` branch
 4. Commit, push, and open a PR
 
 After you merge the PR, everything else is automated:
+
 - `auto-release.yml` detects the version bump commit and creates a GitHub Release + tag
 - `release.yml` builds standalone binaries for all platforms
 - `publish.yml` publishes to PyPI
@@ -34,6 +86,7 @@ After you merge the PR, everything else is automated:
 ### Manual Version Update (if needed)
 
 Update the version in these places:
+
 - `pyproject.toml`: `version = "X.Y.Z"`
 - `parallel_web_tools/__init__.py`: `__version__ = "X.Y.Z"`
 - `parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt`: `parallel-web-tools>=X.Y.Z`
@@ -64,24 +117,14 @@ parallel-cli --version
 
 ### Supported Platforms
 
-| Platform | Runner | Archive Name |
-|----------|--------|--------------|
-| macOS Apple Silicon | `macos-15` | `parallel-cli-darwin-arm64.zip` |
-| macOS Intel | `macos-15-large` | `parallel-cli-darwin-x64.zip` |
-| Linux x64 | `ubuntu-latest` | `parallel-cli-linux-x64.zip` |
-| Windows x64 | `windows-latest` | `parallel-cli-windows-x64.zip` |
+| Platform            | Runner           | Archive Name                    |
+| ------------------- | ---------------- | ------------------------------- |
+| macOS Apple Silicon | `macos-15`       | `parallel-cli-darwin-arm64.zip` |
+| macOS Intel         | `macos-15-large` | `parallel-cli-darwin-x64.zip`   |
+| Linux x64           | `ubuntu-latest`  | `parallel-cli-linux-x64.zip`    |
+| Windows x64         | `windows-latest` | `parallel-cli-windows-x64.zip`  |
 
 Note: Linux arm64 is not supported (no GitHub-hosted ARM64 runners available).
-
-### Local Build
-
-```bash
-# Build for current platform
-uv run scripts/build.py
-
-# Test the binary (onedir mode - binary is in a folder)
-./dist/parallel-cli/parallel-cli --version
-```
 
 ### Binary Size
 
@@ -104,6 +147,7 @@ Configure trusted publishing (no API tokens needed):
    - Environment name: `pypi`
 
 For Test PyPI (recommended for testing):
+
 1. Go to https://test.pypi.org/manage/account/publishing/
 2. Same steps, but use environment name: `test-pypi`
 
@@ -144,6 +188,7 @@ git push origin --delete v0.0.1-test
 ### Pre-releases
 
 For testing without affecting "latest":
+
 1. Create release as usual
 2. Check **Set as a pre-release**
 
@@ -187,12 +232,12 @@ python scripts/update-homebrew-formula.py --version 0.1.2 --output homebrew/para
 
 ## CI/CD Workflows
 
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `ci.yml` | Push to main, PRs | Run tests and type checking |
-| `auto-release.yml` | Push to main (version bump commits) | Create tag + GitHub Release |
-| `release.yml` | Release created | Build binaries, publish to npm + Homebrew |
-| `publish.yml` | Release published | Publish to PyPI |
+| Workflow           | Trigger                             | Purpose                                   |
+| ------------------ | ----------------------------------- | ----------------------------------------- |
+| `ci.yml`           | Push to main, PRs                   | Run tests and type checking               |
+| `auto-release.yml` | Push to main (version bump commits) | Create tag + GitHub Release               |
+| `release.yml`      | Release created                     | Build binaries, publish to npm + Homebrew |
+| `publish.yml`      | Release published                   | Publish to PyPI                           |
 
 ### Manually Trigger Workflows
 
