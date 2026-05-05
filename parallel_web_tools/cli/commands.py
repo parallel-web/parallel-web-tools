@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, NoReturn
 
 import click
 import httpx
@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 from parallel_web_tools import __version__
+from parallel_web_tools.cli.skills import create_skills_group
 from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     FINDALL_GENERATORS,
@@ -170,7 +171,7 @@ def _handle_error(
     output_json: bool = False,
     exit_code: int = EXIT_API_ERROR,
     prefix: str = "Error",
-) -> None:
+) -> NoReturn:
     """Handle an error with appropriate output format and exit code.
 
     In --json mode, outputs structured JSON to stdout. Otherwise, prints a
@@ -645,6 +646,9 @@ def config_cmd(key: str | None, value: str | None, output_json: bool):
             print(json.dumps({key: is_auto_update_check_enabled()}, indent=2))
         else:
             console.print(f"[green]Set {key} = {format_bool(is_auto_update_check_enabled())}[/green]")
+
+
+main.add_command(create_skills_group(console, _handle_error, EXIT_BAD_INPUT, EXIT_API_ERROR))
 
 
 # =============================================================================
