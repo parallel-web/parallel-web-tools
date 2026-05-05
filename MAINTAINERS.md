@@ -8,14 +8,13 @@ From the repository root:
 
 ## Install Option 1: Nix
 
-Put in the repo a envrc file with the following contents:
-`.envrc`
+Create a `.envrc` file in the repo root containing:
 
 ```
 use flake;
 ```
 
-## Install Option 2:
+## Install Option 2: Manual
 
 Make sure you have the following installed:
 
@@ -26,7 +25,7 @@ Make sure you have the following installed:
 
 ## First time setup
 
-Sets up python and install all deps, and setup pre-commit:
+Sets up Python, installs all dev dependencies, and sets up pre-commit:
 
 ```bash
 uv sync --extra dev
@@ -48,7 +47,10 @@ uv run parallel-cli
 
 If you want to build the binary for whatever reason:
 
-```
+```bash
+# If you only need build tooling, this is enough:
+uv sync --extra build
+
 uv run python scripts/build.py
 ```
 

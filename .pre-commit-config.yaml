@@ -2,11 +2,11 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-    - id: check-merge-conflict
-    - id: debug-statements
-    - id: end-of-file-fixer
-    - id: detect-private-key
-    - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: end-of-file-fixer
+      - id: detect-private-key
+      - id: trailing-whitespace
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.14
     hooks:
@@ -16,6 +16,12 @@ repos:
       - id: ruff-format
   - repo: local
     hooks:
+      - id: tach-check
+        name: tach check
+        entry: uv run tach check
+        language: system
+        pass_filenames: false
+        types: [python]
       - id: ty-check
         name: ty (type checking)
         entry: uv run ty check

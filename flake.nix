@@ -34,7 +34,12 @@
         };
 
         shellHook = ''
-          export PATH="$PWD/.venv/bin:$PATH"
+          if command -v git >/dev/null 2>&1; then
+            REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+          else
+            REPO_ROOT="$PWD"
+          fi
+          export PATH="$REPO_ROOT/.venv/bin:$PATH"
 
           echo "parallel-web-tools dev shell"
           echo "python: $(python --version 2>/dev/null)"

@@ -1,0 +1,34 @@
+forbid_circular_dependencies = true
+root_module = "ignore"
+interfaces = []
+exclude = ["**/*__pycache__", "**/*egg-info", "**/docs", "**/tests", "**/venv"]
+source_roots = ["."]
+
+[[modules]]
+path = "parallel_web_tools.cli.**"
+depends_on = [
+  "parallel_web_tools.cli.**",
+  "parallel_web_tools.core.**",
+  "parallel_web_tools.integrations.**",
+]
+
+[[modules]]
+path = "parallel_web_tools.core.**"
+depends_on = ["parallel_web_tools.core.**"]
+
+# runner is the one core module allowed to dispatch to processors via lazy imports
+# inside _run_processor(); other core modules must remain processor-agnostic.
+[[modules]]
+path = "parallel_web_tools.core.runner"
+depends_on = ["parallel_web_tools.core.**", "parallel_web_tools.processors.**"]
+
+[[modules]]
+path = "parallel_web_tools.integrations.**"
+depends_on = [
+  "parallel_web_tools.core.**",
+  "parallel_web_tools.integrations.**",
+]
+
+[[modules]]
+path = "parallel_web_tools.processors.**"
+depends_on = ["parallel_web_tools.core.**", "parallel_web_tools.processors.**"]

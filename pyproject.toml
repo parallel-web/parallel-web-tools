@@ -163,5 +163,7 @@ known-first-party = ["parallel_web_tools"]
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
+    "pyinstaller>=6.20.0",
+    "tach>=0.34.1",
     "ty>=0.0.33",
 ]
