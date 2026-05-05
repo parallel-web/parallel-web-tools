@@ -1,6 +1,5 @@
 """Core functionality for Parallel Data."""
 
-from parallel_web_tools.core import skills
 from parallel_web_tools.core.auth import (
     DeviceCodeInfo,
     create_client,
@@ -82,7 +81,6 @@ from parallel_web_tools.core.user_agent import (
 )
 
 __all__ = [
-    "skills",
     # Auth
     "DeviceCodeInfo",
     "create_client",

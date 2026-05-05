@@ -1856,6 +1856,37 @@ class TestEnrichRunJsonOutput:
 
 
 class TestSkillsCommands:
+    def test_skills_help_mentions_github_token_and_replacement_behavior(self, runner):
+        result = runner.invoke(main, ["skills", "--help"])
+
+        assert result.exit_code == 0
+        assert "GH_TOKEN" in result.output
+        assert "GitHub API rate limits" in result.output
+
+        result = runner.invoke(main, ["skills", "install", "--help"])
+
+        assert result.exit_code == 0
+        assert "Skills not" in result.output
+        assert "listed will be removed" in result.output
+
+    def test_skills_list_json(self, runner):
+        with (
+            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
+            mock.patch(
+                "parallel_web_tools.core.skills.list_remote_skills",
+                return_value=["parallel-web-extract", "parallel-web-search"],
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "list", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload == {
+            "ref": "main",
+            "skills": ["parallel-web-extract", "parallel-web-search"],
+            "count": 2,
+        }
+
     def test_skills_install_global_default(self, runner):
         with (
             mock.patch(
@@ -1913,6 +1944,23 @@ class TestSkillsCommands:
         assert result.exit_code == EXIT_BAD_INPUT
         payload = json.loads(result.output)
         assert payload["error"]["message"] == "no project root"
+
+    def test_skills_install_invalid_skill_is_bad_input(self, runner):
+        from parallel_web_tools.core.skills import SkillsInputError
+
+        with (
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
+            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
+            mock.patch(
+                "parallel_web_tools.core.skills.install_skills",
+                side_effect=SkillsInputError("unknown skill"),
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "install", "--skill", "does-not-exist", "--json"])
+
+        assert result.exit_code == EXIT_BAD_INPUT
+        payload = json.loads(result.output)
+        assert payload["error"]["message"] == "unknown skill"
 
     def test_skills_uninstall_json(self, runner):
         with (

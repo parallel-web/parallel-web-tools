@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import base64
+import io
 import json
 import os
 import shutil
+import tempfile
 import time
+import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote
 
@@ -34,6 +38,10 @@ class SkillsInstallLocationError(SkillsError):
 
 class SkillsDownloadError(SkillsError):
     """Raised when remote skills metadata or files cannot be fetched."""
+
+
+class SkillsInputError(SkillsError):
+    """Raised when caller-provided skill arguments are invalid."""
 
 
 def get_skills_repo_ref() -> str:
@@ -76,23 +84,13 @@ def resolve_install_dir(project: bool, start: Path | None = None) -> Path:
     return root / ".agents" / "skills"
 
 
-def _github_contents_url(path: str, ref: str) -> str:
-    encoded_path = quote(path, safe="/")
+def _github_archive_url(ref: str) -> str:
     encoded_ref = quote(ref, safe="")
-    return (
-        f"https://api.github.com/repos/{SKILLS_REPO_OWNER}/{SKILLS_REPO_NAME}/contents/{encoded_path}?ref={encoded_ref}"
-    )
-
-
-def _read_json_response(response: httpx.Response) -> dict | list:
-    try:
-        return response.json()
-    except Exception as e:
-        raise SkillsDownloadError("Failed to decode GitHub response as JSON") from e
+    return f"https://api.github.com/repos/{SKILLS_REPO_OWNER}/{SKILLS_REPO_NAME}/zipball/{encoded_ref}"
 
 
 def _github_headers() -> dict[str, str]:
-    """Build GitHub API headers, using GH_TOKEN when available."""
+    """Build GitHub API headers for skills archive downloads."""
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -103,80 +101,91 @@ def _github_headers() -> dict[str, str]:
     return headers
 
 
-def _get_contents(client: httpx.Client, path: str, ref: str) -> list[dict]:
-    url = _github_contents_url(path, ref)
-    response = client.get(url)
+def _download_repo_archive(client: httpx.Client, ref: str) -> bytes:
+    # TODO: add retry/backoff for transient GitHub API failures (429/5xx).
+    response = client.get(_github_archive_url(ref))
     if response.status_code >= 400:
         raise SkillsDownloadError(
-            f"Failed to fetch GitHub contents for {path} at ref '{ref}' in "
+            f"Failed to download skills archive at ref '{ref}' from "
             f"{SKILLS_REPO_OWNER}/{SKILLS_REPO_NAME}: HTTP {response.status_code}"
         )
-    payload = _read_json_response(response)
-    if isinstance(payload, dict):
-        return [payload]
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    raise SkillsDownloadError(f"Unexpected GitHub payload for {path}")
+    return response.content
+
+
+def _extract_repo_archive(archive_bytes: bytes, dest_dir: Path) -> Path:
+    """Extract a GitHub zipball into dest_dir and return the archive root."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+            root_name: str | None = None
+
+            for member in zf.infolist():
+                member_path = Path(member.filename)
+                parts = member_path.parts
+                if not parts:
+                    continue
+                if parts[0] in ("", "/"):
+                    raise SkillsDownloadError("Invalid archive entry path")
+                if any(part == ".." for part in parts):
+                    raise SkillsDownloadError("Archive contains unsafe path traversal entry")
+                if root_name is None:
+                    root_name = parts[0]
+
+                target = dest_dir / member_path
+                target_resolved = target.resolve()
+                dest_resolved = dest_dir.resolve()
+                if dest_resolved not in (target_resolved, *target_resolved.parents):
+                    raise SkillsDownloadError("Archive extraction would escape destination directory")
+
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as src, target.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    except zipfile.BadZipFile as e:
+        raise SkillsDownloadError("Failed to read downloaded skills archive") from e
+
+    if not root_name:
+        raise SkillsDownloadError("Downloaded skills archive was empty")
+
+    root = dest_dir / root_name
+    if not root.exists() or not root.is_dir():
+        raise SkillsDownloadError("Downloaded skills archive had no repository root directory")
+    return root
+
+
+@contextmanager
+def _downloaded_repo_root(ref: str) -> Iterator[Path]:
+    with httpx.Client(timeout=30, follow_redirects=True, headers=_github_headers()) as client:
+        archive_bytes = _download_repo_archive(client, ref)
+
+    with tempfile.TemporaryDirectory(prefix="parallel-skills-") as tmpdir:
+        repo_root = _extract_repo_archive(archive_bytes, Path(tmpdir))
+        yield repo_root
+
+
+def _skills_root(repo_root: Path) -> Path:
+    skills_root = repo_root / SKILLS_REPO_SKILLS_PATH
+    if not skills_root.exists() or not skills_root.is_dir():
+        raise SkillsDownloadError(
+            f"Downloaded repository does not contain a '{SKILLS_REPO_SKILLS_PATH}/' directory at the requested ref"
+        )
+    return skills_root
+
+
+def _list_skills_from_repo_root(repo_root: Path) -> list[str]:
+    skills_root = _skills_root(repo_root)
+    return sorted(path.name for path in skills_root.iterdir() if path.is_dir())
 
 
 def list_remote_skills(ref: str | None = None) -> list[str]:
     """Return available skill directory names from the remote repository."""
     resolved_ref = ref or get_skills_repo_ref()
-    with httpx.Client(timeout=30, follow_redirects=True, headers=_github_headers()) as client:
-        skills = _list_remote_skills_with_client(client, resolved_ref)
-    return skills
-
-
-def _list_remote_skills_with_client(client: httpx.Client, ref: str) -> list[str]:
-    entries = _get_contents(client, SKILLS_REPO_SKILLS_PATH, ref)
-    skills = [item["name"] for item in entries if item.get("type") == "dir" and isinstance(item.get("name"), str)]
-    return sorted(skills)
-
-
-def _download_dir(client: httpx.Client, remote_path: str, dest: Path, ref: str) -> None:
-    dest.mkdir(parents=True, exist_ok=True)
-    entries = _get_contents(client, remote_path, ref)
-
-    for item in entries:
-        item_type = item.get("type")
-        item_name = item.get("name")
-        item_path = item.get("path")
-        if not isinstance(item_name, str) or not isinstance(item_path, str):
-            continue
-
-        local_path = dest / item_name
-
-        if item_type == "dir":
-            _download_dir(client, item_path, local_path, ref)
-            continue
-
-        if item_type != "file":
-            continue
-
-        file_url = item.get("url")
-        if not isinstance(file_url, str) or not file_url:
-            raise SkillsDownloadError(f"Missing contents URL for {item_path}")
-
-        file_resp = client.get(file_url)
-        if file_resp.status_code >= 400:
-            raise SkillsDownloadError(f"Failed to download {item_path}: HTTP {file_resp.status_code}")
-
-        file_payload = _read_json_response(file_resp)
-        if not isinstance(file_payload, dict):
-            raise SkillsDownloadError(f"Unexpected payload while downloading {item_path}")
-
-        encoding = file_payload.get("encoding")
-        content = file_payload.get("content")
-        if encoding != "base64" or not isinstance(content, str):
-            raise SkillsDownloadError(f"Missing base64 content for {item_path}")
-
-        try:
-            file_bytes = base64.b64decode(content.replace("\n", ""))
-        except Exception as e:
-            raise SkillsDownloadError(f"Failed to decode file content for {item_path}") from e
-
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(file_bytes)
+    with _downloaded_repo_root(resolved_ref) as repo_root:
+        return _list_skills_from_repo_root(repo_root)
 
 
 def _manifest_path(install_dir: Path) -> Path:
@@ -212,24 +221,42 @@ def install_skills(
     selected_skills: list[str] | None = None,
     ref: str | None = None,
 ) -> dict:
-    """Install selected (or all) skills into install_dir."""
+    """Install selected (or all) skills into install_dir.
+
+    Only skills previously managed by parallel-cli are reconciled. Unmanaged skill
+    directories are left untouched.
+    """
     resolved_ref = ref or get_skills_repo_ref()
 
-    with httpx.Client(timeout=30, follow_redirects=True, headers=_github_headers()) as client:
-        available = _list_remote_skills_with_client(client, resolved_ref)
+    with _downloaded_repo_root(resolved_ref) as repo_root:
+        skills_root = _skills_root(repo_root)
+        available = _list_skills_from_repo_root(repo_root)
         requested = sorted(set(selected_skills or available))
-        missing = sorted([name for name in requested if name not in available])
+        missing = sorted(name for name in requested if name not in available)
         if missing:
-            raise SkillsError(
+            raise SkillsInputError(
                 f"Unknown skills requested: {', '.join(missing)}. Available skills: {', '.join(available)}"
             )
 
+        manifest = _read_manifest(install_dir)
+        managed_raw = manifest.get("installed_skills")
+        previously_managed: list[str] = (
+            [name for name in managed_raw if isinstance(name, str)] if isinstance(managed_raw, list) else []
+        )
+
         install_dir.mkdir(parents=True, exist_ok=True)
+
+        for skill_name in previously_managed:
+            if skill_name not in requested:
+                skill_dir = install_dir / skill_name
+                if skill_dir.exists() and skill_dir.is_dir():
+                    shutil.rmtree(skill_dir)
+
         for skill_name in requested:
             skill_dir = install_dir / skill_name
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
-            _download_dir(client, f"{SKILLS_REPO_SKILLS_PATH}/{skill_name}", skill_dir, resolved_ref)
+            shutil.copytree(skills_root / skill_name, skill_dir)
 
     _write_manifest(install_dir, resolved_ref, requested)
     return {

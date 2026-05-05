@@ -1,10 +1,13 @@
 """Tests for skills helper module."""
 
+import io
 import json
+import zipfile
+from contextlib import contextmanager
 
 import pytest
 
-from parallel_web_tools.core import skills
+import parallel_web_tools.core.skills as skills
 
 
 class TestRepoRef:
@@ -22,15 +25,17 @@ class TestRepoRef:
 
 
 class TestGithubHeaders:
+    def test_uses_expected_github_headers(self, monkeypatch):
+        monkeypatch.delenv(skills.GITHUB_TOKEN_ENV, raising=False)
+        headers = skills._github_headers()
+        assert headers["Accept"] == "application/vnd.github+json"
+        assert headers["X-GitHub-Api-Version"] == "2022-11-28"
+        assert "Authorization" not in headers
+
     def test_uses_gh_token_when_present(self, monkeypatch):
         monkeypatch.setenv(skills.GITHUB_TOKEN_ENV, "ghp_test123")
         headers = skills._github_headers()
         assert headers["Authorization"] == "Bearer ghp_test123"
-
-    def test_omits_auth_header_when_token_missing(self, monkeypatch):
-        monkeypatch.delenv(skills.GITHUB_TOKEN_ENV, raising=False)
-        headers = skills._github_headers()
-        assert "Authorization" not in headers
 
 
 class TestResolveInstallDir:
@@ -58,6 +63,82 @@ class TestResolveInstallDir:
 
         with pytest.raises(skills.SkillsInstallLocationError):
             skills.resolve_install_dir(project=True, start=start)
+
+
+def _make_repo_zip() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("parallel-web-parallel-agent-skills-abc123/skills/parallel-web-search/SKILL.md", "search")
+        zf.writestr("parallel-web-parallel-agent-skills-abc123/skills/parallel-web-extract/SKILL.md", "extract")
+    return buffer.getvalue()
+
+
+class TestArchiveInstall:
+    def test_extract_repo_archive_returns_repo_root(self, tmp_path):
+        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path)
+        assert repo_root.name == "parallel-web-parallel-agent-skills-abc123"
+        assert (repo_root / "skills" / "parallel-web-search" / "SKILL.md").read_text() == "search"
+
+    def test_list_remote_skills_from_archive(self, monkeypatch, tmp_path):
+        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path)
+
+        @contextmanager
+        def fake_downloaded_repo_root(ref: str):
+            assert ref == "feature/test-branch"
+            yield repo_root
+
+        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+        assert skills.list_remote_skills("feature/test-branch") == ["parallel-web-extract", "parallel-web-search"]
+
+    def test_install_skills_from_archive(self, monkeypatch, tmp_path):
+        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path / "archive")
+        install_dir = tmp_path / "install"
+
+        @contextmanager
+        def fake_downloaded_repo_root(ref: str):
+            assert ref == "main"
+            yield repo_root
+
+        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+
+        result = skills.install_skills(install_dir, selected_skills=["parallel-web-search"], ref="main")
+
+        assert result["installed_skills"] == ["parallel-web-search"]
+        assert (install_dir / "parallel-web-search" / "SKILL.md").read_text() == "search"
+        assert not (install_dir / "parallel-web-extract").exists()
+
+    def test_install_subset_removes_previously_managed_skills(self, monkeypatch, tmp_path):
+        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path / "archive")
+        install_dir = tmp_path / "install"
+
+        @contextmanager
+        def fake_downloaded_repo_root(ref: str):
+            yield repo_root
+
+        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+
+        skills.install_skills(install_dir, ref="main")
+        skills.install_skills(install_dir, selected_skills=["parallel-web-search"], ref="main")
+
+        assert (install_dir / "parallel-web-search").exists()
+        assert not (install_dir / "parallel-web-extract").exists()
+
+        result = skills.uninstall_skills(install_dir)
+
+        assert result["removed_skills"] == ["parallel-web-search"]
+        assert not any(path.name.startswith("parallel-web-") for path in install_dir.iterdir())
+
+    def test_install_skills_rejects_unknown_names(self, monkeypatch, tmp_path):
+        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path / "archive")
+
+        @contextmanager
+        def fake_downloaded_repo_root(ref: str):
+            yield repo_root
+
+        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+
+        with pytest.raises(skills.SkillsInputError, match="Unknown skills requested"):
+            skills.install_skills(tmp_path / "install", selected_skills=["does-not-exist"], ref="main")
 
 
 class TestUninstall:
