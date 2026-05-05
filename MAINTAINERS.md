@@ -48,9 +48,6 @@ uv run parallel-cli
 If you want to build the binary for whatever reason:
 
 ```bash
-# If you only need build tooling, this is enough:
-uv sync --extra build
-
 uv run python scripts/build.py
 ```
 
