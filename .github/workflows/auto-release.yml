@@ -59,14 +59,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PRERELEASE_FLAG=""
+          NOTES_START_FLAG=""
           if [[ "${{ needs.check.outputs.is_prerelease }}" == "true" ]]; then
             PRERELEASE_FLAG="--prerelease"
+          else
+            # Span notes from the previous stable release so changes that
+            # landed in intermediate RCs are included in the stable changelog.
+            PREV_STABLE="$(gh release list --exclude-pre-releases --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')"
+            if [[ -n "$PREV_STABLE" ]]; then
+              NOTES_START_FLAG="--notes-start-tag $PREV_STABLE"
+            fi
           fi
 
           gh release create "${{ needs.check.outputs.tag }}" \
             --target "${{ github.sha }}" \
             --title "${{ needs.check.outputs.tag }}" \
             --generate-notes \
+            $NOTES_START_FLAG \
             $PRERELEASE_FLAG
 
       - name: Trigger downstream workflows
