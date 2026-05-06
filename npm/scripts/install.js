@@ -27,21 +27,32 @@ const platform = PLATFORM_MAP[platformKey];
 if (!platform) {
   console.error(
     `Unsupported platform: ${platformKey}\n` +
-    `Supported platforms: ${Object.keys(PLATFORM_MAP).join(", ")}\n\n` +
-    "You can download the binary manually from:\n" +
-    "  https://github.com/parallel-web/parallel-web-tools/releases"
+      `Supported platforms: ${Object.keys(PLATFORM_MAP).join(", ")}\n\n` +
+      "You can download the binary manually from:\n" +
+      "  https://github.com/parallel-web/parallel-web-tools/releases",
   );
   process.exit(1);
 }
 
 const packageJson = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+  fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
 );
 const version = packageJson.version;
 
+function toReleaseTagVersion(npmVersion) {
+  // npm uses semver prereleases (0.3.0-rc.2), but GitHub release tags follow
+  // the Python package version (0.3.0rc2).
+  const match = npmVersion.match(/^(\d+\.\d+\.\d+)-rc\.?([0-9]+)$/);
+  if (match) {
+    return `${match[1]}rc${match[2]}`;
+  }
+  return npmVersion;
+}
+
+const releaseTagVersion = toReleaseTagVersion(version);
 const baseUrl =
   process.env.PARALLEL_CLI_MIRROR ||
-  `https://github.com/parallel-web/parallel-web-tools/releases/download/v${version}`;
+  `https://github.com/parallel-web/parallel-web-tools/releases/download/v${releaseTagVersion}`;
 
 const zipFilename = `parallel-cli-${platform}.zip`;
 const zipUrl = `${baseUrl}/${zipFilename}`;
@@ -69,7 +80,11 @@ function fetch(url) {
 
     const req = get(url, options, (res) => {
       // Follow redirects (GitHub releases redirect to S3)
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      if (
+        res.statusCode >= 300 &&
+        res.statusCode < 400 &&
+        res.headers.location
+      ) {
         return fetch(res.headers.location).then(resolve, reject);
       }
 
@@ -93,7 +108,7 @@ function verifyChecksum(data, expected) {
   const expectedHash = expected.trim().split(/\s+/)[0];
   if (actual !== expectedHash) {
     throw new Error(
-      `Checksum mismatch!\n  Expected: ${expectedHash}\n  Actual:   ${actual}`
+      `Checksum mismatch!\n  Expected: ${expectedHash}\n  Actual:   ${actual}`,
     );
   }
 }
@@ -102,7 +117,7 @@ function extractZip(zipPath, destDir) {
   if (process.platform === "win32") {
     execSync(
       `powershell -Command "Expand-Archive -Force -Path '${zipPath}' -DestinationPath '${destDir}'"`,
-      { stdio: "inherit" }
+      { stdio: "inherit" },
     );
   } else {
     execSync(`unzip -o -q "${zipPath}" -d "${destDir}"`, { stdio: "inherit" });
@@ -156,10 +171,10 @@ async function main() {
 main().catch((err) => {
   console.error(
     `Failed to install parallel-cli: ${err.message}\n\n` +
-    "You can download the binary manually from:\n" +
-    `  ${baseUrl}/${zipFilename}\n\n` +
-    "Then extract it to:\n" +
-    `  ${vendorDir}`
+      "You can download the binary manually from:\n" +
+      `  ${baseUrl}/${zipFilename}\n\n` +
+      "Then extract it to:\n" +
+      `  ${vendorDir}`,
   );
   process.exit(1);
 });
