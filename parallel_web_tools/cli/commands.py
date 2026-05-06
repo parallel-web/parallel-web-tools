@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Any, NoReturn
 
 import click
@@ -138,6 +139,12 @@ EXIT_BAD_INPUT = 2  # Invalid arguments or input data
 EXIT_AUTH_ERROR = 3  # Authentication/authorization failure
 EXIT_API_ERROR = 4  # API call failed
 EXIT_TIMEOUT = 5  # Operation timed out
+EXIT_INTERRUPTED = 130  # SIGINT / Ctrl-C (matches POSIX 128 + signal number)
+
+# Default subdirectory for `research run` / `research poll` auto-saved results.
+# Lives under the user's cwd so files don't leak into $HOME or wherever they
+# happened to invoke the CLI.
+DEFAULT_RESEARCH_OUTPUT_DIR = "parallel-research"
 
 
 # =============================================================================
@@ -184,6 +191,27 @@ def _handle_error(
     else:
         console.print(f"[bold red]{prefix}: {message}[/bold red]")
     sys.exit(exit_code)
+
+
+def _exit_research_interrupted(run_id: str | None) -> NoReturn:
+    """Print a helpful resume hint after Ctrl-C and exit."""
+    if run_id:
+        console.print("\n[bold yellow]Interrupted.[/bold yellow] The task is still running on the server.")
+        console.print(f"[dim]Resume with: parallel-cli research poll {run_id}[/dim]")
+    else:
+        console.print("\n[bold yellow]Interrupted before task creation.[/bold yellow]")
+    sys.exit(EXIT_INTERRUPTED)
+
+
+def _exit_research_timeout(error: TimeoutError, output_json: bool, suggest_poll: bool = True) -> NoReturn:
+    """Format a research timeout for human or JSON output and exit."""
+    if output_json:
+        print(json.dumps({"error": {"message": str(error), "type": "TimeoutError"}}, indent=2))
+    else:
+        console.print(f"[bold yellow]Timeout: {error}[/bold yellow]")
+        if suggest_poll:
+            console.print("[dim]The task is still running. Use 'parallel-cli research poll <run_id>' to resume.[/dim]")
+    sys.exit(EXIT_TIMEOUT)
 
 
 def parse_comma_separated(values: tuple[str, ...]) -> list[str]:
@@ -1709,18 +1737,32 @@ def research():
 )
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
-@click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't poll)")
+@click.option("--no-wait", is_flag=True, help="Return immediately after creating task (don't save or poll)")
 @click.option("--dry-run", is_flag=True, help="Show what would be executed without making API calls")
 @click.option(
     "--text",
     "use_text",
     is_flag=True,
-    help="Use text schema — returns markdown report instead of structured JSON",
+    help="Return a markdown report (text schema) instead of the default structured JSON.",
 )
 @click.option(
-    "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
+    "--text-description",
+    default=None,
+    help="Steering description for --text reports (e.g. 'Keep under 1000 words, focus on M&A')",
 )
-@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+@click.option(
+    "-o",
+    "--output",
+    "output_base",
+    type=click.Path(),
+    default=None,
+    help=(
+        "Output base path; writes {base}.json (and {base}.md with --text). "
+        f"Default: ./{DEFAULT_RESEARCH_OUTPUT_DIR}/<run_id>. Any .json/.md suffix is stripped."
+    ),
+)
+@click.option("--force", is_flag=True, help="Overwrite existing output files")
+@click.option("--json", "output_json", is_flag=True, help="Also print the result as JSON to stdout")
 @click.option(
     "--previous-interaction-id",
     help="Interaction ID from a previous task to reuse as context",
@@ -1734,7 +1776,9 @@ def research_run(
     no_wait: bool,
     dry_run: bool,
     use_text: bool,
-    output_file: str | None,
+    text_description: str | None,
+    output_base: str | None,
+    force: bool,
     output_json: bool,
     previous_interaction_id: str | None,
 ):
@@ -1743,25 +1787,35 @@ def research_run(
     QUERY is the research question (max 15,000 chars). Alternatively, use --input-file
     or pass "-" as QUERY to read from stdin.
 
-    By default the API returns auto schema (structured JSON). Pass --text to get a
-    markdown report instead. Use --previous-interaction-id to continue research from a
-    prior task's context. Use -o to save the result to {name}.json (and {name}.md when
-    content is present).
+    \b
+    Output (when --no-wait is not set):
+      Results are always saved to disk so a long-running task is never lost.
+      Default base path: ./parallel-research/<run_id>. Override with -o NAME
+      (writes NAME.json, plus NAME.md with --text). Existing files are not
+      overwritten unless --force is passed.
 
+    \b
+    Schemas:
+      Default: auto schema (API-chosen structured JSON; deep-research outputs
+      on `pro` tiers and above).
+      --text:  text schema (markdown report with inline citations). Use
+      --text-description to steer length or focus.
+
+    Use --previous-interaction-id to continue research from a prior task.
+
+    \b
     Examples:
-
-        parallel-cli research run "What are the latest developments in quantum computing?"
-
-        parallel-cli research run --text "Market analysis of HVAC industry" -o report
-
-        parallel-cli research run -f question.txt --processor ultra --text -o report
-
-        echo "My research question" | parallel-cli research run - --json
-
-        # Follow-up research using context from a previous task:
-        parallel-cli research run "What are the implications?" --previous-interaction-id trun_abc123
+      parallel-cli research run "What are the latest developments in quantum computing?"
+      parallel-cli research run --text "Market analysis of HVAC industry" -o report
+      parallel-cli research run -f question.txt --processor ultra --text -o report
+      echo "My research question" | parallel-cli research run - --json
+      parallel-cli research run "What are the implications?" \\
+          --previous-interaction-id trun_abc123
     """
     output_schema = "text" if use_text else "auto"
+
+    if text_description and not use_text:
+        raise click.UsageError("--text-description requires --text.")
 
     # Read from stdin if "-" is passed
     if query == "-":
@@ -1779,6 +1833,11 @@ def research_run(
         query = query[:15000]
 
     if dry_run:
+        # Show where files will go using a placeholder run_id so users can see the layout.
+        planned_base = _resolve_research_base_path(output_base, "<run_id>")
+        planned_paths = [f"{planned_base}.json"]
+        if use_text:
+            planned_paths.append(f"{planned_base}.md")
         dry_run_data = {
             "dry_run": True,
             "query": query[:200] + "..." if len(query) > 200 else query,
@@ -1786,6 +1845,8 @@ def research_run(
             "processor": processor,
             "output_schema": output_schema,
             "expected_latency": RESEARCH_PROCESSORS[processor],
+            "output_paths": planned_paths,
+            "force": force,
         }
         if output_json:
             print(json.dumps(dry_run_data, indent=2))
@@ -1796,11 +1857,15 @@ def research_run(
             console.print(f"  [bold]Processor:[/bold] {processor}")
             console.print(f"  [bold]Schema:[/bold]    {output_schema}")
             console.print(f"  [bold]Latency:[/bold]   {RESEARCH_PROCESSORS[processor]}")
+            console.print(f"  [bold]Output:[/bold]    {', '.join(planned_paths)}")
         return
+
+    run_id_for_resume: str | None = None
 
     try:
         if no_wait:
-            # Create task and return immediately
+            # Create task and return immediately. No file is saved because
+            # there is no result yet — use `research poll <run_id>` to fetch.
             if not output_json:
                 console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
             result = create_research_task(
@@ -1809,7 +1874,9 @@ def research_run(
                 source="cli",
                 previous_interaction_id=previous_interaction_id,
                 output_schema=output_schema,
+                text_description=text_description,
             )
+            run_id_for_resume = result.get("run_id")
 
             if not output_json:
                 console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
@@ -1817,20 +1884,28 @@ def research_run(
                     console.print(f"Interaction ID: {result['interaction_id']}")
                 console.print(f"Track progress: {result['result_url']}")
                 console.print("\n[dim]Use 'parallel-cli research status <run_id>' to check status[/dim]")
-                console.print("[dim]Use 'parallel-cli research poll <run_id>' to wait for results[/dim]")
+                console.print("[dim]Use 'parallel-cli research poll <run_id>' to fetch and save results[/dim]")
                 console.print("[dim]Use '--previous-interaction-id' on a new run to continue this research[/dim]")
 
             if output_json:
                 print(json.dumps(result, indent=2))
         else:
-            # Run and wait for results
+            # Show planned output path before the long poll begins so the user can
+            # cancel and re-invoke with -o if they don't want it.
             if not output_json:
                 console.print(f"[bold cyan]Starting deep research with processor: {processor}[/bold cyan]")
-                console.print(f"[dim]This may take {RESEARCH_PROCESSORS[processor]}[/dim]\n")
+                console.print(f"[dim]This may take {RESEARCH_PROCESSORS[processor]}[/dim]")
+                if output_base:
+                    planned_base = _resolve_research_base_path(output_base, "")
+                    console.print(f"[dim]Will save to: {planned_base}.json[/dim]\n")
+                else:
+                    console.print(f"[dim]Will save to: ./{DEFAULT_RESEARCH_OUTPUT_DIR}/<run_id>.json[/dim]\n")
 
             start_time = time.time()
 
             def on_status(status: str, run_id: str):
+                nonlocal run_id_for_resume
+                run_id_for_resume = run_id
                 if output_json:
                     return
                 elapsed = time.time() - start_time
@@ -1853,20 +1928,19 @@ def research_run(
                 source="cli",
                 previous_interaction_id=previous_interaction_id,
                 output_schema=output_schema,
+                text_description=text_description,
             )
 
-            _output_research_result(result, output_file, output_json)
+            _save_and_display_research(result, output_base, output_json, force=force)
 
+    except KeyboardInterrupt:
+        _exit_research_interrupted(run_id_for_resume)
     except TimeoutError as e:
-        if output_json:
-            error_data = {"error": {"message": str(e), "type": "TimeoutError"}}
-            print(json.dumps(error_data, indent=2))
-        else:
-            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
-            console.print("[dim]The task is still running. Use 'parallel-cli research poll <run_id>' to resume.[/dim]")
-        sys.exit(EXIT_TIMEOUT)
+        _exit_research_timeout(e, output_json)
     except RuntimeError as e:
         _handle_error(e, output_json=output_json)
+    except click.ClickException:
+        raise
     except Exception as e:
         _handle_error(e, output_json=output_json)
 
@@ -1912,24 +1986,43 @@ def research_status(run_id: str, output_json: bool):
 @click.option("--timeout", type=int, default=3600, show_default=True, help="Max wait time in seconds")
 @click.option("--poll-interval", type=int, default=45, show_default=True, help="Seconds between status checks")
 @click.option(
-    "-o", "--output", "output_file", type=click.Path(), help="Save results (creates {name}.json and {name}.md)"
+    "-o",
+    "--output",
+    "output_base",
+    type=click.Path(),
+    default=None,
+    help=(
+        "Output base path; writes {base}.json (and {base}.md if the task used text schema). "
+        f"Default: ./{DEFAULT_RESEARCH_OUTPUT_DIR}/<run_id>. Any .json/.md suffix is stripped."
+    ),
 )
-@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+@click.option("--force", is_flag=True, help="Overwrite existing output files")
+@click.option("--json", "output_json", is_flag=True, help="Also print the result as JSON to stdout")
 def research_poll(
     run_id: str,
     timeout: int,
     poll_interval: int,
-    output_file: str | None,
+    output_base: str | None,
+    force: bool,
     output_json: bool,
 ):
-    """Poll an existing research task until completion.
+    """Poll an existing research task until completion and save the result.
 
     RUN_ID is the task identifier (e.g., trun_xxx).
+
+    \b
+    Output:
+      Same as `research run`. Default base path: ./parallel-research/<run_id>.
+      Override with -o NAME (writes NAME.json, plus NAME.md if the task was
+      created with text schema). Existing files are not overwritten unless
+      --force is passed.
     """
     try:
         if not output_json:
             console.print(f"[bold cyan]Polling task: {run_id}[/bold cyan]")
-            console.print(f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]\n")
+            console.print(f"[dim]Track progress: https://platform.parallel.ai/play/deep-research/{run_id}[/dim]")
+            planned_base = _resolve_research_base_path(output_base, run_id)
+            console.print(f"[dim]Will save to: {planned_base}.json (+.md for text schema)[/dim]\n")
 
         start_time = time.time()
 
@@ -1949,17 +2042,16 @@ def research_poll(
             source="cli",
         )
 
-        _output_research_result(result, output_file, output_json)
+        _save_and_display_research(result, output_base, output_json, force=force)
 
+    except KeyboardInterrupt:
+        _exit_research_interrupted(run_id)
     except TimeoutError as e:
-        if output_json:
-            error_data = {"error": {"message": str(e), "type": "TimeoutError"}}
-            print(json.dumps(error_data, indent=2))
-        else:
-            console.print(f"[bold yellow]Timeout: {e}[/bold yellow]")
-        sys.exit(EXIT_TIMEOUT)
+        _exit_research_timeout(e, output_json, suggest_poll=False)
     except RuntimeError as e:
         _handle_error(e, output_json=output_json)
+    except click.ClickException:
+        raise
     except Exception as e:
         _handle_error(e, output_json=output_json)
 
@@ -2083,57 +2175,117 @@ def _content_to_markdown(content: Any, level: int = 1) -> str:
     return str(content)
 
 
-def _output_research_result(
-    result: dict,
-    output_file: str | None,
-    output_json: bool,
-):
-    """Output research result to console and/or files.
+def _resolve_research_base_path(output_base: str | None, run_id: str) -> Path:
+    """Resolve the base path for research output files.
 
-    Always writes {base}.json. When the API returned text-schema output (string
-    `content` in the response), also writes {base}.md and replaces `content`
-    with a `content_file` reference in the JSON.
+    Returns a Path with no .json/.md suffix. If `output_base` is None, defaults
+    to ./parallel-research/{run_id} so results don't pollute cwd.
 
-    `output_file` is a base path. If omitted, defaults to the run_id in cwd.
-    Any extension on the provided path is stripped.
+    If `output_base` looks like a directory (trailing slash, or an existing
+    directory), append <run_id> inside it so `-o outputs/` does the obvious
+    thing instead of writing `outputs.json`. Otherwise treat it as a base
+    filename, only stripping a trailing `.json`/`.md` so `-o report` and
+    `-o report.json` produce the same result. Other suffixes (e.g. `.v2`,
+    `.bak`) are preserved as part of the name.
     """
-    from pathlib import Path
+    if not output_base:
+        return Path(DEFAULT_RESEARCH_OUTPUT_DIR) / run_id
 
+    looks_like_dir = output_base.endswith(("/", os.sep)) or Path(output_base).is_dir()
+    if looks_like_dir:
+        return Path(output_base) / run_id
+
+    base_path = Path(output_base)
+    if base_path.suffix.lower() in {".json", ".md"}:
+        base_path = base_path.with_suffix("")
+    return base_path
+
+
+def _save_and_display_research(
+    result: dict,
+    output_base: str | None,
+    output_json: bool,
+    force: bool = False,
+):
+    """Save the research result to disk and display a summary.
+
+    Always writes {base}.json. Writes {base}.md as well when the task used
+    text schema (a markdown report). Auto-schema results stay JSON-only.
+
+    Without --force, refuses to overwrite existing files. On write failure
+    (e.g. permission denied), falls back to /tmp/{run_id}.{ext} so the result
+    is never lost.
+    """
     output = result.get("output", {})
     run_id = result.get("run_id", "research")
 
-    base_path = Path(output_file) if output_file else Path(run_id)
-    if base_path.suffix:
-        base_path = base_path.with_suffix("")
+    base_path = _resolve_research_base_path(output_base, run_id)
+    # Append rather than `.with_suffix(".json")` so unconventional bases like
+    # `report.v2` are preserved as `report.v2.json` (with_suffix would replace).
+    json_path = base_path.parent / f"{base_path.name}.json"
 
-    json_path = base_path.with_suffix(".json")
+    # The SDK's response carries a `type` discriminator ("text" or "json").
+    # Fall back to the requested `output_schema` we threaded through, then to
+    # a content-shape heuristic for older mocks/poll flows.
+    content = output.get("content") if isinstance(output, dict) else None
+    response_type = output.get("type") if isinstance(output, dict) else None
+    is_text_response = (
+        response_type == "text"
+        or result.get("output_schema") == "text"
+        or (response_type is None and isinstance(content, str) and content != "")
+    )
+    md_path = base_path.parent / f"{base_path.name}.md" if is_text_response else None
+
+    output_payload = output.copy() if isinstance(output, dict) else output
+    if md_path is not None and isinstance(content, str):
+        # Move the markdown body to the .md sibling and reference it from JSON.
+        output_payload["content_file"] = md_path.name
+        output_payload.pop("content", None)
+
     output_data = {
         "run_id": run_id,
         "interaction_id": result.get("interaction_id"),
         "result_url": result.get("result_url"),
         "status": result.get("status"),
-        "output": output.copy() if isinstance(output, dict) else output,
+        "output": output_payload,
     }
 
-    # Text-schema responses have `content` as a string of markdown. Write it
-    # to a sibling .md file and reference it from the JSON. Auto-schema
-    # responses have structured `content` (dict) and stay JSON-only.
-    content = output.get("content") if isinstance(output, dict) else None
-    if isinstance(content, str) and content:
-        md_path = base_path.with_suffix(".md")
-        with open(md_path, "w") as f:
-            f.write(content)
+    targets = [(json_path, "json")] + ([(md_path, "md")] if md_path else [])
+    if not force:
+        existing = [p for p, _ in targets if p.exists()]
+        if existing:
+            lines = []
+            for p, _ in targets:
+                lines.append(f"  {p} {'(exists)' if p.exists() else '(new)'}")
+            raise click.ClickException(
+                "Refusing to overwrite existing output:\n" + "\n".join(lines) + "\nPass --force to overwrite."
+            )
+
+    def _write_outputs(json_target: Path, md_target: Path | None) -> None:
+        if md_target is not None and isinstance(content, str):
+            md_target.parent.mkdir(parents=True, exist_ok=True)
+            md_target.write_text(content)
+            if not output_json:
+                console.print(f"[green]Content saved to:[/green] {md_target}")
+
+        json_target.parent.mkdir(parents=True, exist_ok=True)
+        with open(json_target, "w") as f:
+            json.dump(output_data, f, indent=2, default=str)
         if not output_json:
-            console.print(f"[green]Content saved to:[/green] {md_path}")
+            console.print(f"[green]Metadata saved to:[/green] {json_target}")
 
-        output_data["output"] = output.copy()
-        output_data["output"]["content_file"] = md_path.name
-        output_data["output"].pop("content", None)
-
-    with open(json_path, "w") as f:
-        json.dump(output_data, f, indent=2, default=str)
-    if not output_json:
-        console.print(f"[green]Metadata saved to:[/green] {json_path}")
+    try:
+        _write_outputs(json_path, md_path)
+    except OSError as e:
+        # Fall back to /tmp so a successful (and billed) API call is never lost.
+        tmp_dir = Path(tempfile.gettempdir())
+        fallback_json = tmp_dir / f"{run_id}.json"
+        fallback_md = tmp_dir / f"{run_id}.md" if md_path else None
+        if md_path is not None:
+            output_data["output"]["content_file"] = fallback_md.name if fallback_md else None
+        if not output_json:
+            console.print(f"[yellow]Failed to write to {json_path.parent}: {e}. Falling back to {tmp_dir}.[/yellow]")
+        _write_outputs(fallback_json, fallback_md)
 
     if output_json:
         print(json.dumps(output_data, indent=2, default=str))

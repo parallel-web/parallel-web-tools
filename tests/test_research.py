@@ -19,12 +19,6 @@ from parallel_web_tools.core.research import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_cwd(tmp_path, monkeypatch):
-    """Run every test in a fresh tmp dir so research auto-save doesn't leak into the repo."""
-    monkeypatch.chdir(tmp_path)
-
-
 @pytest.fixture
 def runner():
     """Create a CLI test runner."""
@@ -443,8 +437,6 @@ class TestResearchRunCommand:
 
     def test_research_run_with_wait(self, runner, tmp_path, monkeypatch):
         """Should poll and return results without --no-wait."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_123",
@@ -488,8 +480,6 @@ class TestResearchRunCommand:
 
     def test_research_run_with_previous_interaction_id_wait(self, runner, tmp_path, monkeypatch):
         """Should pass previous_interaction_id to run_research."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_456",
@@ -561,8 +551,6 @@ class TestResearchRunCommand:
 
     def test_research_run_text_flag(self, runner, tmp_path, monkeypatch):
         """Should pass output_schema='text' when --text is used."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_text",
@@ -582,8 +570,6 @@ class TestResearchRunCommand:
 
     def test_research_run_default_auto_schema(self, runner, tmp_path, monkeypatch):
         """Should pass output_schema='auto' by default (no --text)."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_auto",
@@ -683,8 +669,6 @@ class TestResearchPollCommand:
 
     def test_research_poll(self, runner, tmp_path, monkeypatch):
         """Should poll and return results."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
             mock_poll.return_value = {
                 "run_id": "trun_123",
@@ -795,42 +779,157 @@ class TestResearchOutputFile:
             assert json_file.exists()
             assert md_file.exists()
 
-    def test_auto_generate_filename_from_run_id(self, runner, tmp_path, monkeypatch):
-        """Should auto-generate filename from run_id when no -o given."""
-        monkeypatch.chdir(tmp_path)
-
+    def test_default_writes_to_parallel_research_subdir(self, runner, tmp_path, monkeypatch):
+        """Without -o, results go under ./parallel-research/<run_id>.json so cwd stays clean."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_abc",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_abc",
                 "status": "completed",
+                "output_schema": "auto",
                 "output": {"content": {"text": "Result"}},
             }
 
-            # Default (auto schema, no -o)
             result = runner.invoke(main, ["research", "run", "Question?", "--poll-interval", "1"])
 
             assert result.exit_code == 0
-            assert (tmp_path / "trun_abc.json").exists()
-            assert not (tmp_path / "trun_abc.md").exists()
+            # New default: subdirectory, not cwd directly
+            assert (tmp_path / "parallel-research" / "trun_abc.json").exists()
+            assert not (tmp_path / "parallel-research" / "trun_abc.md").exists()
+            # And we don't pollute cwd itself
+            assert not (tmp_path / "trun_abc.json").exists()
 
-    def test_auto_generate_filename_text(self, runner, tmp_path, monkeypatch):
-        """Should auto-generate both files from run_id for --text."""
-        monkeypatch.chdir(tmp_path)
-
+    def test_default_text_writes_both_files_to_subdir(self, runner, tmp_path, monkeypatch):
+        """--text without -o writes both .json and .md under ./parallel-research/."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_xyz",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_xyz",
                 "status": "completed",
+                "output_schema": "text",
                 "output": {"content": "Markdown content here"},
             }
 
             result = runner.invoke(main, ["research", "run", "Question?", "--text", "--poll-interval", "1"])
 
             assert result.exit_code == 0
-            assert (tmp_path / "trun_xyz.json").exists()
-            assert (tmp_path / "trun_xyz.md").exists()
+            assert (tmp_path / "parallel-research" / "trun_xyz.json").exists()
+            assert (tmp_path / "parallel-research" / "trun_xyz.md").exists()
+
+    def test_refuses_overwrite_without_force(self, runner, tmp_path):
+        """Existing output files should error out unless --force is passed."""
+        target = tmp_path / "report.json"
+        target.write_text('{"existing": true}')
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_overwrite",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_overwrite",
+                "status": "completed",
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "-o", str(tmp_path / "report"), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code != 0
+            assert "Refusing to overwrite" in result.output
+            # Existing file untouched
+            assert json.loads(target.read_text()) == {"existing": True}
+
+    def test_force_overwrites(self, runner, tmp_path):
+        """--force should clobber existing files."""
+        target = tmp_path / "report.json"
+        target.write_text('{"existing": true}')
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_overwrite",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_overwrite",
+                "status": "completed",
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "-o", str(tmp_path / "report"), "--force", "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+            assert json.loads(target.read_text())["run_id"] == "trun_overwrite"
+
+    def test_creates_parent_directories(self, runner, tmp_path):
+        """-o pointing into a missing subdirectory should mkdir -p, not crash."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_mkdir",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_mkdir",
+                "status": "completed",
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
+            }
+
+            base = tmp_path / "missing" / "deeply" / "nested" / "report"
+            result = runner.invoke(main, ["research", "run", "Q?", "-o", str(base), "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            assert (tmp_path / "missing" / "deeply" / "nested" / "report.json").exists()
+
+    def test_only_strips_json_md_suffixes(self, runner, tmp_path):
+        """-o report.bak should preserve .bak; we only recognize .json/.md as our own."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_suffix",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_suffix",
+                "status": "completed",
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Q?", "-o", str(tmp_path / "report.bak"), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+            # .bak is preserved as part of the base name; we append .json
+            assert (tmp_path / "report.bak.json").exists()
+            assert not (tmp_path / "report.json").exists()
+
+    def test_strips_json_md_suffixes(self, runner, tmp_path):
+        """-o report.json and -o report should produce the same result."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_strip",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_strip",
+                "status": "completed",
+                "output_schema": "text",
+                "output": {"content": "# Report"},
+            }
+
+            # Passing .json
+            result = runner.invoke(
+                main,
+                [
+                    "research",
+                    "run",
+                    "Q?",
+                    "-o",
+                    str(tmp_path / "report.json"),
+                    "--text",
+                    "--poll-interval",
+                    "1",
+                ],
+            )
+
+            assert result.exit_code == 0
+            # Both files exist — .json stripped from -o, then re-appended
+            assert (tmp_path / "report.json").exists()
+            assert (tmp_path / "report.md").exists()
 
 
 class TestSerializeOutput:
@@ -989,8 +1088,6 @@ class TestResearchOutputExecutiveSummary:
 
     def test_research_run_prints_executive_summary(self, runner, tmp_path, monkeypatch):
         """Should print executive summary when research completes."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_123",
@@ -1010,8 +1107,6 @@ class TestResearchOutputExecutiveSummary:
 
     def test_research_poll_prints_executive_summary(self, runner, tmp_path, monkeypatch):
         """Should print executive summary when polling completes."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
             mock_poll.return_value = {
                 "run_id": "trun_456",
@@ -1030,8 +1125,6 @@ class TestResearchOutputExecutiveSummary:
 
     def test_no_summary_when_content_missing(self, runner, tmp_path, monkeypatch):
         """Should not crash when content is missing."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_789",
@@ -1048,8 +1141,6 @@ class TestResearchOutputExecutiveSummary:
 
     def test_summary_shown_with_auto_schema(self, runner, tmp_path, monkeypatch):
         """Should print summary for auto schema (structured content)."""
-        monkeypatch.chdir(tmp_path)
-
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_json",
