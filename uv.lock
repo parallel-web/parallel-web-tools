@@ -1450,7 +1450,7 @@ wheels = [
 
 [[package]]
 name = "parallel-web-tools"
-version = "0.3.0rc2"
+version = "0.3.0rc3"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
