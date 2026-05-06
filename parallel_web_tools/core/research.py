@@ -9,11 +9,14 @@ and returns analyst-grade intelligence reports.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from parallel_web_tools.core.auth import create_client
 from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
+
+# Output schema types supported for deep research
+OutputSchemaType = Literal["auto", "text"]
 
 # Base URL for viewing results
 PLATFORM_BASE = "https://platform.parallel.ai"
@@ -69,24 +72,51 @@ def _serialize_output(output: Any) -> dict[str, Any]:
     return {"raw": str(output)}
 
 
+def _build_task_spec(output_schema: OutputSchemaType, text_description: str | None = None) -> Any:
+    """Build task_spec kwargs for the SDK based on output schema type.
+
+    Returns None for auto schema (SDK default), or a TaskSpecParam for text.
+    `text_description` steers the markdown report and is only meaningful with
+    output_schema="text".
+    """
+    if output_schema == "text":
+        from parallel.types import TaskSpecParam, TextSchemaParam
+
+        # `type="text"` is the wire-format discriminator (required per the
+        # API's cURL example), even though the Python docs sometimes show it
+        # implicit — TextSchemaParam is a TypedDict and won't fill it in.
+        text_kwargs: dict[str, Any] = {"type": "text"}
+        if text_description:
+            text_kwargs["description"] = text_description
+        return TaskSpecParam(output_schema=TextSchemaParam(**text_kwargs))
+    return None
+
+
 def create_research_task(
     query: str,
     processor: str = "pro-fast",
     api_key: str | None = None,
     source: ClientSource = "python",
     previous_interaction_id: str | None = None,
+    output_schema: OutputSchemaType = "auto",
+    text_description: str | None = None,
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
     Args:
         query: Research question or topic (max 15,000 chars).
-        processor: Processor tier (see RESEARCH_PROCESSORS).
+        processor: Processor tier (see RESEARCH_PROCESSORS). Auto/text schemas
+            yield deep-research-style outputs only on `pro` tiers and above.
         api_key: Optional API key.
         source: Client source identifier for User-Agent.
         previous_interaction_id: Interaction ID from a previous task to reuse as context.
+        output_schema: "auto" (default; API-chosen structured output) or
+            "text" (markdown report with inline citations).
+        text_description: Optional steering description for text-schema reports
+            (e.g. "Keep under 1000 words, focus on M&A activity").
 
     Returns:
-        Dict with run_id, interaction_id, result_url, and other task metadata.
+        Dict with run_id, interaction_id, result_url, output_schema, and other metadata.
     """
     client = create_client(api_key, source)
 
@@ -96,6 +126,9 @@ def create_research_task(
     }
     if previous_interaction_id:
         create_kwargs["previous_interaction_id"] = previous_interaction_id
+    task_spec = _build_task_spec(output_schema, text_description)
+    if task_spec is not None:
+        create_kwargs["task_spec"] = task_spec
 
     task = client.task_run.create(**create_kwargs)
 
@@ -105,6 +138,7 @@ def create_research_task(
         "result_url": f"{PLATFORM_BASE}/play/deep-research/{task.run_id}",
         "processor": processor,
         "status": getattr(task, "status", "pending"),
+        "output_schema": output_schema,
     }
 
 
@@ -171,6 +205,7 @@ def _poll_until_complete(
     poll_interval: int,
     on_status: Callable[[str, str], None] | None,
     interaction_id: str | None = None,
+    output_schema: OutputSchemaType | None = None,
 ) -> dict[str, Any]:
     """Poll a research task until completion and return the result.
 
@@ -182,6 +217,8 @@ def _poll_until_complete(
         poll_interval: Seconds between status checks.
         on_status: Optional callback called with (status, run_id) on each poll.
         interaction_id: Known interaction ID (updated from poll responses).
+        output_schema: Schema the task was created with, included in the result
+            so callers don't need to infer it from response shape.
 
     Returns:
         Dict with content and metadata.
@@ -207,13 +244,19 @@ def _poll_until_complete(
         result = client.task_run.result(run_id=run_id)
         output = result.output if hasattr(result, "output") else {}
         output_data = _serialize_output(output)
-        return {
+        result_dict: dict[str, Any] = {
             "run_id": run_id,
             "interaction_id": poll_state["interaction_id"] or run_id,
             "result_url": result_url,
             "status": "completed",
             "output": output_data,
         }
+        # Note: this `output_schema` is the *requested* schema (caller intent),
+        # not the SDK's `TaskRunJsonOutput.output_schema` (which is server-set
+        # and only present for auto-mode runs).
+        if output_schema is not None:
+            result_dict["output_schema"] = output_schema
+        return result_dict
 
     def format_error(response, status):
         error = getattr(response, "error", None) or f"Task {status}"
@@ -244,6 +287,8 @@ def run_research(
     on_status: Callable[[str, str], None] | None = None,
     source: ClientSource = "python",
     previous_interaction_id: str | None = None,
+    output_schema: OutputSchemaType = "auto",
+    text_description: str | None = None,
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -252,16 +297,20 @@ def run_research(
 
     Args:
         query: Research question or topic (max 15,000 chars).
-        processor: Processor tier (see RESEARCH_PROCESSORS).
+        processor: Processor tier (see RESEARCH_PROCESSORS). Auto/text schemas
+            yield deep-research-style outputs only on `pro` tiers and above.
         api_key: Optional API key.
         timeout: Maximum wait time in seconds (default: 3600 = 1 hour).
         poll_interval: Seconds between status checks (default: 45).
         on_status: Optional callback called with (status, run_id) on each poll.
         source: Client source identifier for User-Agent.
         previous_interaction_id: Interaction ID from a previous task to reuse as context.
+        output_schema: "auto" (default; API-chosen structured output) or
+            "text" (markdown report with inline citations).
+        text_description: Optional steering description for text-schema reports.
 
     Returns:
-        Dict with content and metadata.
+        Dict with content and metadata, including the requested output_schema.
 
     Raises:
         TimeoutError: If the task doesn't complete within timeout.
@@ -275,6 +324,9 @@ def run_research(
     }
     if previous_interaction_id:
         create_kwargs["previous_interaction_id"] = previous_interaction_id
+    task_spec = _build_task_spec(output_schema, text_description)
+    if task_spec is not None:
+        create_kwargs["task_spec"] = task_spec
 
     task = client.task_run.create(**create_kwargs)
     run_id = task.run_id
@@ -285,7 +337,14 @@ def run_research(
         on_status("created", run_id)
 
     return _poll_until_complete(
-        client, run_id, result_url, timeout, poll_interval, on_status, interaction_id=interaction_id
+        client,
+        run_id,
+        result_url,
+        timeout,
+        poll_interval,
+        on_status,
+        interaction_id=interaction_id,
+        output_schema=output_schema,
     )
 
 
@@ -299,7 +358,9 @@ def poll_research(
 ) -> dict[str, Any]:
     """Resume polling an existing research task.
 
-    Use this to reconnect to a task that was created earlier.
+    Use this to reconnect to a task that was created earlier. The original
+    output_schema is not known here (it was fixed at create time); the
+    consumer must infer it from response shape if it cares.
 
     Args:
         run_id: The task run ID to poll.

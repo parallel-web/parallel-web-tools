@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from parallel_web_tools.cli.commands import _extract_executive_summary, main
 from parallel_web_tools.core.research import (
     RESEARCH_PROCESSORS,
+    _build_task_spec,
     _serialize_output,
     create_research_task,
     get_research_result,
@@ -65,6 +66,44 @@ class TestCreateResearchTask:
 
         call_args = mock_parallel_client.task_run.create.call_args
         assert len(call_args.kwargs["input"]) == 15000
+
+    def test_create_task_auto_schema_no_task_spec(self, mock_parallel_client):
+        """Should not pass task_spec for auto schema (default)."""
+        mock_task = mock.MagicMock()
+        mock_task.run_id = "trun_123"
+        mock_parallel_client.task_run.create.return_value = mock_task
+
+        create_research_task("What is AI?", output_schema="auto")
+
+        call_args = mock_parallel_client.task_run.create.call_args
+        assert "task_spec" not in call_args.kwargs
+
+    def test_create_task_text_schema(self, mock_parallel_client):
+        """Should pass task_spec with text schema when output_schema='text'."""
+        mock_task = mock.MagicMock()
+        mock_task.run_id = "trun_123"
+        mock_parallel_client.task_run.create.return_value = mock_task
+
+        create_research_task("What is AI?", output_schema="text")
+
+        call_args = mock_parallel_client.task_run.create.call_args
+        assert "task_spec" in call_args.kwargs
+        task_spec = call_args.kwargs["task_spec"]
+        assert task_spec["output_schema"]["type"] == "text"
+
+
+class TestBuildTaskSpec:
+    """Tests for _build_task_spec helper."""
+
+    def test_auto_returns_none(self):
+        """Should return None for auto schema."""
+        assert _build_task_spec("auto") is None
+
+    def test_text_returns_task_spec(self):
+        """Should return TaskSpecParam with TextSchemaParam for text schema."""
+        result = _build_task_spec("text")
+        assert result is not None
+        assert result["output_schema"]["type"] == "text"
 
 
 class TestGetResearchStatus:
@@ -172,6 +211,52 @@ class TestRunResearch:
             with pytest.raises(RuntimeError, match="failed"):
                 run_research("What is AI?", poll_interval=1)
 
+    def test_run_research_text_schema(self, mock_parallel_client):
+        """Should pass task_spec with text schema to SDK."""
+        mock_task = mock.MagicMock()
+        mock_task.run_id = "trun_text"
+        mock_parallel_client.task_run.create.return_value = mock_task
+
+        mock_status = mock.MagicMock()
+        mock_status.status = "completed"
+        mock_parallel_client.task_run.retrieve.return_value = mock_status
+
+        mock_output = mock.MagicMock()
+        mock_output.model_dump.return_value = {"content": {"text": "Markdown report"}}
+        mock_result = mock.MagicMock()
+        mock_result.output = mock_output
+        mock_parallel_client.task_run.result.return_value = mock_result
+
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
+            result = run_research("What is AI?", poll_interval=1, timeout=10, output_schema="text")
+
+        assert result["status"] == "completed"
+        call_args = mock_parallel_client.task_run.create.call_args
+        assert "task_spec" in call_args.kwargs
+        assert call_args.kwargs["task_spec"]["output_schema"]["type"] == "text"
+
+    def test_run_research_auto_schema_no_task_spec(self, mock_parallel_client):
+        """Should not pass task_spec for auto schema."""
+        mock_task = mock.MagicMock()
+        mock_task.run_id = "trun_auto"
+        mock_parallel_client.task_run.create.return_value = mock_task
+
+        mock_status = mock.MagicMock()
+        mock_status.status = "completed"
+        mock_parallel_client.task_run.retrieve.return_value = mock_status
+
+        mock_output = mock.MagicMock()
+        mock_output.model_dump.return_value = {"content": {"text": "JSON result"}}
+        mock_result = mock.MagicMock()
+        mock_result.output = mock_output
+        mock_parallel_client.task_run.result.return_value = mock_result
+
+        with mock.patch("parallel_web_tools.core.polling.time.sleep"):
+            run_research("What is AI?", poll_interval=1, timeout=10, output_schema="auto")
+
+        call_args = mock_parallel_client.task_run.create.call_args
+        assert "task_spec" not in call_args.kwargs
+
     def test_run_research_on_status_callback(self, mock_parallel_client):
         """Should call on_status callback during polling."""
         mock_task = mock.MagicMock()
@@ -278,6 +363,7 @@ class TestResearchRunCommand:
         assert "--processor" in result.output
         assert "--timeout" in result.output
         assert "--no-wait" in result.output
+        assert "--text" in result.output
         assert "--output" in result.output
 
     def test_research_run_no_query(self, runner):
@@ -349,7 +435,7 @@ class TestResearchRunCommand:
             output = json.loads("\n".join(json_lines))
             assert output["run_id"] == "trun_123"
 
-    def test_research_run_with_wait(self, runner):
+    def test_research_run_with_wait(self, runner, tmp_path, monkeypatch):
         """Should poll and return results without --no-wait."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
@@ -392,7 +478,7 @@ class TestResearchRunCommand:
             call_kwargs = mock_create.call_args
             assert call_kwargs.kwargs.get("previous_interaction_id") == "trun_123"
 
-    def test_research_run_with_previous_interaction_id_wait(self, runner):
+    def test_research_run_with_previous_interaction_id_wait(self, runner, tmp_path, monkeypatch):
         """Should pass previous_interaction_id to run_research."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
@@ -463,6 +549,73 @@ class TestResearchRunCommand:
             output = json.loads("\n".join(json_lines))
             assert output["interaction_id"] == "trun_int_abc"
 
+    def test_research_run_text_flag(self, runner, tmp_path, monkeypatch):
+        """Should pass output_schema='text' when --text is used."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_text",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_text",
+                "status": "completed",
+                "output": {
+                    "content": "# Markdown Report\n\nThis is a markdown report with enough text to be meaningful.\n\n## Section\n\nBody."
+                },
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--text", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            mock_run.assert_called_once()
+            call_kwargs = mock_run.call_args.kwargs
+            assert call_kwargs["output_schema"] == "text"
+
+    def test_research_run_default_auto_schema(self, runner, tmp_path, monkeypatch):
+        """Should pass output_schema='auto' by default (no --text)."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_auto",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_auto",
+                "status": "completed",
+                "output": {"content": {"text": "Structured JSON result"}},
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            call_kwargs = mock_run.call_args.kwargs
+            assert call_kwargs["output_schema"] == "auto"
+
+    def test_research_run_text_no_wait(self, runner):
+        """Should pass output_schema when using --text with --no-wait."""
+        with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
+            mock_create.return_value = {
+                "run_id": "trun_text_nw",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_text_nw",
+                "status": "pending",
+            }
+
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--text", "--no-wait"])
+
+            assert result.exit_code == 0
+            mock_create.assert_called_once()
+            call_kwargs = mock_create.call_args.kwargs
+            assert call_kwargs["output_schema"] == "text"
+
+    def test_research_run_text_in_help(self, runner):
+        """Should show --text flag in help."""
+        result = runner.invoke(main, ["research", "run", "--help"])
+        assert result.exit_code == 0
+        assert "--text" in result.output
+
+    def test_research_run_dry_run_shows_schema(self, runner):
+        """Should show output_schema in dry run output."""
+        result = runner.invoke(main, ["research", "run", "What is AI?", "--dry-run", "--text"])
+        assert result.exit_code == 0
+        assert "text" in result.output
+
+        result = runner.invoke(main, ["research", "run", "What is AI?", "--dry-run"])
+        assert result.exit_code == 0
+        assert "auto" in result.output
+
 
 class TestResearchStatusCommand:
     """Tests for the research status command."""
@@ -514,7 +667,7 @@ class TestResearchPollCommand:
         assert "RUN_ID" in result.output
         assert "--timeout" in result.output
 
-    def test_research_poll(self, runner):
+    def test_research_poll(self, runner, tmp_path, monkeypatch):
         """Should poll and return results."""
         with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
             mock_poll.return_value = {
@@ -545,9 +698,8 @@ class TestResearchProcessorsCommand:
 class TestResearchOutputFile:
     """Tests for saving research results to files."""
 
-    def test_research_save_to_file_with_content(self, runner, tmp_path):
-        """Should save content to separate markdown file."""
-        output_base = tmp_path / "report"
+    def test_default_saves_json_only(self, runner, tmp_path):
+        """Default (auto schema) should save only .json."""
         json_file = tmp_path / "report.json"
         md_file = tmp_path / "report.md"
 
@@ -556,33 +708,57 @@ class TestResearchOutputFile:
                 "run_id": "trun_123",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_123",
                 "status": "completed",
-                "output": {"content": {"text": "# Research findings\n\nThis is the report."}, "basis": []},
+                "output": {"content": {"market_size": "10B"}, "basis": []},
             }
 
             result = runner.invoke(
                 main,
-                ["research", "run", "What is AI?", "-o", str(output_base), "--poll-interval", "1"],
+                ["research", "run", "What is AI?", "-o", str(tmp_path / "report"), "--poll-interval", "1"],
+            )
+
+            assert result.exit_code == 0
+            assert json_file.exists()
+            assert not md_file.exists()
+
+            data = json.loads(json_file.read_text())
+            assert data["run_id"] == "trun_123"
+            assert data["output"]["content"]["market_size"] == "10B"
+
+    def test_text_saves_json_and_md(self, runner, tmp_path):
+        """--text should save both .json (with content_file ref) and .md."""
+        json_file = tmp_path / "report.json"
+        md_file = tmp_path / "report.md"
+
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_text",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_text",
+                "status": "completed",
+                "output": {"content": "# Report\n\nFindings here.", "basis": [{"field": "content"}]},
+            }
+
+            result = runner.invoke(
+                main,
+                ["research", "run", "Question?", "--text", "-o", str(tmp_path / "report"), "--poll-interval", "1"],
             )
 
             assert result.exit_code == 0
 
-            # Check JSON file has output with content_file reference
+            # Both files exist
             assert json_file.exists()
-            data = json.loads(json_file.read_text())
-            assert data["run_id"] == "trun_123"
-            assert data["status"] == "completed"
-            assert "output" in data
-            assert "content" not in data["output"]
-            assert data["output"]["content_file"] == "report.md"
-            assert data["output"]["basis"] == []
-
-            # Check markdown file has content
             assert md_file.exists()
-            assert md_file.read_text() == "# Research findings\n\nThis is the report."
 
-    def test_research_save_to_file_strips_extension(self, runner, tmp_path):
-        """Should strip extension from output path and create both files."""
-        output_with_ext = tmp_path / "report.json"
+            # .md has the content
+            assert md_file.read_text() == "# Report\n\nFindings here."
+
+            # .json references .md and doesn't duplicate content
+            data = json.loads(json_file.read_text())
+            assert data["output"]["content_file"] == "report.md"
+            assert "content" not in data["output"]
+            assert data["output"]["basis"] == [{"field": "content"}]
+
+    def test_output_strips_extension_from_path(self, runner, tmp_path):
+        """-o with extension should still produce correct files."""
         json_file = tmp_path / "report.json"
         md_file = tmp_path / "report.md"
 
@@ -596,114 +772,164 @@ class TestResearchOutputFile:
 
             result = runner.invoke(
                 main,
-                ["research", "run", "Question?", "-o", str(output_with_ext), "--poll-interval", "1"],
+                ["research", "run", "Question?", "--text", "-o", str(md_file), "--poll-interval", "1"],
             )
 
             assert result.exit_code == 0
             assert json_file.exists()
             assert md_file.exists()
 
-    def test_research_save_to_file_string_content(self, runner, tmp_path):
-        """Should handle string content directly."""
-        output_base = tmp_path / "report"
-        json_file = tmp_path / "report.json"
-        md_file = tmp_path / "report.md"
+    def test_default_writes_to_parallel_research_subdir(self, runner, tmp_path, monkeypatch):
+        """Without -o, results go under ./parallel-research/<run_id>.json so cwd stays clean."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_abc",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_abc",
+                "status": "completed",
+                "output_schema": "auto",
+                "output": {"content": {"text": "Result"}},
+            }
+
+            result = runner.invoke(main, ["research", "run", "Question?", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            # New default: subdirectory, not cwd directly
+            assert (tmp_path / "parallel-research" / "trun_abc.json").exists()
+            assert not (tmp_path / "parallel-research" / "trun_abc.md").exists()
+            # And we don't pollute cwd itself
+            assert not (tmp_path / "trun_abc.json").exists()
+
+    def test_default_text_writes_both_files_to_subdir(self, runner, tmp_path, monkeypatch):
+        """--text without -o writes both .json and .md under ./parallel-research/."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_xyz",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_xyz",
+                "status": "completed",
+                "output_schema": "text",
+                "output": {"content": "Markdown content here"},
+            }
+
+            result = runner.invoke(main, ["research", "run", "Question?", "--text", "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            assert (tmp_path / "parallel-research" / "trun_xyz.json").exists()
+            assert (tmp_path / "parallel-research" / "trun_xyz.md").exists()
+
+    def test_refuses_overwrite_without_force(self, runner, tmp_path):
+        """Existing output files should error out unless --force is passed."""
+        target = tmp_path / "report.json"
+        target.write_text('{"existing": true}')
 
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
-                "run_id": "trun_456",
-                "result_url": "https://platform.parallel.ai/play/deep-research/trun_456",
+                "run_id": "trun_overwrite",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_overwrite",
                 "status": "completed",
-                "output": {"content": "Plain string content"},
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
             }
 
             result = runner.invoke(
                 main,
-                ["research", "run", "Question?", "-o", str(output_base), "--poll-interval", "1"],
+                ["research", "run", "Q?", "-o", str(tmp_path / "report"), "--poll-interval", "1"],
             )
 
-            assert result.exit_code == 0
+            assert result.exit_code != 0
+            assert "Refusing to overwrite" in result.output
+            # Existing file untouched
+            assert json.loads(target.read_text()) == {"existing": True}
 
-            # Check markdown file has content
-            assert md_file.exists()
-            assert md_file.read_text() == "Plain string content"
-
-            # Check JSON references markdown file
-            data = json.loads(json_file.read_text())
-            assert data["output"]["content_file"] == "report.md"
-
-    def test_research_save_to_file_no_content(self, runner, tmp_path):
-        """Should handle output without content field."""
-        output_base = tmp_path / "report"
-        json_file = tmp_path / "report.json"
-        md_file = tmp_path / "report.md"
+    def test_force_overwrites(self, runner, tmp_path):
+        """--force should clobber existing files."""
+        target = tmp_path / "report.json"
+        target.write_text('{"existing": true}')
 
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
-                "run_id": "trun_789",
-                "result_url": "https://platform.parallel.ai/play/deep-research/trun_789",
+                "run_id": "trun_overwrite",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_overwrite",
                 "status": "completed",
-                "output": {"other_field": "some value"},
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
             }
 
             result = runner.invoke(
                 main,
-                ["research", "run", "Question?", "-o", str(output_base), "--poll-interval", "1"],
+                ["research", "run", "Q?", "-o", str(tmp_path / "report"), "--force", "--poll-interval", "1"],
             )
 
             assert result.exit_code == 0
+            assert json.loads(target.read_text())["run_id"] == "trun_overwrite"
 
-            # No markdown file should be created
-            assert not md_file.exists()
-
-            # JSON should have original output
-            data = json.loads(json_file.read_text())
-            assert data["output"]["other_field"] == "some value"
-            assert "content_file" not in data["output"]
-
-    def test_research_save_to_file_structured_content(self, runner, tmp_path):
-        """Should convert structured dict content to markdown."""
-        output_base = tmp_path / "report"
-        json_file = tmp_path / "report.json"
-        md_file = tmp_path / "report.md"
-
+    def test_creates_parent_directories(self, runner, tmp_path):
+        """-o pointing into a missing subdirectory should mkdir -p, not crash."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
-                "run_id": "trun_structured",
-                "result_url": "https://platform.parallel.ai/play/deep-research/trun_structured",
+                "run_id": "trun_mkdir",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_mkdir",
                 "status": "completed",
-                "output": {
-                    "content": {
-                        "summary": "This is the summary.",
-                        "key_findings": ["Finding 1", "Finding 2"],
-                        "detailed_analysis": {"section_one": "Details here."},
-                    },
-                    "basis": [],
-                },
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
+            }
+
+            base = tmp_path / "missing" / "deeply" / "nested" / "report"
+            result = runner.invoke(main, ["research", "run", "Q?", "-o", str(base), "--poll-interval", "1"])
+
+            assert result.exit_code == 0
+            assert (tmp_path / "missing" / "deeply" / "nested" / "report.json").exists()
+
+    def test_only_strips_json_md_suffixes(self, runner, tmp_path):
+        """-o report.bak should preserve .bak; we only recognize .json/.md as our own."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_suffix",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_suffix",
+                "status": "completed",
+                "output_schema": "auto",
+                "output": {"content": {"x": 1}},
             }
 
             result = runner.invoke(
                 main,
-                ["research", "run", "Question?", "-o", str(output_base), "--poll-interval", "1"],
+                ["research", "run", "Q?", "-o", str(tmp_path / "report.bak"), "--poll-interval", "1"],
             )
 
             assert result.exit_code == 0
+            # .bak is preserved as part of the base name; we append .json
+            assert (tmp_path / "report.bak.json").exists()
+            assert not (tmp_path / "report.json").exists()
 
-            # Markdown file should be created
-            assert md_file.exists()
-            md_content = md_file.read_text()
+    def test_strips_json_md_suffixes(self, runner, tmp_path):
+        """-o report.json and -o report should produce the same result."""
+        with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
+            mock_run.return_value = {
+                "run_id": "trun_strip",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_strip",
+                "status": "completed",
+                "output_schema": "text",
+                "output": {"content": "# Report"},
+            }
 
-            # Check markdown has sections
-            assert "# Summary" in md_content
-            assert "This is the summary." in md_content
-            assert "# Key Findings" in md_content
-            assert "- Finding 1" in md_content
-            assert "# Detailed Analysis" in md_content
+            # Passing .json
+            result = runner.invoke(
+                main,
+                [
+                    "research",
+                    "run",
+                    "Q?",
+                    "-o",
+                    str(tmp_path / "report.json"),
+                    "--text",
+                    "--poll-interval",
+                    "1",
+                ],
+            )
 
-            # JSON should reference markdown file
-            data = json.loads(json_file.read_text())
-            assert data["output"]["content_file"] == "report.md"
-            assert "content" not in data["output"]
+            assert result.exit_code == 0
+            # Both files exist — .json stripped from -o, then re-appended
+            assert (tmp_path / "report.json").exists()
+            assert (tmp_path / "report.md").exists()
 
 
 class TestSerializeOutput:
@@ -858,9 +1084,9 @@ class TestExtractExecutiveSummary:
 
 
 class TestResearchOutputExecutiveSummary:
-    """Tests that the executive summary is printed to console."""
+    """Tests that the executive summary is always printed to console."""
 
-    def test_research_run_prints_executive_summary(self, runner):
+    def test_research_run_prints_executive_summary(self, runner, tmp_path, monkeypatch):
         """Should print executive summary when research completes."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
@@ -872,14 +1098,14 @@ class TestResearchOutputExecutiveSummary:
                 },
             }
 
-            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1"])
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--text", "--poll-interval", "1"])
 
             assert result.exit_code == 0
             assert "Research Complete" in result.output
             assert "Executive Summary" in result.output
             assert "executive summary of the research" in result.output
 
-    def test_research_poll_prints_executive_summary(self, runner):
+    def test_research_poll_prints_executive_summary(self, runner, tmp_path, monkeypatch):
         """Should print executive summary when polling completes."""
         with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
             mock_poll.return_value = {
@@ -897,7 +1123,7 @@ class TestResearchOutputExecutiveSummary:
             assert "Executive Summary" in result.output
             assert "substantial executive summary" in result.output
 
-    def test_no_summary_when_content_missing(self, runner):
+    def test_no_summary_when_content_missing(self, runner, tmp_path, monkeypatch):
         """Should not crash when content is missing."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
@@ -913,19 +1139,19 @@ class TestResearchOutputExecutiveSummary:
             assert "Research Complete" in result.output
             assert "Executive Summary" not in result.output
 
-    def test_no_summary_for_json_output(self, runner):
-        """Should not print summary panel when --json is used."""
+    def test_summary_shown_with_auto_schema(self, runner, tmp_path, monkeypatch):
+        """Should print summary for auto schema (structured content)."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
                 "run_id": "trun_json",
                 "result_url": "https://platform.parallel.ai/play/deep-research/trun_json",
                 "status": "completed",
                 "output": {
-                    "content": "# Report\n\nThis is a long executive summary for testing.\n\n## Section\n\nBody."
+                    "content": {"summary": "This is a structured summary for testing the executive summary display."}
                 },
             }
 
-            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1", "--json"])
+            result = runner.invoke(main, ["research", "run", "What is AI?", "--poll-interval", "1"])
 
             assert result.exit_code == 0
-            assert "Executive Summary" not in result.output
+            assert "Executive Summary" in result.output

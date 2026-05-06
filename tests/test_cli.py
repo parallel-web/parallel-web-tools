@@ -1848,7 +1848,7 @@ class TestEnrichDeploySnowflake:
 class TestOutputResearchResultJsonPath:
     """Tests for _output_research_result JSON output path."""
 
-    def test_json_output_to_stdout(self, runner):
+    def test_json_output_to_stdout(self, runner, tmp_path, monkeypatch):
         """Should output JSON to stdout via research run --json."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
@@ -2256,7 +2256,7 @@ class TestCleanJsonOutput:
         assert len(output) == 1
         assert output[0]["output"]["ceo"] == "CEO A"
 
-    def test_research_run_json_clean_output(self, runner):
+    def test_research_run_json_clean_output(self, runner, tmp_path, monkeypatch):
         """research run --json should produce clean parseable JSON."""
         with mock.patch("parallel_web_tools.cli.commands.run_research") as mock_run:
             mock_run.return_value = {
@@ -2294,7 +2294,7 @@ class TestCleanJsonOutput:
         output = json.loads(result.output.strip())
         assert output["run_id"] == "trun_nowait"
 
-    def test_research_poll_json_clean_output(self, runner):
+    def test_research_poll_json_clean_output(self, runner, tmp_path, monkeypatch):
         """research poll --json should produce clean parseable JSON."""
         with mock.patch("parallel_web_tools.cli.commands.poll_research") as mock_poll:
             mock_poll.return_value = {
