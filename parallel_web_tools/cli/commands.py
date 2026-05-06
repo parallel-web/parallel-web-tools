@@ -1860,12 +1860,13 @@ def research_run(
             console.print(f"  [bold]Output:[/bold]    {', '.join(planned_paths)}")
         return
 
-    run_id_for_resume: str | None = None
+    # Single-element list captures the run_id from the on_status callback so a
+    # Ctrl-C during the long poll can suggest `parallel-cli research poll
+    # <run_id>`. List-as-box keeps the closure simple — no `nonlocal` needed.
+    run_id_box: list[str] = []
 
     try:
         if no_wait:
-            # Create task and return immediately. No file is saved because
-            # there is no result yet — use `research poll <run_id>` to fetch.
             if not output_json:
                 console.print(f"[dim]Creating research task with processor: {processor}...[/dim]")
             result = create_research_task(
@@ -1876,7 +1877,7 @@ def research_run(
                 output_schema=output_schema,
                 text_description=text_description,
             )
-            run_id_for_resume = result.get("run_id")
+            run_id_box.append(result["run_id"])
 
             if not output_json:
                 console.print(f"\n[bold green]Task created: {result['run_id']}[/bold green]")
@@ -1890,8 +1891,6 @@ def research_run(
             if output_json:
                 print(json.dumps(result, indent=2))
         else:
-            # Show planned output path before the long poll begins so the user can
-            # cancel and re-invoke with -o if they don't want it.
             if not output_json:
                 console.print(f"[bold cyan]Starting deep research with processor: {processor}[/bold cyan]")
                 console.print(f"[dim]This may take {RESEARCH_PROCESSORS[processor]}[/dim]")
@@ -1904,8 +1903,8 @@ def research_run(
             start_time = time.time()
 
             def on_status(status: str, run_id: str):
-                nonlocal run_id_for_resume
-                run_id_for_resume = run_id
+                if not run_id_box:
+                    run_id_box.append(run_id)
                 if output_json:
                     return
                 elapsed = time.time() - start_time
@@ -1934,7 +1933,7 @@ def research_run(
             _save_and_display_research(result, output_base, output_json, force=force)
 
     except KeyboardInterrupt:
-        _exit_research_interrupted(run_id_for_resume)
+        _exit_research_interrupted(run_id_box[0] if run_id_box else None)
     except TimeoutError as e:
         _exit_research_timeout(e, output_json)
     except RuntimeError as e:
