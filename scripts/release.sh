@@ -22,7 +22,7 @@ get_current_version() {
 to_npm_version() {
     local v="$1"
     if [[ "$v" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
-        echo "${BASH_REMATCH[1]}rc.${BASH_REMATCH[2]}"
+        echo "${BASH_REMATCH[1]}-rc.${BASH_REMATCH[2]}"
     else
         echo "$v"
     fi
