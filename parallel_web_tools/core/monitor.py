@@ -1,151 +1,167 @@
 """Monitor: continuously track the web for changes using the Parallel Monitor API.
 
-Monitors let you define natural-language queries that run on a schedule (cadence).
-When changes are detected, events are generated and optionally delivered via webhook.
+Monitors run on a fixed frequency and emit events when material changes are
+detected. Two monitor types are supported:
 
-This module uses httpx directly since the SDK does not yet have high-level
-convenience methods for Monitor endpoints.
+- ``event_stream`` (default): tracks a natural-language search query.
+- ``snapshot``: tracks the output of a specific Task Run.
 
-The typical workflow is:
-    1. Create a monitor with a query and cadence
-    2. Optionally configure a webhook for real-time notifications
-    3. List events to see detected changes
-    4. Update or delete monitors as needed
+Results can be polled via the events endpoint or delivered via webhooks. This
+module wraps the ``client.monitor.*`` SDK resource and returns plain dicts so
+the CLI and other callers don't have to deal with pydantic models.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import httpx
+from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.user_agent import ClientSource
 
-from parallel_web_tools.core.auth import resolve_api_key
-from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
-
-BASE_URL = "https://api.parallel.ai"
-
-# Supported cadences for monitor scheduling
-MONITOR_CADENCES = {
-    "hourly": "Every hour",
-    "daily": "Once per day",
-    "weekly": "Once per week",
-    "every_two_weeks": "Every two weeks",
+# Friendly aliases for SDK frequency strings.
+# The SDK accepts "<n><unit>" with unit in {h, d, w}, range 1h-30d (inclusive).
+MONITOR_FREQUENCY_PRESETS: dict[str, str] = {
+    "hourly": "1h",
+    "daily": "1d",
+    "weekly": "1w",
+    "every_two_weeks": "2w",
 }
 
-# Valid webhook event types
-MONITOR_EVENT_TYPES = [
+MONITOR_TYPES: tuple[str, ...] = ("event_stream", "snapshot")
+MONITOR_PROCESSORS: tuple[str, ...] = ("lite", "base")
+MONITOR_STATUSES: tuple[str, ...] = ("active", "cancelled")
+
+# Webhook event types accepted by the API.
+MONITOR_EVENT_TYPES: list[str] = [
     "monitor.event.detected",
     "monitor.execution.completed",
     "monitor.execution.failed",
 ]
 
 
-def _request(
-    method: str,
-    path: str,
-    api_key: str | None = None,
-    source: ClientSource = "python",
-    json: Any | None = None,
-    params: dict[str, Any] | None = None,
-) -> httpx.Response:
-    """Send an authenticated request to the Monitor API.
-
-    Args:
-        method: HTTP method (GET, POST, DELETE).
-        path: API path (e.g., "/v1alpha/monitors").
-        api_key: Optional API key override.
-        source: Client source identifier for User-Agent.
-        json: Optional JSON body.
-        params: Optional query parameters.
-
-    Returns:
-        The httpx Response object.
-
-    Raises:
-        httpx.HTTPStatusError: If the response indicates an error.
-    """
-    key = resolve_api_key(api_key)
-    headers = {
-        **get_default_headers(source),
-        "x-api-key": key,
-        "Content-Type": "application/json",
-    }
-    url = f"{BASE_URL}{path}"
-
-    response = httpx.request(method, url, headers=headers, json=json, params=params, timeout=30)
-    response.raise_for_status()
-    return response
+def resolve_frequency(value: str) -> str:
+    """Translate a friendly preset (e.g. "daily") to an SDK frequency string ("1d")."""
+    return MONITOR_FREQUENCY_PRESETS.get(value, value)
 
 
-def _build_webhook(webhook_url: str, event_types: list[str] | None = None) -> dict[str, Any]:
-    """Build a webhook config object from a URL."""
-    return {
-        "url": webhook_url,
-        "event_types": event_types or ["monitor.event.detected"],
-    }
+def _build_webhook(url: str, event_types: list[str] | None = None) -> dict[str, Any]:
+    return {"url": url, "event_types": event_types or ["monitor.event.detected"]}
+
+
+def _to_dict(model: Any) -> dict[str, Any]:
+    """Convert an SDK pydantic response to a JSON-safe dict."""
+    if model is None:
+        return {}
+    if hasattr(model, "model_dump"):
+        return model.model_dump(mode="json")
+    if isinstance(model, dict):
+        return model
+    return dict(model)
 
 
 def create_monitor(
-    query: str,
-    cadence: str,
+    query: str | None = None,
+    frequency: str = "1d",
+    *,
+    type: str = "event_stream",
+    task_run_id: str | None = None,
     webhook: str | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: dict[str, str] | None = None,
     output_schema: dict[str, Any] | None = None,
+    include_backfill: bool | None = None,
+    processor: str | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Create a new monitor.
 
     Args:
-        query: Natural language query describing what to track.
-        cadence: How often to check (e.g., "daily", "hourly").
+        query: Search query to monitor (required for ``type="event_stream"``).
+        frequency: How often to run the monitor. Format ``<n><unit>`` where unit is
+            ``h``, ``d``, or ``w`` (e.g. ``1d``, ``12h``, ``2w``). Friendly aliases
+            like ``"daily"`` and ``"hourly"`` are also accepted.
+        type: ``event_stream`` to track a search query, or ``snapshot`` to track a
+            specific Task Run output.
+        task_run_id: Task Run whose output should be tracked (required for
+            ``type="snapshot"``).
         webhook: Optional webhook URL for event delivery.
-        metadata: Optional metadata dict.
-        output_schema: Optional JSON schema for structured output.
+        metadata: Optional metadata dict (max 16 keys, max 512 chars per value).
+        output_schema: Optional JSON schema for structured output (event_stream only).
+        include_backfill: For event_stream monitors, include a sample of historical
+            events on the first run.
+        processor: ``lite`` (default, fast/cheap) or ``base`` (more thorough).
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
 
     Returns:
-        Dict with monitor details including monitor_id.
+        Dict representation of the created Monitor.
     """
-    body: dict[str, Any] = {"query": query, "cadence": cadence}
-    if webhook is not None:
-        body["webhook"] = _build_webhook(webhook)
-    if metadata is not None:
-        body["metadata"] = metadata
-    if output_schema is not None:
-        body["output_schema"] = output_schema
+    client = create_client(api_key, source)
 
-    resp = _request("POST", "/v1alpha/monitors", api_key=api_key, source=source, json=body)
-    return resp.json()
+    settings: dict[str, Any]
+    if type == "event_stream":
+        if not query:
+            raise ValueError("query is required when type='event_stream'")
+        settings = {"query": query}
+        if include_backfill is not None:
+            settings["include_backfill"] = include_backfill
+        if output_schema is not None:
+            settings["output_schema"] = {"type": "json", "json_schema": output_schema}
+    elif type == "snapshot":
+        if not task_run_id:
+            raise ValueError("task_run_id is required when type='snapshot'")
+        settings = {"task_run_id": task_run_id}
+    else:
+        raise ValueError(f"Unsupported monitor type: {type!r}")
+
+    kwargs: dict[str, Any] = {
+        "frequency": resolve_frequency(frequency),
+        "settings": settings,
+        "type": type,
+    }
+    if webhook is not None:
+        kwargs["webhook"] = _build_webhook(webhook)
+    if metadata is not None:
+        kwargs["metadata"] = metadata
+    if processor is not None:
+        kwargs["processor"] = processor
+
+    return _to_dict(client.monitor.create(**kwargs))
 
 
 def list_monitors(
-    monitor_id: str | None = None,
+    cursor: str | None = None,
     limit: int | None = None,
+    *,
+    status: list[str] | None = None,
+    type: list[str] | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
-) -> list[dict[str, Any]]:
-    """List monitors with optional pagination.
+) -> dict[str, Any]:
+    """List monitors with cursor-based pagination.
 
     Args:
-        monitor_id: Cursor for pagination (start after this monitor).
-        limit: Maximum number of monitors to return.
+        cursor: Pagination token from ``next_cursor`` of a previous response.
+        limit: Maximum number of monitors to return (1-10000, default 100).
+        status: Filter by status. Defaults to ``["active"]`` server-side.
+        type: Filter by monitor type.
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
 
     Returns:
-        List of monitor dicts.
+        Dict with ``monitors`` (list) and optional ``next_cursor``.
     """
-    params: dict[str, Any] = {}
-    if monitor_id is not None:
-        params["monitor_id"] = monitor_id
+    client = create_client(api_key, source)
+    kwargs: dict[str, Any] = {}
+    if cursor is not None:
+        kwargs["cursor"] = cursor
     if limit is not None:
-        params["limit"] = limit
-
-    resp = _request("GET", "/v1alpha/monitors", api_key=api_key, source=source, params=params)
-    data = resp.json()
-    return data.get("monitors", data) if isinstance(data, dict) else data
+        kwargs["limit"] = limit
+    if status is not None:
+        kwargs["status"] = status
+    if type is not None:
+        kwargs["type"] = type
+    return _to_dict(client.monitor.list(**kwargs))
 
 
 def get_monitor(
@@ -153,152 +169,121 @@ def get_monitor(
     api_key: str | None = None,
     source: ClientSource = "python",
 ) -> dict[str, Any]:
-    """Retrieve a single monitor by ID.
-
-    Args:
-        monitor_id: The monitor ID.
-        api_key: Optional API key override.
-        source: Client source identifier for User-Agent.
-
-    Returns:
-        Dict with monitor details.
-    """
-    resp = _request("GET", f"/v1alpha/monitors/{monitor_id}", api_key=api_key, source=source)
-    return resp.json()
+    """Retrieve a monitor by ID."""
+    client = create_client(api_key, source)
+    return _to_dict(client.monitor.retrieve(monitor_id))
 
 
 def update_monitor(
     monitor_id: str,
-    query: str | None = None,
-    cadence: str | None = None,
+    *,
+    frequency: str | None = None,
+    metadata: dict[str, str] | None = None,
+    type: str | None = None,
     webhook: str | None = None,
-    metadata: dict[str, Any] | None = None,
+    advanced_settings: dict[str, Any] | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
 ) -> dict[str, Any]:
     """Update an existing monitor.
 
+    Only ``frequency``, ``metadata``, ``webhook``, and (event_stream-only)
+    ``advanced_settings`` can be modified after creation. Query / task_run_id
+    are immutable — create a new monitor to change them.
+
     Args:
-        monitor_id: The monitor ID.
-        query: Updated query text.
-        cadence: Updated cadence.
-        webhook: Updated webhook URL.
-        metadata: Updated metadata dict.
+        monitor_id: The monitor to update.
+        frequency: New frequency (e.g. ``"6h"``, ``"1w"``); aliases accepted.
+        metadata: Replacement metadata dict.
+        type: Required when ``advanced_settings`` is provided; must be ``event_stream``.
+        webhook: Replacement webhook URL.
+        advanced_settings: Advanced configuration overrides for event_stream monitors.
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
 
     Returns:
-        Dict with updated monitor details.
+        Dict representation of the updated Monitor.
     """
-    body: dict[str, Any] = {}
-    if query is not None:
-        body["query"] = query
-    if cadence is not None:
-        body["cadence"] = cadence
-    if webhook is not None:
-        body["webhook"] = _build_webhook(webhook)
+    client = create_client(api_key, source)
+    kwargs: dict[str, Any] = {}
+    if frequency is not None:
+        kwargs["frequency"] = resolve_frequency(frequency)
     if metadata is not None:
-        body["metadata"] = metadata
+        kwargs["metadata"] = metadata
+    if webhook is not None:
+        kwargs["webhook"] = _build_webhook(webhook)
+    if advanced_settings is not None:
+        kwargs["settings"] = {"advanced_settings": advanced_settings}
+        if type is None:
+            type = "event_stream"
+    if type is not None:
+        kwargs["type"] = type
 
-    resp = _request("POST", f"/v1alpha/monitors/{monitor_id}", api_key=api_key, source=source, json=body)
-    return resp.json()
+    if not kwargs:
+        raise ValueError("At least one field must be provided to update_monitor")
+
+    return _to_dict(client.monitor.update(monitor_id, **kwargs))
 
 
-def delete_monitor(
+def cancel_monitor(
     monitor_id: str,
     api_key: str | None = None,
     source: ClientSource = "python",
 ) -> dict[str, Any]:
-    """Delete a monitor.
-
-    Args:
-        monitor_id: The monitor ID.
-        api_key: Optional API key override.
-        source: Client source identifier for User-Agent.
-
-    Returns:
-        Dict with deletion confirmation.
-    """
-    resp = _request("DELETE", f"/v1alpha/monitors/{monitor_id}", api_key=api_key, source=source)
-    if resp.status_code == 204 or not resp.content:
-        return {"monitor_id": monitor_id, "deleted": True}
-    return resp.json()
+    """Cancel a monitor (irreversible). Replaces ``delete_monitor`` from the alpha API."""
+    client = create_client(api_key, source)
+    return _to_dict(client.monitor.cancel(monitor_id))
 
 
 def list_monitor_events(
     monitor_id: str,
-    lookback_period: str = "10d",
+    *,
+    cursor: str | None = None,
+    event_group_id: str | None = None,
+    include_completions: bool = False,
+    limit: int | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
 ) -> dict[str, Any]:
-    """List events for a monitor.
+    """List events for a monitor, newest first.
+
+    Pass ``event_group_id`` to narrow results to a single execution. Pagination
+    parameters are ignored when ``event_group_id`` is set.
 
     Args:
-        monitor_id: The monitor ID.
-        lookback_period: How far back to look (e.g., "10d", "1w"). Minimum 1d.
+        monitor_id: The monitor whose events to fetch.
+        cursor: Pagination token from a previous response.
+        event_group_id: Restrict results to a single execution.
+        include_completions: Include no-change completion events (audit history).
+        limit: Maximum number of events to return (1-100, default 20).
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
 
     Returns:
-        Dict with events list.
+        Dict with ``events`` (list), optional ``next_cursor``, and optional ``warnings``.
     """
-    params = {"lookback_period": lookback_period}
-    resp = _request("GET", f"/v1alpha/monitors/{monitor_id}/events", api_key=api_key, source=source, params=params)
-    return resp.json()
+    client = create_client(api_key, source)
+    kwargs: dict[str, Any] = {}
+    if cursor is not None:
+        kwargs["cursor"] = cursor
+    if event_group_id is not None:
+        kwargs["event_group_id"] = event_group_id
+    if include_completions:
+        kwargs["include_completions"] = True
+    if limit is not None:
+        kwargs["limit"] = limit
+    return _to_dict(client.monitor.events(monitor_id, **kwargs))
 
 
-def get_monitor_event_group(
+def trigger_monitor(
     monitor_id: str,
-    event_group_id: str,
-    api_key: str | None = None,
-    source: ClientSource = "python",
-) -> dict[str, Any]:
-    """Retrieve a specific event group.
-
-    Args:
-        monitor_id: The monitor ID.
-        event_group_id: The event group ID.
-        api_key: Optional API key override.
-        source: Client source identifier for User-Agent.
-
-    Returns:
-        Dict with event group details.
-    """
-    resp = _request(
-        "GET",
-        f"/v1alpha/monitors/{monitor_id}/event_groups/{event_group_id}",
-        api_key=api_key,
-        source=source,
-    )
-    return resp.json()
-
-
-def simulate_monitor_event(
-    monitor_id: str,
-    event_type: str | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
 ) -> None:
-    """Simulate an event for webhook testing.
+    """Trigger an immediate one-off monitor run.
 
-    Requires a webhook to be configured on the monitor.
-
-    Args:
-        monitor_id: The monitor ID.
-        event_type: Optional event type to simulate. Defaults to
-            "monitor.event.detected". Valid values: monitor.event.detected,
-            monitor.execution.completed, monitor.execution.failed.
-        api_key: Optional API key override.
-        source: Client source identifier for User-Agent.
+    The monitor's regular schedule is unaffected. An event is only emitted if
+    a material change is detected. Replaces the alpha ``simulate_event`` flow.
     """
-    params: dict[str, Any] = {}
-    if event_type is not None:
-        params["event_type"] = event_type
-
-    _request(
-        "POST",
-        f"/v1alpha/monitors/{monitor_id}/simulate_event",
-        api_key=api_key,
-        source=source,
-        params=params if params else None,
-    )
+    client = create_client(api_key, source)
+    client.monitor.trigger(monitor_id)

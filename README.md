@@ -97,14 +97,13 @@ parallel-cli
 │   ├── schema              # Get the schema for a FindAll run
 │   └── cancel              # Cancel a running FindAll
 └── monitor                 # Continuous web change tracking
-    ├── create              # Create a new web monitor
-    ├── list                # List all monitors
+    ├── create              # Create a new web monitor (event_stream or snapshot)
+    ├── list                # List monitors (cursor paginated)
     ├── get                 # Get monitor details
-    ├── update              # Update monitor configuration
-    ├── delete              # Delete a monitor
+    ├── update              # Update frequency, webhook, metadata
+    ├── cancel              # Cancel a monitor (irreversible)
     ├── events              # List events for a monitor
-    ├── event-group         # Get event group details
-    └── simulate            # Simulate webhook event for testing
+    └── trigger             # Trigger an immediate one-off run
 ```
 
 ## Quick Start
@@ -260,7 +259,7 @@ parallel-cli enrich suggest "Find CEO" --json
 parallel-cli findall run "AI startups in healthcare" --json
 
 # Monitor: track web changes
-parallel-cli monitor create "Track Tesla SEC filings" --cadence daily --json
+parallel-cli monitor create "Track Tesla SEC filings" --frequency 1d --json
 
 # Plan without prompts (provide all args)
 parallel-cli enrich plan -o config.yaml \
@@ -389,14 +388,14 @@ Track web changes programmatically:
 ```python
 from parallel_web_tools import create_monitor, list_monitors, get_monitor
 
-# Create a monitor
-monitor = create_monitor(query="Track Tesla SEC filings", cadence="daily")
+# Create an event_stream monitor (the default)
+monitor = create_monitor(query="Track Tesla SEC filings", frequency="1d")
 
-# List all monitors
+# List all monitors (cursor paginated)
 monitors = list_monitors()
 
-# Get monitor details and events
-details = get_monitor(monitor.monitor_id)
+# Get monitor details
+details = get_monitor(monitor["monitor_id"])
 ```
 
 ## YAML Configuration Format

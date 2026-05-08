@@ -14,7 +14,7 @@ npm install -g parallel-cli
 parallel-cli --help
 parallel-cli search "your query"
 parallel-cli enrich input.csv --recipe company-info
-parallel-cli monitor watch https://example.com
+parallel-cli monitor create "Track price changes for iPhone 16" --frequency 1d
 ```
 
 ## How it works

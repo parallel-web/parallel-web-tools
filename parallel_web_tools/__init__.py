@@ -9,6 +9,7 @@ from parallel_web_tools.core import (
     ParseError,
     ProcessorType,
     SourceType,
+    cancel_monitor,
     create_monitor,
     enrich_batch,
     enrich_single,
@@ -16,6 +17,9 @@ from parallel_web_tools.core import (
     get_async_client,
     get_auth_status,
     get_client,
+    get_monitor,
+    list_monitor_events,
+    list_monitors,
     load_schema,
     logout,
     parse_input_and_output_models,
@@ -27,6 +31,8 @@ from parallel_web_tools.core import (
     run_findall,
     run_research,
     run_tasks,
+    trigger_monitor,
+    update_monitor,
 )
 
 __version__ = "0.3.0"
@@ -61,7 +67,13 @@ __all__ = [
     # FindAll
     "run_findall",
     # Monitor
+    "cancel_monitor",
     "create_monitor",
+    "get_monitor",
+    "list_monitor_events",
+    "list_monitors",
+    "trigger_monitor",
+    "update_monitor",
     # Research
     "run_research",
 ]
