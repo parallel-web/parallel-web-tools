@@ -29,9 +29,9 @@ class TestResolveApiKey:
         assert result == "test-key-123"
 
     def test_env_var_fallback(self):
-        """Should use PARALLEL_API_KEY env var when no stored credentials."""
+        """Should use PARALLEL_API_KEY env var when no explicit key. Env beats stored creds."""
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "env-key-456"}):
-            with mock.patch("parallel_web_tools.core.credentials.get_selected_api_key", return_value=None):
+            with mock.patch("parallel_web_tools.core.credentials.get_selected_api_key", return_value="stored-key"):
                 result = resolve_api_key()
                 assert result == "env-key-456"
 

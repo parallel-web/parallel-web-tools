@@ -278,6 +278,32 @@ class TestAuthCommand:
                 assert result.exit_code == 0
                 assert "Not authenticated" in result.output or "not" in result.output.lower()
 
+    def test_auth_warns_when_env_var_overrides_stored(self, runner):
+        """When PARALLEL_API_KEY is set AND stored creds exist, the override must be obvious."""
+        status = {
+            "authenticated": True,
+            "method": "environment",
+            "env_var_set": True,
+            "has_stored_credentials": True,
+            "stored_overridden_by_env": True,
+            "token_file": "/tmp/auth.json",
+            "version": 1,
+            "selected_org_id": "org_123",
+            "selected_org_name": "Acme Org",
+            "has_control_api_tokens": True,
+        }
+        with mock.patch("parallel_web_tools.cli.commands.get_auth_status", return_value=status):
+            result = runner.invoke(main, ["auth"])
+
+        assert result.exit_code == 0
+        # Active source labelled.
+        assert "PARALLEL_API_KEY" in result.output
+        # Override is loud.
+        assert "OVERRIDES" in result.output
+        # Stored org is shown so the user knows what's being shadowed.
+        assert "Acme Org" in result.output
+        assert "inactive" in result.output
+
     def test_auth_json_includes_selected_org_name(self, runner):
         """Should include selected org name in JSON output for OAuth auth."""
         status = {
@@ -2628,7 +2654,7 @@ class TestLoginEmailCommand:
                 side_effect=_fake_get_api_key(info),
             ),
             mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
             mock.patch("webbrowser.open") as mock_browser,
         ):
             result = runner.invoke(main, ["login", "email", "u@example.com"])
@@ -2648,7 +2674,7 @@ class TestLoginEmailCommand:
                 side_effect=_fake_get_api_key(info),
             ),
             mock.patch("parallel_web_tools.core.auth.send_magic_link"),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
             mock.patch("webbrowser.open") as mock_browser,
         ):
             result = runner.invoke(main, ["login", "--json", "email", "u@example.com"])
@@ -2674,9 +2700,9 @@ class TestLoginEmailCommand:
                 "parallel_web_tools.core.auth.send_magic_link",
                 side_effect=Exception("SMTP unavailable"),
             ),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
             mock.patch(
-                "parallel_web_tools.core.auth._is_headless",
+                "parallel_web_tools.core.auth.is_headless",
                 return_value=True,  # keep the test hermetic: don't attempt real browser open
             ),
             mock.patch("webbrowser.open") as mock_browser,
@@ -2702,7 +2728,7 @@ class TestLoginEmailCommand:
                 "parallel_web_tools.core.auth.send_magic_link",
                 side_effect=Exception("SMTP unavailable"),
             ),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
         ):
             result = runner.invoke(main, ["login", "--json", "email", "u@example.com"])
 
@@ -2722,7 +2748,7 @@ class TestLoginWithoutEmailUnchanged:
                 side_effect=_fake_get_api_key(info),
             ),
             mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
-            mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False),
+            mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False),
             mock.patch("webbrowser.open") as mock_browser,
         ):
             result = runner.invoke(main, ["login"])
@@ -2743,7 +2769,7 @@ class TestLoginGoogleCommand:
                 side_effect=_fake_get_api_key(info),
             ),
             mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
-            mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False),
+            mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False),
             mock.patch("webbrowser.open") as mock_browser,
         ):
             result = runner.invoke(main, ["login", "google"])
@@ -2766,7 +2792,7 @@ class TestLoginSsoCommand:
                 side_effect=_fake_get_api_key(info),
             ),
             mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
-            mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False),
+            mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False),
             mock.patch("webbrowser.open") as mock_browser,
         ):
             result = runner.invoke(main, ["login", "sso", "u@example.com"])
@@ -2951,7 +2977,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", side_effect=fake_add),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
             mock.patch("parallel_web_tools.cli.commands.time.time", return_value=1_700_000_123.0),
         ):
             result = runner.invoke(main, ["balance", "--json", "add", "100"])
@@ -2967,7 +2993,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
         ):
             result = runner.invoke(main, ["balance", "add", "100"])
 
@@ -2980,12 +3006,12 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id") as mock_ensure,
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id") as mock_ensure,
         ):
             result = runner.invoke(main, ["balance", "add", "100", "--idempotency-key", "fixed-key"])
 
         assert result.exit_code == 0
-        # _ensure_client_id must NOT be called when an explicit key was provided.
+        # ensure_client_id must NOT be called when an explicit key was provided.
         mock_ensure.assert_not_called()
         assert mock_add.call_args.args[2] == "fixed-key"
 
@@ -3002,7 +3028,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", side_effect=capture_key),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
             mock.patch("parallel_web_tools.cli.commands.time.time", side_effect=[1_700_000_100, 1_700_000_399]),
         ):
             assert runner.invoke(main, ["balance", "add", "100"]).exit_code == 0
@@ -3020,7 +3046,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", side_effect=capture_key),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
             mock.patch("parallel_web_tools.cli.commands.time.time", side_effect=[1_700_000_100, 1_700_000_400]),
         ):
             runner.invoke(main, ["balance", "add", "100"])
@@ -3034,7 +3060,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
         ):
             result = runner.invoke(main, ["balance", "add", "0"])
 
@@ -3046,7 +3072,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
         ):
             result = runner.invoke(main, ["balance", "add", "1001"])
 
@@ -3061,7 +3087,7 @@ class TestBalanceAddCommand:
                 "parallel_web_tools.cli.commands.get_control_api_access_token",
                 side_effect=ReauthenticationRequired("not logged in"),
             ),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
         ):
             result = runner.invoke(main, ["balance", "add", "100"])
 
@@ -3074,7 +3100,7 @@ class TestBalanceAddCommand:
         with (
             mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
             mock.patch("parallel_web_tools.core.service.add_balance", side_effect=ServiceApiError("card declined")),
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
         ):
             result = runner.invoke(main, ["balance", "add", "100"])
 

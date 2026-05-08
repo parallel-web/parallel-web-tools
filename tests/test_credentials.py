@@ -66,7 +66,7 @@ class TestLoad:
         creds_file.write_text(json.dumps(["a", "b"]))
         assert load() is None
 
-    def test_load_v0_migrates_forward_to_auth_without_rewriting_legacy_file(self, creds_file, legacy_file):
+    def test_load_v0_migrates_forward_and_removes_legacy_file(self, creds_file, legacy_file):
         legacy_file.parent.mkdir(parents=True, exist_ok=True)
         legacy_file.write_text(json.dumps({"access_token": "tok_v0"}))
 
@@ -82,7 +82,8 @@ class TestLoad:
         assert auth_disk["version"] == CURRENT_VERSION
         assert auth_disk["selected_org_id"] == LEGACY_ORG_ID
         assert auth_disk["orgs"][LEGACY_ORG_ID]["api_key"] == "tok_v0"
-        assert json.loads(legacy_file.read_text()) == {"access_token": "tok_v0"}
+        # The legacy file should have been removed once migration succeeded.
+        assert not legacy_file.exists()
 
     def test_load_v1_roundtrip(self, creds_file):
         original = Credentials(

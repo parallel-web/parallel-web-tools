@@ -153,6 +153,13 @@ def load() -> Credentials | None:
         return None
     creds = _credentials_from_dict(_migrate_v0(legacy_raw))
     save(creds)
+    # Remove the legacy file only after the new one is durably on disk, so a
+    # crash mid-migration leaves the user with the original credentials rather
+    # than nothing.
+    try:
+        LEGACY_CREDENTIALS_FILE.unlink()
+    except OSError:
+        pass
     return creds
 
 

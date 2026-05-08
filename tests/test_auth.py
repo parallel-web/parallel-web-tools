@@ -17,15 +17,15 @@ from parallel_web_tools.core.auth import (
     DeviceCodeInfo,
     ReauthenticationRequired,
     TokenResponse,
-    _build_verification_uri,
     _do_device_flow,
-    _ensure_client_id,
-    _is_headless,
     _persist_token_response,
+    build_verification_uri,
     create_client,
+    ensure_client_id,
     get_api_key,
     get_auth_status,
     get_control_api_access_token,
+    is_headless,
     login_flow,
     logout,
     poll_device_token,
@@ -65,12 +65,12 @@ def no_sleep(monkeypatch):
 
 @pytest.fixture
 def mock_ensure_client_id(monkeypatch):
-    """Stub out _ensure_client_id to avoid real /getServiceKeys/register calls.
+    """Stub out ensure_client_id to avoid real /getServiceKeys/register calls.
 
     Returns the value the stub will produce so tests can assert on it.
     """
     value = "cid_test"
-    monkeypatch.setattr("parallel_web_tools.core.auth._ensure_client_id", lambda: value)
+    monkeypatch.setattr("parallel_web_tools.core.auth.ensure_client_id", lambda: value)
     return value
 
 
@@ -171,17 +171,17 @@ def _token_response(**overrides) -> TokenResponse:
 
 
 # ---------------------------------------------------------------------------
-# _build_verification_uri
+# build_verification_uri
 # ---------------------------------------------------------------------------
 
 
 class TestBuildVerificationUri:
     def test_appends_agent_true(self):
-        url = _build_verification_uri("http://localhost:3000/getServiceKeys/device?user_code=ABCD", None)
+        url = build_verification_uri("http://localhost:3000/getServiceKeys/device?user_code=ABCD", None)
         assert "user_code=ABCD" in url
 
     def test_passes_login_hint_through_url_encoded(self):
-        url = _build_verification_uri(
+        url = build_verification_uri(
             "http://localhost:3000/getServiceKeys/device?user_code=ABCD",
             "login=email,e=user@example.com",
         )
@@ -190,19 +190,19 @@ class TestBuildVerificationUri:
 
     def test_supports_non_email_methods(self):
         # google: no email needed
-        google_url = _build_verification_uri("http://localhost:3000/d", "login=google")
+        google_url = build_verification_uri("http://localhost:3000/d", "login=google")
         assert "login_hint=login%3Dgoogle" in google_url
         # sso: email carried as ,e=…
-        sso_url = _build_verification_uri("http://localhost:3000/d", "login=sso,e=u@example.com")
+        sso_url = build_verification_uri("http://localhost:3000/d", "login=sso,e=u@example.com")
         assert "login_hint=login%3Dsso%2Ce%3Du%40example.com" in sso_url
 
     def test_no_hint_omits_login_hint(self):
-        url = _build_verification_uri("http://localhost:3000/getServiceKeys/device", None)
+        url = build_verification_uri("http://localhost:3000/getServiceKeys/device", None)
         assert "login_hint" not in url
 
 
 # ---------------------------------------------------------------------------
-# register_client / _ensure_client_id
+# register_client / ensure_client_id
 # ---------------------------------------------------------------------------
 
 
@@ -245,12 +245,12 @@ class TestEnsureClientId:
     def test_returns_stored_client_id_without_registering(self, creds_file):
         credentials.save(credentials.Credentials(client_id="cid_stored"))
         with mock.patch("parallel_web_tools.core.auth.register_client") as mock_reg:
-            assert _ensure_client_id() == "cid_stored"
+            assert ensure_client_id() == "cid_stored"
         mock_reg.assert_not_called()
 
     def test_registers_and_persists_when_missing(self, creds_file):
         with mock.patch("parallel_web_tools.core.auth.register_client", return_value="cid_fresh"):
-            assert _ensure_client_id() == "cid_fresh"
+            assert ensure_client_id() == "cid_fresh"
 
         creds = credentials.load()
         assert creds is not None
@@ -260,7 +260,7 @@ class TestEnsureClientId:
         # Simulate a prior registration failure: file exists but client_id is None.
         credentials.save(credentials.Credentials(selected_org_id="x", orgs={"x": credentials.OrgCredentials()}))
         with mock.patch("parallel_web_tools.core.auth.register_client", return_value="cid_new") as mock_reg:
-            assert _ensure_client_id() == "cid_new"
+            assert ensure_client_id() == "cid_new"
         mock_reg.assert_called_once()
 
         creds = credentials.load()
@@ -272,7 +272,7 @@ class TestEnsureClientId:
             "parallel_web_tools.core.auth.register_client",
             side_effect=Exception("server down"),
         ):
-            assert _ensure_client_id() == "parallel-cli"
+            assert ensure_client_id() == "parallel-cli"
 
         # Failure leaves client_id unset so the next call retries.
         creds = credentials.load()
@@ -468,7 +468,7 @@ class TestRevokeToken:
 
 class TestDoDeviceFlow:
     @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
-    @mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False)
+    @mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False)
     def test_opens_browser_when_not_headless(self, _headless, mock_browser_open, no_sleep):
         with _patch_auth_urlopen([DEVICE_RESPONSE, TOKEN_RESPONSE_JSON]):
             resp = _do_device_flow()
@@ -476,14 +476,14 @@ class TestDoDeviceFlow:
         mock_browser_open.assert_called_once()
 
     @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
-    @mock.patch("parallel_web_tools.core.auth._is_headless", return_value=True)
+    @mock.patch("parallel_web_tools.core.auth.is_headless", return_value=True)
     def test_skips_browser_when_headless(self, _headless, mock_browser_open, no_sleep):
         with _patch_auth_urlopen([DEVICE_RESPONSE, TOKEN_RESPONSE_JSON]):
             _do_device_flow()
         mock_browser_open.assert_not_called()
 
     @mock.patch("parallel_web_tools.core.auth.webbrowser.open")
-    @mock.patch("parallel_web_tools.core.auth._is_headless", return_value=False)
+    @mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False)
     def test_opens_browser_with_login_hint(self, _headless, mock_browser_open, no_sleep):
         with _patch_auth_urlopen([DEVICE_RESPONSE, TOKEN_RESPONSE_JSON]):
             _do_device_flow(login_hint="login=email,e=user@example.com")
@@ -645,17 +645,19 @@ class TestLoginFlow:
 
 
 class TestGetApiKey:
-    def test_stored_token_first_priority(self, creds_file, monkeypatch):
+    def test_env_var_first_priority(self, creds_file, monkeypatch):
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
         credentials.set_api_key_for_org("org_a", "stored_key")
-        # Stored credentials must win over the env var.
-        assert get_api_key() == "stored_key"
+        # Env var must win over stored credentials (operator override).
+        assert get_api_key() == "env_key"
 
     def test_env_var_used_when_no_stored_key(self, creds_file, monkeypatch):
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
         assert get_api_key() == "env_key"
 
-    def test_service_api_mint_beats_env_var_when_auth_json_exists(self, creds_file, monkeypatch):
+    def test_env_var_short_circuits_service_api_mint(self, creds_file, monkeypatch):
+        # When the env var is set, control-API minting must NOT be triggered;
+        # the env var is authoritative and the mint path is unnecessary work.
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
         credentials.save(
             credentials.Credentials(
@@ -665,20 +667,13 @@ class TestGetApiKey:
         )
 
         with (
-            mock.patch(
-                "parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_existing"
-            ) as mock_at,
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_existing") as mock_client_id,
-            mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "cid_existing-2026-04-23-1212"),
-            ) as mock_provision,
+            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token") as mock_at,
+            mock.patch("parallel_web_tools.core.auth.service.provision_cli_api_key") as mock_provision,
         ):
-            assert get_api_key() == "sk_minted"
+            assert get_api_key() == "env_key"
 
-        mock_at.assert_called_once_with()
-        mock_client_id.assert_called_once_with()
-        mock_provision.assert_called_once_with("at_existing", client_id="cid_existing")
+        mock_at.assert_not_called()
+        mock_provision.assert_not_called()
 
     def test_stored_only_without_env(self, creds_file, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
@@ -705,7 +700,7 @@ class TestGetApiKey:
             mock.patch(
                 "parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_existing"
             ) as mock_at,
-            mock.patch("parallel_web_tools.core.auth._ensure_client_id", return_value="cid_existing") as mock_client_id,
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_existing") as mock_client_id,
             mock.patch(
                 "parallel_web_tools.core.auth.service.provision_cli_api_key",
                 return_value=("sk_minted", "cid_existing-2026-04-23-1212"),
@@ -736,7 +731,9 @@ class TestGetApiKey:
 
         assert mock_login.call_args.kwargs.get("login_hint") == "user@example.com"
 
-    def test_falls_back_to_env_when_service_api_path_cannot_mint(self, creds_file, monkeypatch):
+    def test_env_var_returned_without_touching_control_api(self, creds_file, monkeypatch):
+        # With the new env-first priority, control-API state is irrelevant
+        # when PARALLEL_API_KEY is set: no reauth check, no login flow.
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
         credentials.save(
             credentials.Credentials(
@@ -746,14 +743,12 @@ class TestGetApiKey:
         )
 
         with (
-            mock.patch(
-                "parallel_web_tools.core.auth.get_control_api_access_token",
-                side_effect=ReauthenticationRequired("not logged in; run 'parallel-cli login'"),
-            ),
+            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token") as mock_at,
             mock.patch("parallel_web_tools.core.auth.login_flow") as mock_login,
         ):
             assert get_api_key() == "env_key"
 
+        mock_at.assert_not_called()
         mock_login.assert_not_called()
 
 
@@ -769,7 +764,7 @@ class TestAuthStatus:
         assert status["authenticated"] is True
         assert status["method"] == "environment"
 
-    def test_stored_beats_env_var_in_status(self, creds_file, monkeypatch):
+    def test_env_var_overrides_stored_in_status(self, creds_file, monkeypatch):
         credentials.save(
             credentials.Credentials(
                 selected_org_id="org_a",
@@ -779,7 +774,11 @@ class TestAuthStatus:
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
         status = get_auth_status()
         assert status["authenticated"] is True
-        assert status["method"] == "oauth"  # stored credentials win
+        # Env var wins; stored creds are reported but flagged as overridden.
+        assert status["method"] == "environment"
+        assert status["env_var_set"] is True
+        assert status["has_stored_credentials"] is True
+        assert status["stored_overridden_by_env"] is True
         assert status["selected_org_name"] == "Acme Org"
 
     def test_status_with_stored_token(self, creds_file, legacy_file, monkeypatch):
@@ -815,7 +814,7 @@ class TestLogout:
             mock_revoke.assert_not_called()
             assert not legacy_file.exists()
 
-    def test_login_flow_writes_structured_auth_without_touching_legacy_file(
+    def test_login_flow_writes_structured_auth_and_removes_legacy_file(
         self, creds_file, legacy_file, mock_ensure_client_id
     ):
         legacy_file.write_text(json.dumps({"access_token": "legacy_key"}))
@@ -831,10 +830,10 @@ class TestLogout:
             login_flow()
 
         auth_disk = json.loads(creds_file.read_text())
-        legacy_disk = json.loads(legacy_file.read_text())
         assert auth_disk["version"] == 1
         assert auth_disk["selected_org_id"] == "org_real"
-        assert legacy_disk == {"access_token": "legacy_key"}
+        # Migration removes the legacy file once auth.json is durably written.
+        assert not legacy_file.exists()
 
     def test_logout_revokes_refresh_token_when_present(self, creds_file):
         credentials.save(
@@ -969,45 +968,45 @@ class TestResolveApiKey:
         assert resolve_api_key() == "stored-token"
         assert creds_file.exists()
 
-    def test_stored_beats_env_var(self, creds_file, monkeypatch):
+    def test_env_var_beats_stored(self, creds_file, monkeypatch):
         credentials.set_api_key_for_org("org_a", "stored-key")
         monkeypatch.setenv("PARALLEL_API_KEY", "env-key")
-        assert resolve_api_key() == "stored-key"
+        assert resolve_api_key() == "env-key"
 
 
 # ---------------------------------------------------------------------------
-# _is_headless
+# is_headless
 # ---------------------------------------------------------------------------
 
 
 class TestIsHeadless:
     def test_ssh_client_detected(self):
         with mock.patch.dict(os.environ, {"SSH_CLIENT": "1.2.3.4 54321 22"}):
-            assert _is_headless() is True
+            assert is_headless() is True
 
     def test_ssh_tty_detected(self):
         with mock.patch.dict(os.environ, {"SSH_TTY": "/dev/pts/0"}):
-            assert _is_headless() is True
+            assert is_headless() is True
 
     def test_ci_detected(self):
         with mock.patch.dict(os.environ, {"CI": "true"}):
-            assert _is_headless() is True
+            assert is_headless() is True
 
     def test_docker_detected(self):
         with mock.patch("os.path.exists", return_value=True):
-            assert _is_headless() is True
+            assert is_headless() is True
 
     def test_container_env_detected(self):
         with mock.patch.dict(os.environ, {"container": "podman"}):
             with mock.patch("os.path.exists", return_value=False):
-                assert _is_headless() is True
+                assert is_headless() is True
 
     def test_normal_env_not_headless(self):
         env = {k: v for k, v in os.environ.items() if k not in ("SSH_CLIENT", "SSH_TTY", "CI", "container")}
         env["DISPLAY"] = ":0"
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch("os.path.exists", return_value=False):
-                assert _is_headless() is False
+                assert is_headless() is False
 
 
 # ---------------------------------------------------------------------------

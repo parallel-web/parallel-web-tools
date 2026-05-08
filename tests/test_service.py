@@ -318,20 +318,20 @@ class TestAddBalance:
     def test_posts_expected_body_and_parses_response(self):
         captured: dict = {}
         with _patch_urlopen(_balance_response(credit_balance_cents=1600), capture=captured):
-            resp = add_balance("at_xyz", amount_cents=100, idempotency_key="key_123")
+            resp = add_balance("at_xyz", amount_cents=100, idempotency_key="key_1234")
 
         assert captured["method"] == "POST"
         assert captured["url"].endswith("/service/v1/balance/add")
-        assert json.loads(captured["body"]) == {"amount_cents": 100, "idempotency_key": "key_123"}
+        assert json.loads(captured["body"]) == {"amount_cents": 100, "idempotency_key": "key_1234"}
         assert any(v == "Bearer at_xyz" for v in captured["headers"].values())
         assert resp.credit_balance_cents == 1600
 
     def test_raises_on_http_error(self):
         with _patch_urlopen(_http_error(402, {"error": "card_declined"})):
             with pytest.raises(ServiceApiError, match="failed: 402"):
-                add_balance("at_xyz", amount_cents=100, idempotency_key="k")
+                add_balance("at_xyz", amount_cents=100, idempotency_key="test-key-1")
 
     def test_raises_on_malformed_response(self):
         with _patch_urlopen({"credit_balance_cents": 10}):
             with pytest.raises(ServiceApiError, match="Unexpected /service/v1/balance/add response"):
-                add_balance("at_xyz", amount_cents=100, idempotency_key="k")
+                add_balance("at_xyz", amount_cents=100, idempotency_key="test-key-2")

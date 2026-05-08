@@ -68,7 +68,7 @@ def _parallel_enrich_partition(
             valid_indices.append(i)
 
     if not valid_items:
-        return pd.Series([None] * len(items), dtype=object)
+        return pd.Series([None] * len(items))
 
     # Process valid items in chunks of _MAX_CHUNK_SIZE via enrich_batch
     all_results: list[dict] = []
@@ -100,7 +100,7 @@ def _parallel_enrich_partition(
     for i, result in zip(valid_indices, json_results, strict=True):
         output[i] = result
 
-    return pd.Series(output, dtype=object)
+    return pd.Series(output)
 
 
 def create_parallel_enrich_udf(

@@ -484,22 +484,42 @@ def auth(output_json: bool):
         print(json.dumps(status, indent=2))
         return
 
-    if status["authenticated"]:
-        if status["method"] == "environment":
-            console.print("[green]Authenticated via PARALLEL_API_KEY environment variable[/green]")
-        else:
-            console.print("[green]Authenticated via OAuth[/green]")
-            console.print(f"  Credentials: {status['token_file']}")
-            if status.get("selected_org_name"):
-                console.print(f"  Organization: {status['selected_org_name']} ({status['selected_org_id']})")
-            elif status.get("selected_org_id"):
-                console.print(f"  Organization ID: {status['selected_org_id']}")
-    else:
+    if not status["authenticated"]:
         console.print("[yellow]Not authenticated[/yellow]")
         console.print("\n[cyan]To get started:[/cyan]")
         console.print("  1. Create an account at [link=https://parallel.ai]parallel.ai[/link]")
         console.print("  2. Run: parallel-cli login")
         console.print("  Or set PARALLEL_API_KEY environment variable")
+        return
+
+    # Active source — whichever resolve_api_key would return — comes first.
+    if status["method"] == "environment":
+        console.print("[green]Active: PARALLEL_API_KEY environment variable[/green]")
+        console.print("  [dim]This key is used for all API calls.[/dim]")
+    else:
+        console.print("[green]Active: stored credentials (OAuth)[/green]")
+        console.print(f"  Credentials: {status['token_file']}")
+        if status.get("selected_org_name"):
+            console.print(f"  Organization: {status['selected_org_name']} ({status['selected_org_id']})")
+        elif status.get("selected_org_id"):
+            console.print(f"  Organization ID: {status['selected_org_id']}")
+
+    # If the env var is overriding stored creds, make that loud and impossible to miss.
+    if status.get("stored_overridden_by_env"):
+        console.print()
+        console.print("[bold yellow]⚠  PARALLEL_API_KEY is set and OVERRIDES your stored login.[/bold yellow]")
+        console.print(f"  Stored credentials: {status['token_file']}")
+        if status.get("selected_org_name"):
+            console.print(
+                f"  Stored organization: {status['selected_org_name']} ({status['selected_org_id']}) "
+                "[dim](inactive)[/dim]"
+            )
+        elif status.get("selected_org_id"):
+            console.print(f"  Stored organization ID: {status['selected_org_id']} [dim](inactive)[/dim]")
+        console.print("  [dim]Unset PARALLEL_API_KEY to use the stored login instead (`unset PARALLEL_API_KEY`).[/dim]")
+    elif status["method"] == "environment" and not status.get("has_stored_credentials"):
+        # Env var set, no stored creds — informational only.
+        console.print("  [dim]No stored credentials. Run `parallel-cli login` to add an OAuth login.[/dim]")
 
 
 def _build_login_hint(login_method: str | None, email: str | None) -> str | None:
@@ -552,15 +572,16 @@ def _run_login(output_json: bool, email: str | None, login_method: str | None) -
                             magic-link failure.
     - ``"google"``        → append ``login_hint=login=google`` to the URL
                             and open the browser.
-    - ``"sso"``           → append ``login_hint=login=sso,e=<email>`` to the
-                            URL and open the browser.
+    - ``"sso"``           → append ``login_hint=login=sso&email=<email>`` to
+                            the URL (two separate query params) and open
+                            the browser.
     """
     import webbrowser
 
     from parallel_web_tools.core.auth import (
-        _build_verification_uri,
-        _ensure_client_id,
-        _is_headless,
+        build_verification_uri,
+        ensure_client_id,
+        is_headless,
         send_magic_link,
     )
 
@@ -575,12 +596,12 @@ def _run_login(output_json: bool, email: str | None, login_method: str | None) -
         magic_link_error: str | None = None
         if login_method == "email" and email:
             try:
-                send_magic_link(client_id=_ensure_client_id(), email=email, user_code=info.user_code)
+                send_magic_link(client_id=ensure_client_id(), email=email, user_code=info.user_code)
                 magic_link_sent = True
             except Exception as e:
                 magic_link_error = str(e)
 
-        enriched_uri = _build_verification_uri(info.verification_uri_complete, login_hint, extra_params=extra_params)
+        enriched_uri = build_verification_uri(info.verification_uri_complete, login_hint, extra_params=extra_params)
 
         if output_json:
             payload = {
@@ -623,7 +644,7 @@ def _run_login(output_json: bool, email: str | None, login_method: str | None) -
 
         # Providing an on_device_code callback suppresses auth.py's default
         # browser-launch branch, so open it here for interactive CLI use.
-        if not _is_headless():
+        if not is_headless():
             try:
                 webbrowser.open(enriched_uri)
             except Exception:
@@ -691,9 +712,10 @@ def login_google(ctx: click.Context):
 def login_sso(ctx: click.Context, user_email: str):
     """Authenticate via enterprise SSO for USER_EMAIL.
 
-    Opens the browser on a verification URL that hints ``login=sso,e=<email>``
-    so the landing page resolves the right SSO tenant for the email domain
-    and pre-fills the address.
+    Opens the browser on a verification URL with ``login_hint=login=sso``
+    plus a separate ``email=<email>`` query param so the landing page
+    resolves the right SSO tenant for the email domain and pre-fills
+    the address.
     """
     output_json = ctx.obj.get("output_json", False) if ctx.obj else False
     _run_login(output_json=output_json, email=user_email, login_method="sso")
@@ -725,9 +747,9 @@ def _derive_idempotency_key(amount_cents: int) -> str:
     300 seconds. Identical repeat requests inside the same 5-minute window
     reuse the same key, so Stripe's idempotency dedupes them server-side.
     """
-    from parallel_web_tools.core.auth import _ensure_client_id
+    from parallel_web_tools.core.auth import ensure_client_id
 
-    client_id = _ensure_client_id()
+    client_id = ensure_client_id()
     five_min_bucket = int(time.time() // 300) * 300
     return f"{client_id}-{amount_cents}-{five_min_bucket}"
 

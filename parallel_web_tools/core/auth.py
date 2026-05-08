@@ -89,7 +89,7 @@ def _platform_path(path: str) -> str:
     return f"{get_platform_url()}{path}"
 
 
-def _is_headless() -> bool:
+def is_headless() -> bool:
     """Detect if the environment cannot open a browser."""
     if os.environ.get("SSH_CLIENT") or os.environ.get("SSH_TTY"):
         return True
@@ -212,7 +212,7 @@ def send_magic_link(client_id: str, email: str, user_code: str, email_type: str 
         raise Exception(f"Magic link send failed: {e.code} - {err_body}") from e
 
 
-def _ensure_client_id() -> str:
+def ensure_client_id() -> str:
     """Return a registered ``client_id``, registering if none is stored yet.
 
     - If the credentials file already has a ``client_id``, returns it.
@@ -254,7 +254,7 @@ def _reregister_client_id() -> str:
     return client_id
 
 
-def _build_verification_uri(
+def build_verification_uri(
     base: str,
     login_hint: str | None,
     extra_params: dict[str, str] | None = None,
@@ -419,7 +419,7 @@ def _do_device_flow(
         else:
             raise
 
-    enriched_uri = _build_verification_uri(info.verification_uri_complete, login_hint)
+    enriched_uri = build_verification_uri(info.verification_uri_complete, login_hint)
 
     if on_device_code:
         on_device_code(info)
@@ -429,7 +429,7 @@ def _do_device_flow(
         print(f"Or open: {enriched_uri}\n", file=sys.stderr)
         print(f"Waiting for authorization (expires in {info.expires_in // 60} minutes)...", file=sys.stderr)
 
-        if not _is_headless():
+        if not is_headless():
             try:
                 webbrowser.open(enriched_uri)
             except Exception:
@@ -496,7 +496,7 @@ def get_control_api_access_token() -> str:
     if tokens.refresh_token_expires_at is not None and now >= tokens.refresh_token_expires_at:
         raise ReauthenticationRequired("refresh token has expired; run 'parallel-cli login'")
 
-    new_tokens = refresh_access_token(refresh_token_value, client_id=_ensure_client_id())
+    new_tokens = refresh_access_token(refresh_token_value, client_id=ensure_client_id())
     _persist_token_response(new_tokens)
     return new_tokens.access_token
 
@@ -508,9 +508,9 @@ def login_flow(
     """Run the full CLI login: register client → device flow → persist tokens → auto-mint data API key.
 
     ``login_hint`` is forwarded to the device flow's URL enrichment (see
-    :func:`_build_verification_uri`). Returns the newly-minted data API key.
+    :func:`build_verification_uri`). Returns the newly-minted data API key.
     """
-    client_id = _ensure_client_id()
+    client_id = ensure_client_id()
     token_resp = _do_device_flow(login_hint=login_hint, on_device_code=on_device_code, client_id=client_id)
     _persist_token_response(token_resp)
 
@@ -533,22 +533,25 @@ def login_flow(
 
 
 def resolve_api_key(api_key: str | None = None) -> str:
-    """Resolve API key from parameter, stored credentials, or environment.
+    """Resolve API key from parameter, environment, or stored credentials.
 
-    Priority: explicit ``api_key`` argument → stored credentials → ``PARALLEL_API_KEY``.
+    Priority: explicit ``api_key`` argument → ``PARALLEL_API_KEY`` env var →
+    stored credentials. Env beats stored creds so operators can override a
+    developer's local ``parallel-cli login`` session by exporting the env var
+    (matches the convention used by AWS, GCP, Anthropic, Stripe SDKs).
     Raises ``ValueError`` if no key is available.
     """
     if api_key:
         return api_key
-    stored = credentials.get_selected_api_key()
-    if stored:
-        return stored
     env_key = os.environ.get("PARALLEL_API_KEY")
     if env_key:
         return env_key
+    stored = credentials.get_selected_api_key()
+    if stored:
+        return stored
     raise ValueError(
-        "Parallel API key required. Run 'parallel-cli login', set the "
-        "PARALLEL_API_KEY environment variable, or pass api_key explicitly."
+        "Parallel API key required. Set the PARALLEL_API_KEY environment "
+        "variable, run 'parallel-cli login', or pass api_key explicitly."
     )
 
 
@@ -559,23 +562,28 @@ def get_api_key(
 ) -> str:
     """Get API key, triggering device-flow login + auto-mint as a fallback.
 
-    Priority (when not ``force_login``): stored credentials → service-API key
-    provisioning from stored control-API tokens → ``PARALLEL_API_KEY``.
+    Priority (when not ``force_login``): ``PARALLEL_API_KEY`` env var → stored
+    credentials → service-API key provisioning from stored control-API tokens
+    → interactive device flow.
 
     ``login_hint`` is forwarded to :func:`login_flow` — see
-    :func:`_build_verification_uri` for the supported hint format.
+    :func:`build_verification_uri` for the supported hint format.
     """
     if not force_login:
+        env_key = os.environ.get("PARALLEL_API_KEY")
+        if env_key:
+            return env_key
+
         stored = credentials.get_selected_api_key()
         if stored:
             return stored
 
         # If we still have valid control-API auth but no data API key saved,
         # mint a new data key via service API before forcing an interactive
-        # device-authorization flow or falling back to the environment.
+        # device-authorization flow.
         try:
             access_token = get_control_api_access_token()
-            client_id = _ensure_client_id()
+            client_id = ensure_client_id()
             minted_api_key, _ = service.provision_cli_api_key(access_token, client_id=client_id)
             creds = credentials.load()
             if creds is not None:
@@ -588,10 +596,6 @@ def get_api_key(
             pass
         except service.ServiceApiError:
             pass
-
-        env_key = os.environ.get("PARALLEL_API_KEY")
-        if env_key:
-            return env_key
 
     if not on_device_code:
         print("Starting device authorization...", file=sys.stderr)
@@ -648,26 +652,56 @@ def logout() -> bool:
 def get_auth_status() -> dict:
     """Get current authentication status.
 
-    Priority matches :func:`resolve_api_key`: stored credentials beat the
-    ``PARALLEL_API_KEY`` env var.
+    Reports BOTH sources independently so callers can show that ``PARALLEL_API_KEY``
+    is overriding a stored login. ``method`` names the source that
+    :func:`resolve_api_key` would actually return — env beats stored creds.
+
+    Returned fields:
+
+    - ``authenticated``: at least one source has a key.
+    - ``method``: ``"environment"`` | ``"oauth"`` | ``None`` — which source wins.
+    - ``env_var_set``: whether ``PARALLEL_API_KEY`` is set (regardless of winner).
+    - ``has_stored_credentials``: whether ``auth.json`` has a usable key.
+    - ``stored_overridden_by_env``: True when the env var is set AND stored creds
+      exist; the stored creds will not be used until the env var is unset.
+    - ``token_file`` / ``version`` / ``selected_org_id`` / ``selected_org_name``
+      / ``has_control_api_tokens``: stored-credential metadata when present.
     """
+    env_key = os.environ.get("PARALLEL_API_KEY")
+    env_var_set = bool(env_key)
+
     creds = credentials.load()
-    if creds is not None:
-        org = creds.selected_org()
-        if org and org.api_key:
-            token_file = credentials.get_active_credentials_file() or credentials.CREDENTIALS_FILE
-            return {
-                "authenticated": True,
-                "method": "oauth",
+    stored_org = creds.selected_org() if creds is not None else None
+    has_stored_credentials = bool(stored_org and stored_org.api_key)
+
+    status: dict = {
+        "authenticated": env_var_set or has_stored_credentials,
+        "method": None,
+        "env_var_set": env_var_set,
+        "has_stored_credentials": has_stored_credentials,
+        "stored_overridden_by_env": env_var_set and has_stored_credentials,
+        "token_file": None,
+        "version": None,
+        "selected_org_id": None,
+        "selected_org_name": None,
+        "has_control_api_tokens": False,
+    }
+
+    if has_stored_credentials and creds is not None and stored_org is not None:
+        token_file = credentials.get_active_credentials_file() or credentials.CREDENTIALS_FILE
+        status.update(
+            {
                 "token_file": str(token_file),
                 "version": creds.version,
                 "selected_org_id": creds.selected_org_id,
-                "selected_org_name": org.org_name,
-                "has_control_api_tokens": bool(org.control_api.refresh_token),
+                "selected_org_name": stored_org.org_name,
+                "has_control_api_tokens": bool(stored_org.control_api.refresh_token),
             }
+        )
 
-    api_key = os.environ.get("PARALLEL_API_KEY")
-    if api_key:
-        return {"authenticated": True, "method": "environment", "token_file": None}
+    if env_var_set:
+        status["method"] = "environment"
+    elif has_stored_credentials:
+        status["method"] = "oauth"
 
-    return {"authenticated": False, "method": None, "token_file": None}
+    return status
