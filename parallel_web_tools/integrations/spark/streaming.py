@@ -166,8 +166,7 @@ def enrich_streaming_batch(
         >>>
         >>> query = stream_df.writeStream.foreachBatch(process_batch).start()
     """
-    from parallel.types import JsonSchemaParam, TaskSpecParam
-    from parallel.types.beta import BetaRunInputParam
+    from parallel.types import JsonSchemaParam, RunInputParam, TaskSpecParam
 
     # Collect batch data (this is safe in micro-batches, which are already small)
     rows = batch_df.collect()
@@ -195,11 +194,11 @@ def enrich_streaming_batch(
         )
 
         # Create task group
-        task_group = client.beta.task_group.create()
+        task_group = client.task_group.create()
         taskgroup_id = task_group.task_group_id
 
         # Build inputs from batch rows
-        run_inputs: list[BetaRunInputParam] = []
+        run_inputs: list[RunInputParam] = []
         for row in rows:
             # Convert Row to dict for reliable field access
             row_dict = row.asDict()
@@ -210,7 +209,7 @@ def enrich_streaming_batch(
                 if value is not None:
                     input_data[parallel_name] = str(value)
 
-            run_input: BetaRunInputParam = {
+            run_input: RunInputParam = {
                 "input": input_data,
                 "processor": processor,
             }
@@ -222,7 +221,7 @@ def enrich_streaming_batch(
             run_inputs.append(run_input)
 
         # Add all runs to the group
-        response = client.beta.task_group.add_runs(
+        response = client.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
             inputs=run_inputs,
@@ -238,7 +237,7 @@ def enrich_streaming_batch(
         time.sleep(3)  # Initial delay before first poll
         start_time = time.time()
         while time.time() - start_time < timeout:
-            status = client.beta.task_group.retrieve(taskgroup_id)
+            status = client.task_group.retrieve(taskgroup_id)
             status_counts = status.status.task_run_status_counts or {}
             completed = status_counts.get("completed", 0)
             failed = status_counts.get("failed", 0)
@@ -250,7 +249,7 @@ def enrich_streaming_batch(
 
         # Collect results
         results_by_id: dict[str, str] = {}
-        runs_stream = client.beta.task_group.get_runs(
+        runs_stream = client.task_group.get_runs(
             taskgroup_id,
             include_input=True,
             include_output=True,

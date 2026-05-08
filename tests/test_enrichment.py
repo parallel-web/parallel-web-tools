@@ -283,17 +283,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1", "run_2"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 2, "failed": 0}
         mock_status.status.num_task_runs = 2
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         # Mock the stream of events
         event_1 = SimpleNamespace(
@@ -312,7 +312,7 @@ class TestEnrichBatch:
                 basis=[],
             ),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event_1, event_2]
+        mock_client.task_group.get_runs.return_value = [event_1, event_2]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):  # Skip sleeps
@@ -334,17 +334,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         # Content as JSON string
         event = SimpleNamespace(
@@ -355,7 +355,7 @@ class TestEnrichBatch:
                 basis=[],
             ),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -372,17 +372,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         # Content as non-JSON string
         event = SimpleNamespace(
@@ -393,7 +393,7 @@ class TestEnrichBatch:
                 basis=[],
             ),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -410,17 +410,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         # Content as number
         event = SimpleNamespace(
@@ -431,7 +431,7 @@ class TestEnrichBatch:
                 basis=[],
             ),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -448,17 +448,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         field_basis = SimpleNamespace(field="ceo_name", reasoning="test")
         event = SimpleNamespace(
@@ -469,7 +469,7 @@ class TestEnrichBatch:
                 basis=[field_basis],
             ),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -488,17 +488,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         field_basis = SimpleNamespace(field="ceo_name", reasoning="test")
         event = SimpleNamespace(
@@ -509,7 +509,7 @@ class TestEnrichBatch:
                 basis=[field_basis],
             ),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -527,24 +527,24 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 0, "failed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         event = SimpleNamespace(
             type="task_run.state",
             run=SimpleNamespace(run_id="run_1", error="API error occurred"),
             output=None,
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -562,17 +562,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1", "run_2"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 2
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         # Only return event for run_1, not run_2
         event = SimpleNamespace(
@@ -580,7 +580,7 @@ class TestEnrichBatch:
             run=SimpleNamespace(run_id="run_1", error=None),
             output=SimpleNamespace(content={"ceo_name": "Test"}, basis=[]),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -598,11 +598,11 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = []
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -637,24 +637,24 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         event = SimpleNamespace(
             type="task_run.state",
             run=SimpleNamespace(run_id="run_1", error=None),
             output=SimpleNamespace(content={}, basis=[]),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -666,7 +666,7 @@ class TestEnrichBatch:
                 )
 
         # Check that processor was passed correctly
-        call_args = mock_client.beta.task_group.add_runs.call_args
+        call_args = mock_client.task_group.add_runs.call_args
         assert call_args.kwargs["inputs"][0]["processor"] == "pro-fast"
 
     def test_ignores_non_task_run_events(self):
@@ -674,17 +674,17 @@ class TestEnrichBatch:
         mock_client = mock.MagicMock()
         mock_task_group = mock.MagicMock()
         mock_task_group.task_group_id = "tgrp_123"
-        mock_client.beta.task_group.create.return_value = mock_task_group
+        mock_client.task_group.create.return_value = mock_task_group
 
         mock_add_response = mock.MagicMock()
         mock_add_response.run_ids = ["run_1"]
-        mock_client.beta.task_group.add_runs.return_value = mock_add_response
+        mock_client.task_group.add_runs.return_value = mock_add_response
 
         mock_status = mock.MagicMock()
         mock_status.status.task_run_status_counts = {"completed": 1}
         mock_status.status.num_task_runs = 1
         mock_status.status.is_active = False
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         # Include various event types
         event_other = SimpleNamespace(type="other.event")
@@ -693,7 +693,7 @@ class TestEnrichBatch:
             run=SimpleNamespace(run_id="run_1", error=None),
             output=SimpleNamespace(content={"ceo_name": "Test"}, basis=[]),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event_other, event_valid]
+        mock_client.task_group.get_runs.return_value = [event_other, event_valid]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -781,13 +781,13 @@ class TestRunTasks:
         mock_client = mock.MagicMock()
 
         # Mock task group create
-        mock_client.beta.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_123")
+        mock_client.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_123")
 
         # Mock add_runs
-        mock_client.beta.task_group.add_runs.return_value = mock.MagicMock(run_ids=["run_1", "run_2"])
+        mock_client.task_group.add_runs.return_value = mock.MagicMock(run_ids=["run_1", "run_2"])
 
         # Mock retrieve (status check) - return completed immediately
-        mock_client.beta.task_group.retrieve.return_value = mock.MagicMock(
+        mock_client.task_group.retrieve.return_value = mock.MagicMock(
             status=mock.MagicMock(is_active=False, task_run_status_counts={"completed": 2})
         )
 
@@ -802,7 +802,7 @@ class TestRunTasks:
             input=mock.MagicMock(input={"company": "OpenAI"}),
             output=mock.MagicMock(content={"ceo": "Sam Altman"}),
         )
-        mock_client.beta.task_group.get_runs.return_value = [mock_event1, mock_event2]
+        mock_client.task_group.get_runs.return_value = [mock_event1, mock_event2]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):  # Speed up test
@@ -837,8 +837,8 @@ class TestCreateTaskGroup:
             ceo: str
 
         mock_client = mock.MagicMock()
-        mock_client.beta.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_abc")
-        mock_client.beta.task_group.add_runs.return_value = mock.MagicMock(run_ids=["run_1", "run_2"])
+        mock_client.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_abc")
+        mock_client.task_group.add_runs.return_value = mock.MagicMock(run_ids=["run_1", "run_2"])
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             result = create_task_group(
@@ -864,8 +864,8 @@ class TestCreateTaskGroup:
             ceo: str
 
         mock_client = mock.MagicMock()
-        mock_client.beta.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_batch")
-        mock_client.beta.task_group.add_runs.return_value = mock.MagicMock(run_ids=["r"] * 100)
+        mock_client.task_group.create.return_value = mock.MagicMock(task_group_id="tgrp_batch")
+        mock_client.task_group.add_runs.return_value = mock.MagicMock(run_ids=["r"] * 100)
 
         input_data = [{"company": f"C{i}"} for i in range(250)]
 
@@ -873,7 +873,7 @@ class TestCreateTaskGroup:
             result = create_task_group(input_data, InputModel, OutputModel)
 
         # 250 items / 100 batch size = 3 calls
-        assert mock_client.beta.task_group.add_runs.call_count == 3
+        assert mock_client.task_group.add_runs.call_count == 3
         assert result["num_runs"] == 300  # 3 * 100 from mock
 
 
@@ -887,7 +887,7 @@ class TestGetTaskGroupStatus:
         mock_status.status.task_run_status_counts = {"completed": 5, "failed": 1}
         mock_status.status.is_active = False
         mock_status.status.num_task_runs = 6
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             result = get_task_group_status("tgrp_test", api_key="test-key")
@@ -905,7 +905,7 @@ class TestGetTaskGroupStatus:
         mock_status.status.task_run_status_counts = {"completed": 2, "running": 3}
         mock_status.status.is_active = True
         mock_status.status.num_task_runs = 5
-        mock_client.beta.task_group.retrieve.return_value = mock_status
+        mock_client.task_group.retrieve.return_value = mock_status
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             result = get_task_group_status("tgrp_active")
@@ -932,7 +932,7 @@ class TestPollTaskGroup:
         done_status.status.is_active = False
         done_status.status.num_task_runs = 2
 
-        mock_client.beta.task_group.retrieve.side_effect = [active_status, done_status]
+        mock_client.task_group.retrieve.side_effect = [active_status, done_status]
 
         event_1 = SimpleNamespace(
             type="task_run.state",
@@ -946,7 +946,7 @@ class TestPollTaskGroup:
             input=SimpleNamespace(input={"company": "B"}),
             output=SimpleNamespace(content={"ceo": "CEO B"}),
         )
-        mock_client.beta.task_group.get_runs.return_value = [event_1, event_2]
+        mock_client.task_group.get_runs.return_value = [event_1, event_2]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -964,7 +964,7 @@ class TestPollTaskGroup:
         active_status.status.task_run_status_counts = {"running": 2}
         active_status.status.is_active = True
         active_status.status.num_task_runs = 2
-        mock_client.beta.task_group.retrieve.return_value = active_status
+        mock_client.task_group.retrieve.return_value = active_status
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):
@@ -981,8 +981,8 @@ class TestPollTaskGroup:
         done_status.status.task_run_status_counts = {"completed": 3}
         done_status.status.is_active = False
         done_status.status.num_task_runs = 3
-        mock_client.beta.task_group.retrieve.return_value = done_status
-        mock_client.beta.task_group.get_runs.return_value = []
+        mock_client.task_group.retrieve.return_value = done_status
+        mock_client.task_group.get_runs.return_value = []
 
         progress_calls = []
 
@@ -1003,7 +1003,7 @@ class TestPollTaskGroup:
         done_status.status.task_run_status_counts = {"completed": 0, "failed": 1}
         done_status.status.is_active = False
         done_status.status.num_task_runs = 1
-        mock_client.beta.task_group.retrieve.return_value = done_status
+        mock_client.task_group.retrieve.return_value = done_status
 
         event = SimpleNamespace(
             type="task_run.state",
@@ -1011,7 +1011,7 @@ class TestPollTaskGroup:
             input=SimpleNamespace(input={"company": "X"}),
             output=None,
         )
-        mock_client.beta.task_group.get_runs.return_value = [event]
+        mock_client.task_group.get_runs.return_value = [event]
 
         with mock.patch("parallel_web_tools.core.batch.create_client", return_value=mock_client):
             with mock.patch("parallel_web_tools.core.batch.time.sleep"):

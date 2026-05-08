@@ -117,8 +117,7 @@ def enrich_batch(
     Returns:
         List of result dictionaries in same order as inputs.
     """
-    from parallel.types import JsonSchemaParam, TaskSpecParam
-    from parallel.types.beta import BetaRunInputParam
+    from parallel.types import JsonSchemaParam, RunInputParam, TaskSpecParam
 
     if not inputs:
         return []
@@ -129,18 +128,18 @@ def enrich_batch(
         task_spec = TaskSpecParam(output_schema=JsonSchemaParam(type="json", json_schema=output_schema))
 
         # Create task group
-        task_group = client.beta.task_group.create()
+        task_group = client.task_group.create()
         taskgroup_id = task_group.task_group_id
 
         # Add runs - use SDK type for proper typing
-        def _make_run_input(inp: dict[str, Any]) -> BetaRunInputParam:
-            entry: BetaRunInputParam = {"input": inp, "processor": processor}
+        def _make_run_input(inp: dict[str, Any]) -> RunInputParam:
+            entry: RunInputParam = {"input": inp, "processor": processor}
             if previous_interaction_id:
                 entry["previous_interaction_id"] = previous_interaction_id
             return entry
 
-        run_inputs: list[BetaRunInputParam] = [_make_run_input(inp) for inp in inputs]
-        response = client.beta.task_group.add_runs(
+        run_inputs: list[RunInputParam] = [_make_run_input(inp) for inp in inputs]
+        response = client.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
             inputs=run_inputs,
@@ -154,7 +153,7 @@ def enrich_batch(
         time.sleep(3)
         start_time = time.time()
         while time.time() - start_time < timeout:
-            status = client.beta.task_group.retrieve(taskgroup_id)
+            status = client.task_group.retrieve(taskgroup_id)
             status_counts = status.status.task_run_status_counts or {}
             completed = status_counts.get("completed", 0)
             failed = status_counts.get("failed", 0)
@@ -166,7 +165,7 @@ def enrich_batch(
 
         # Collect results
         results_by_id: dict[str, dict[str, Any]] = {}
-        runs_stream = client.beta.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
+        runs_stream = client.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
 
         for event in runs_stream:
             if event.type == "task_run.state":
@@ -232,8 +231,7 @@ def create_task_group(
     Returns:
         Dict with taskgroup_id, url, and num_runs.
     """
-    from parallel.types import JsonSchemaParam, TaskSpecParam
-    from parallel.types.beta import BetaRunInputParam
+    from parallel.types import JsonSchemaParam, RunInputParam, TaskSpecParam
 
     logger = logging.getLogger(__name__)
 
@@ -246,13 +244,13 @@ def create_task_group(
     )
 
     # Create task group
-    task_group = client.beta.task_group.create()
+    task_group = client.task_group.create()
     taskgroup_id = task_group.task_group_id
     logger.info(f"Created taskgroup id {taskgroup_id}")
 
     # Build run input helper
-    def _make_run_input(row: dict[str, Any]) -> BetaRunInputParam:
-        entry: BetaRunInputParam = {"input": row, "processor": processor}
+    def _make_run_input(row: dict[str, Any]) -> RunInputParam:
+        entry: RunInputParam = {"input": row, "processor": processor}
         if previous_interaction_id:
             entry["previous_interaction_id"] = previous_interaction_id
         return entry
@@ -262,8 +260,8 @@ def create_task_group(
     total_created = 0
     for i in range(0, len(input_data), batch_size):
         batch = input_data[i : i + batch_size]
-        run_inputs: list[BetaRunInputParam] = [_make_run_input(row) for row in batch]
-        response = client.beta.task_group.add_runs(
+        run_inputs: list[RunInputParam] = [_make_run_input(row) for row in batch]
+        response = client.task_group.add_runs(
             taskgroup_id,
             default_task_spec=task_spec,
             inputs=run_inputs,
@@ -294,7 +292,7 @@ def get_task_group_status(
         Dict with taskgroup_id, status_counts, is_active, num_runs, url.
     """
     client = create_client(api_key, source)
-    status = client.beta.task_group.retrieve(taskgroup_id)
+    status = client.task_group.retrieve(taskgroup_id)
     status_counts = dict(status.status.task_run_status_counts or {})
 
     return {
@@ -336,7 +334,7 @@ def poll_task_group(
     deadline = time.time() + timeout
 
     while time.time() < deadline:
-        status = client.beta.task_group.retrieve(taskgroup_id)
+        status = client.task_group.retrieve(taskgroup_id)
         status_counts = status.status.task_run_status_counts or {}
         completed = status_counts.get("completed", 0)
         failed = status_counts.get("failed", 0)
@@ -355,7 +353,7 @@ def poll_task_group(
 
     # Collect results
     results = []
-    runs_stream = client.beta.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
+    runs_stream = client.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
 
     for event in runs_stream:
         if event.type == "task_run.state":
@@ -405,7 +403,7 @@ def run_tasks(
     client = create_client(source=source)
     poll_start = time.time()
     while time.time() - poll_start < timeout:
-        status = client.beta.task_group.retrieve(taskgroup_id)
+        status = client.task_group.retrieve(taskgroup_id)
         status_counts = status.status.task_run_status_counts or {}
         logger.info(f"Status: {status_counts}")
 
@@ -419,7 +417,7 @@ def run_tasks(
 
     # Get results using SDK's streaming (handles SSE properly)
     results = []
-    runs_stream = client.beta.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
+    runs_stream = client.task_group.get_runs(taskgroup_id, include_input=True, include_output=True)
 
     for event in runs_stream:
         if event.type == "task_run.state" and event.output:

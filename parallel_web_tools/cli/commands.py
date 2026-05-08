@@ -21,14 +21,14 @@ from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     FINDALL_GENERATORS,
     JSON_SCHEMA_TYPE_MAP,
-    MONITOR_CADENCES,
-    MONITOR_EVENT_TYPES,
+    MONITOR_PROCESSORS,
+    MONITOR_TYPES,
     RESEARCH_PROCESSORS,
     cancel_findall_run,
+    cancel_monitor,
     create_findall_run,
     create_monitor,
     create_research_task,
-    delete_monitor,
     enrich_findall,
     extend_findall,
     get_api_key,
@@ -37,7 +37,6 @@ from parallel_web_tools.core import (
     get_findall_schema,
     get_findall_status,
     get_monitor,
-    get_monitor_event_group,
     get_research_status,
     get_task_group_status,
     get_user_agent,
@@ -51,7 +50,7 @@ from parallel_web_tools.core import (
     run_enrichment_from_dict,
     run_findall,
     run_research,
-    simulate_monitor_event,
+    trigger_monitor,
     update_monitor,
 )
 
@@ -2893,41 +2892,84 @@ def monitor():
 
 
 @monitor.command(name="create")
-@click.argument("query")
+@click.argument("query", required=False)
 @click.option(
-    "--cadence",
-    "-c",
-    type=click.Choice(list(MONITOR_CADENCES.keys())),
-    default="daily",
+    "--frequency",
+    "-f",
+    default="1d",
     show_default=True,
-    help="How often to check for changes",
+    help=(
+        "How often to run the monitor. SDK format '<n><unit>' with unit h/d/w "
+        "(e.g. 1h, 6h, 1d, 2w). Aliases also accepted: hourly, daily, weekly, every_two_weeks."
+    ),
+)
+@click.option(
+    "--type",
+    "monitor_type",
+    type=click.Choice(list(MONITOR_TYPES)),
+    default="event_stream",
+    show_default=True,
+    help="Monitor type: 'event_stream' tracks a search query; 'snapshot' tracks a Task Run output.",
+)
+@click.option("--task-run-id", help="Required for type=snapshot: the Task Run whose output to track.")
+@click.option(
+    "--processor",
+    type=click.Choice(list(MONITOR_PROCESSORS)),
+    help="Monitor processor (default: lite). 'base' is more thorough at higher cost.",
 )
 @click.option("--webhook", help="Webhook URL for event delivery")
 @click.option("--metadata", "metadata_json", help="Metadata as JSON string")
-@click.option("--output-schema", "output_schema_json", help="Output schema as JSON string")
+@click.option("--output-schema", "output_schema_json", help="Output schema as JSON string (event_stream only)")
+@click.option(
+    "--include-backfill",
+    is_flag=True,
+    help="event_stream only: include a sample of historical events on first run.",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save result to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def monitor_create(
-    query: str,
-    cadence: str,
+    query: str | None,
+    frequency: str,
+    monitor_type: str,
+    task_run_id: str | None,
+    processor: str | None,
     webhook: str | None,
     metadata_json: str | None,
     output_schema_json: str | None,
+    include_backfill: bool,
     output_file: str | None,
     output_json: bool,
 ):
     """Create a new monitor to track the web for changes.
 
-    QUERY is a natural language description of what to track.
+    QUERY is the search query for type=event_stream (the default). For type=snapshot,
+    omit QUERY and pass --task-run-id instead.
 
     Examples:
 
         parallel-cli monitor create "Track price changes for iPhone 16"
 
-        parallel-cli monitor create "New AI funding announcements" --cadence hourly
+        parallel-cli monitor create "New AI funding announcements" --frequency 1h
 
         parallel-cli monitor create "SEC filings from Tesla" --webhook https://example.com/hook
+
+        parallel-cli monitor create --type snapshot --task-run-id trun_abc --frequency 1d
     """
+    if monitor_type == "event_stream" and not query:
+        _handle_error(
+            click.UsageError("QUERY is required when --type=event_stream"),
+            output_json=output_json,
+            exit_code=EXIT_BAD_INPUT,
+        )
+        return
+    if monitor_type == "snapshot" and not task_run_id:
+        _handle_error(
+            click.UsageError("--task-run-id is required when --type=snapshot"),
+            output_json=output_json,
+            exit_code=EXIT_BAD_INPUT,
+        )
+        return
+
     try:
         metadata = json.loads(metadata_json) if metadata_json else None
         output_schema = json.loads(output_schema_json) if output_schema_json else None
@@ -2937,14 +2979,18 @@ def monitor_create(
 
     try:
         if not output_json:
-            console.print(f"[dim]Creating monitor with cadence={cadence}...[/dim]")
+            console.print(f"[dim]Creating {monitor_type} monitor (frequency={frequency})...[/dim]")
 
         result = create_monitor(
             query=query,
-            cadence=cadence,
+            frequency=frequency,
+            type=monitor_type,
+            task_run_id=task_run_id,
             webhook=webhook,
             metadata=metadata,
             output_schema=output_schema,
+            include_backfill=include_backfill or None,
+            processor=processor,
             source="cli",
         )
 
@@ -2953,8 +2999,12 @@ def monitor_create(
         if not output_json:
             monitor_id = result.get("monitor_id", "unknown")
             console.print(f"\n[bold green]Monitor created: {monitor_id}[/bold green]")
-            console.print(f"[dim]Query: {query}[/dim]")
-            console.print(f"[dim]Cadence: {cadence} ({MONITOR_CADENCES[cadence]})[/dim]")
+            console.print(f"[dim]Type: {result.get('type', monitor_type)}[/dim]")
+            console.print(f"[dim]Frequency: {result.get('frequency', frequency)}[/dim]")
+            if query:
+                console.print(f"[dim]Query: {query}[/dim]")
+            if task_run_id:
+                console.print(f"[dim]Task run: {task_run_id}[/dim]")
             if webhook:
                 console.print(f"[dim]Webhook: {webhook}[/dim]")
 
@@ -2963,44 +3013,79 @@ def monitor_create(
 
 
 @monitor.command(name="list")
-@click.option("--limit", "-n", type=int, help="Maximum number of monitors to return")
+@click.option("--limit", "-n", type=int, help="Maximum number of monitors to return (1-10000)")
+@click.option("--cursor", help="Pagination token from a previous response")
+@click.option(
+    "--status",
+    type=click.Choice(["active", "cancelled"]),
+    multiple=True,
+    help="Filter by status (repeatable). Defaults to active only.",
+)
+@click.option(
+    "--type",
+    "monitor_type",
+    type=click.Choice(list(MONITOR_TYPES)),
+    multiple=True,
+    help="Filter by monitor type (repeatable).",
+)
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
-def monitor_list(limit: int | None, output_json: bool):
-    """List all monitors.
+def monitor_list(
+    limit: int | None,
+    cursor: str | None,
+    status: tuple[str, ...],
+    monitor_type: tuple[str, ...],
+    output_json: bool,
+):
+    """List monitors (newest first).
 
     Examples:
 
         parallel-cli monitor list
 
         parallel-cli monitor list --limit 10 --json
+
+        parallel-cli monitor list --status active --status cancelled
     """
     try:
-        result = list_monitors(limit=limit, source="cli")
+        result = list_monitors(
+            cursor=cursor,
+            limit=limit,
+            status=list(status) if status else None,
+            type=list(monitor_type) if monitor_type else None,
+            source="cli",
+        )
+        monitors = result.get("monitors", []) if isinstance(result, dict) else []
 
         if output_json:
             print(json.dumps(result, indent=2, default=str))
         else:
-            if not result:
+            if not monitors:
                 console.print("[yellow]No monitors found.[/yellow]")
                 return
 
             from rich.table import Table
 
-            table = Table(title=f"Monitors ({len(result)})")
+            table = Table(title=f"Monitors ({len(monitors)})")
             table.add_column("ID", style="cyan", no_wrap=True)
-            table.add_column("Query", max_width=50)
-            table.add_column("Cadence", style="green")
+            table.add_column("Type", style="magenta")
+            table.add_column("Query / Task Run", max_width=50)
+            table.add_column("Frequency", style="green")
             table.add_column("Status", style="yellow")
 
-            for m in result:
+            for m in monitors:
+                settings = m.get("settings", {}) or {}
+                tracked = settings.get("query") or settings.get("task_run_id") or ""
                 table.add_row(
                     m.get("monitor_id", ""),
-                    (m.get("query", "") or "")[:50],
-                    m.get("cadence", ""),
+                    m.get("type", ""),
+                    str(tracked)[:50],
+                    m.get("frequency", ""),
                     m.get("status", ""),
                 )
 
             console.print(table)
+            if next_cursor := result.get("next_cursor"):
+                console.print(f"[dim]Next cursor: {next_cursor}[/dim]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
@@ -3020,14 +3105,24 @@ def monitor_get(monitor_id: str, output_json: bool):
         if output_json:
             print(json.dumps(result, indent=2, default=str))
         else:
-            console.print(f"[bold]Monitor:[/bold]  {result.get('monitor_id', monitor_id)}")
-            console.print(f"[bold]Query:[/bold]    {result.get('query', '')}")
-            console.print(f"[bold]Cadence:[/bold]  {result.get('cadence', '')}")
-            console.print(f"[bold]Status:[/bold]   {result.get('status', '')}")
-            if result.get("webhook"):
-                console.print(f"[bold]Webhook:[/bold]  {result['webhook']}")
-            if result.get("created_at"):
-                console.print(f"[bold]Created:[/bold]  {result['created_at']}")
+            settings = result.get("settings", {}) or {}
+            console.print(f"[bold]Monitor:[/bold]    {result.get('monitor_id', monitor_id)}")
+            console.print(f"[bold]Type:[/bold]       {result.get('type', '')}")
+            console.print(f"[bold]Frequency:[/bold]  {result.get('frequency', '')}")
+            console.print(f"[bold]Status:[/bold]     {result.get('status', '')}")
+            console.print(f"[bold]Processor:[/bold]  {result.get('processor', '')}")
+            if query := settings.get("query"):
+                console.print(f"[bold]Query:[/bold]      {query}")
+            if task_run_id := settings.get("task_run_id"):
+                console.print(f"[bold]Task run:[/bold]   {task_run_id}")
+            if webhook := result.get("webhook"):
+                console.print(
+                    f"[bold]Webhook:[/bold]    {webhook.get('url') if isinstance(webhook, dict) else webhook}"
+                )
+            if created_at := result.get("created_at"):
+                console.print(f"[bold]Created:[/bold]    {created_at}")
+            if last_run := result.get("last_run_at"):
+                console.print(f"[bold]Last run:[/bold]   {last_run}")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
@@ -3035,32 +3130,43 @@ def monitor_get(monitor_id: str, output_json: bool):
 
 @monitor.command(name="update")
 @click.argument("monitor_id")
-@click.option("--query", "-q", help="Updated query text")
-@click.option("--cadence", "-c", type=click.Choice(list(MONITOR_CADENCES.keys())), help="Updated cadence")
+@click.option(
+    "--frequency",
+    "-f",
+    help="Updated frequency (e.g. 1h, 6h, 1d, 2w; or aliases hourly/daily/weekly/every_two_weeks).",
+)
 @click.option("--webhook", help="Updated webhook URL")
 @click.option("--metadata", "metadata_json", help="Updated metadata as JSON string")
+@click.option(
+    "--advanced-settings",
+    "advanced_settings_json",
+    help="event_stream advanced_settings as JSON string (sets type=event_stream automatically).",
+)
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def monitor_update(
     monitor_id: str,
-    query: str | None,
-    cadence: str | None,
+    frequency: str | None,
     webhook: str | None,
     metadata_json: str | None,
+    advanced_settings_json: str | None,
     output_json: bool,
 ):
     """Update an existing monitor.
 
-    MONITOR_ID is the monitor identifier.
+    MONITOR_ID is the monitor identifier. Note: query and task_run_id are
+    immutable — create a new monitor to change them.
 
     Examples:
 
-        parallel-cli monitor update mon_abc --cadence hourly
+        parallel-cli monitor update mon_abc --frequency 1h
 
-        parallel-cli monitor update mon_abc --query "Updated tracking query"
+        parallel-cli monitor update mon_abc --webhook https://example.com/hook
     """
-    if not any([query, cadence, webhook, metadata_json]):
+    if not any([frequency, webhook, metadata_json, advanced_settings_json]):
         _handle_error(
-            click.UsageError("Provide at least one field to update (--query, --cadence, --webhook, --metadata)"),
+            click.UsageError(
+                "Provide at least one field to update (--frequency, --webhook, --metadata, --advanced-settings)"
+            ),
             output_json=output_json,
             exit_code=EXIT_BAD_INPUT,
         )
@@ -3068,17 +3174,18 @@ def monitor_update(
 
     try:
         metadata = json.loads(metadata_json) if metadata_json else None
+        advanced_settings = json.loads(advanced_settings_json) if advanced_settings_json else None
     except json.JSONDecodeError as e:
         _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid JSON")
         return
 
     try:
         result = update_monitor(
-            monitor_id=monitor_id,
-            query=query,
-            cadence=cadence,
+            monitor_id,
+            frequency=frequency,
             webhook=webhook,
             metadata=metadata,
+            advanced_settings=advanced_settings,
             source="cli",
         )
 
@@ -3086,30 +3193,31 @@ def monitor_update(
             print(json.dumps(result, indent=2, default=str))
         else:
             console.print(f"[bold green]Monitor updated: {monitor_id}[/bold green]")
-            if query:
-                console.print(f"[dim]Query: {query}[/dim]")
-            if cadence:
-                console.print(f"[dim]Cadence: {cadence}[/dim]")
+            if frequency:
+                console.print(f"[dim]Frequency: {frequency}[/dim]")
+            if webhook:
+                console.print(f"[dim]Webhook: {webhook}[/dim]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
 
 
-@monitor.command(name="delete")
+@monitor.command(name="cancel")
 @click.argument("monitor_id")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-def monitor_delete(monitor_id: str, output_json: bool):
-    """Delete a monitor.
+def monitor_cancel(monitor_id: str, output_json: bool):
+    """Cancel a monitor (irreversible).
 
-    MONITOR_ID is the monitor identifier.
+    MONITOR_ID is the monitor identifier. Cancellation permanently stops the
+    monitor from running. Create a new monitor to resume monitoring.
     """
     try:
-        result = delete_monitor(monitor_id, source="cli")
+        result = cancel_monitor(monitor_id, source="cli")
 
         if output_json:
             print(json.dumps(result, indent=2, default=str))
         else:
-            console.print(f"[bold green]Deleted:[/bold green] {monitor_id}")
+            console.print(f"[bold green]Cancelled:[/bold green] {monitor_id}")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
@@ -3117,13 +3225,26 @@ def monitor_delete(monitor_id: str, output_json: bool):
 
 @monitor.command(name="events")
 @click.argument("monitor_id")
+@click.option("--cursor", help="Pagination token from a previous response")
+@click.option("--event-group-id", help="Restrict results to a single execution.")
 @click.option(
-    "--lookback", default="10d", show_default=True, help="Lookback period using d (days) or w (weeks), e.g., 10d, 1w"
+    "--include-completions",
+    is_flag=True,
+    help="Include no-change completion events for audit history.",
 )
+@click.option("--limit", type=int, help="Maximum number of events to return (1-100, default 20)")
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
-def monitor_events(monitor_id: str, lookback: str, output_file: str | None, output_json: bool):
-    """List events for a monitor.
+def monitor_events(
+    monitor_id: str,
+    cursor: str | None,
+    event_group_id: str | None,
+    include_completions: bool,
+    limit: int | None,
+    output_file: str | None,
+    output_json: bool,
+):
+    """List events for a monitor (newest first).
 
     MONITOR_ID is the monitor identifier.
 
@@ -3131,17 +3252,26 @@ def monitor_events(monitor_id: str, lookback: str, output_file: str | None, outp
 
         parallel-cli monitor events mon_abc
 
-        parallel-cli monitor events mon_abc --lookback 3d --json
+        parallel-cli monitor events mon_abc --include-completions --limit 50
+
+        parallel-cli monitor events mon_abc --event-group-id egrp_xyz
     """
     try:
-        result = list_monitor_events(monitor_id, lookback_period=lookback, source="cli")
+        result = list_monitor_events(
+            monitor_id,
+            cursor=cursor,
+            event_group_id=event_group_id,
+            include_completions=include_completions,
+            limit=limit,
+            source="cli",
+        )
 
         write_json_output(result, output_file, output_json)
 
         if not output_json:
             events = result.get("events", [])
             if not events:
-                console.print(f"[yellow]No events found for {monitor_id} in the last {lookback}.[/yellow]")
+                console.print(f"[yellow]No events found for {monitor_id}.[/yellow]")
                 return
 
             from rich.table import Table
@@ -3153,19 +3283,31 @@ def monitor_events(monitor_id: str, lookback: str, output_file: str | None, outp
             table.add_column("Summary", max_width=50)
 
             for ev in events:
-                ev_type = ev.get("type", "")
-                if ev_type == "event":
-                    ev_id = ev.get("event_group_id", "")
-                    date = ev.get("event_date", "")
-                    summary = (ev.get("output", "") or "")[:50]
+                ev_type = ev.get("event_type", "") or ev.get("type", "")
+                if ev_type == "event_stream":
+                    ev_id = ev.get("event_group_id", "") or ev.get("event_id", "")
+                    date = ev.get("event_date", "") or ""
+                    output = ev.get("output", {}) or {}
+                    if isinstance(output, dict):
+                        summary = (output.get("content", "") or str(output))[:50]
+                    else:
+                        summary = str(output)[:50]
+                elif ev_type == "snapshot":
+                    ev_id = ev.get("event_group_id", "") or ev.get("event_id", "")
+                    date = ev.get("event_date", "") or ""
+                    changed = ev.get("changed_output", {}) or {}
+                    if isinstance(changed, dict):
+                        summary = (changed.get("content", "") or "fields changed")[:50]
+                    else:
+                        summary = "fields changed"
                 elif ev_type == "completion":
-                    ev_id = ev.get("monitor_ts", "")
-                    date = ""
-                    summary = "Run completed"
+                    ev_id = ""
+                    date = ev.get("timestamp", "") or ""
+                    summary = "Run completed (no change)"
                 elif ev_type == "error":
-                    ev_id = ev.get("id", "")
-                    date = ev.get("date", "")
-                    summary = (ev.get("error", "") or "")[:50]
+                    ev_id = ""
+                    date = ev.get("timestamp", "") or ""
+                    summary = (ev.get("error_message", "") or "")[:50]
                 else:
                     ev_id = ""
                     date = ""
@@ -3173,77 +3315,35 @@ def monitor_events(monitor_id: str, lookback: str, output_file: str | None, outp
                 table.add_row(ev_type, ev_id, date, summary)
 
             console.print(table)
+            if next_cursor := result.get("next_cursor"):
+                console.print(f"[dim]Next cursor: {next_cursor}[/dim]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
 
 
-@monitor.command(name="event-group")
+@monitor.command(name="trigger")
 @click.argument("monitor_id")
-@click.argument("event_group_id")
-@click.option("-o", "--output", "output_file", type=click.Path(), help="Save result to JSON file")
-@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
-def monitor_event_group(monitor_id: str, event_group_id: str, output_file: str | None, output_json: bool):
-    """Get details of an event group.
-
-    MONITOR_ID is the monitor identifier.
-    EVENT_GROUP_ID is the event group identifier.
-    """
-    try:
-        result = get_monitor_event_group(monitor_id, event_group_id, source="cli")
-
-        write_json_output(result, output_file, output_json)
-
-        if not output_json:
-            console.print(f"[bold]Monitor:[/bold]     {monitor_id}")
-            console.print(f"[bold]Event Group:[/bold] {event_group_id}")
-            events = result.get("events", [])
-            if events:
-                console.print(f"\n[bold]Events ({len(events)}):[/bold]")
-                for ev in events:
-                    date = ev.get("event_date", "")
-                    output = ev.get("output", "")
-                    urls = ev.get("source_urls", [])
-                    console.print(f"  [dim]{date}[/dim] {output}")
-                    for u in urls:
-                        console.print(f"    [cyan]{u}[/cyan]")
-            else:
-                console.print("[yellow]No events in this group.[/yellow]")
-
-    except Exception as e:
-        _handle_error(e, output_json=output_json)
-
-
-@monitor.command(name="simulate")
-@click.argument("monitor_id")
-@click.option(
-    "--event-type",
-    type=click.Choice(MONITOR_EVENT_TYPES),
-    help="Event type to simulate (default: monitor.event.detected)",
-)
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-def monitor_simulate(monitor_id: str, event_type: str | None, output_json: bool):
-    """Simulate an event for webhook testing.
+def monitor_trigger(monitor_id: str, output_json: bool):
+    """Trigger an immediate one-off run of a monitor.
 
-    Requires a webhook to be configured on the monitor.
+    The monitor's regular schedule is unaffected. An event is only emitted if a
+    material change is detected. Cancelled monitors cannot be triggered.
 
     MONITOR_ID is the monitor identifier.
 
     Examples:
 
-        parallel-cli monitor simulate mon_abc
-
-        parallel-cli monitor simulate mon_abc --event-type monitor.execution.completed
+        parallel-cli monitor trigger mon_abc
     """
     try:
-        simulate_monitor_event(monitor_id, event_type=event_type, source="cli")
+        trigger_monitor(monitor_id, source="cli")
 
         if output_json:
-            print(json.dumps({"monitor_id": monitor_id, "simulated": True}, indent=2))
+            print(json.dumps({"monitor_id": monitor_id, "triggered": True}, indent=2))
         else:
-            console.print(f"[bold green]Event simulated for:[/bold green] {monitor_id}")
-            if event_type:
-                console.print(f"[dim]Event type: {event_type}[/dim]")
+            console.print(f"[bold green]Triggered:[/bold green] {monitor_id}")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)
