@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 from unittest import mock
 
 import pytest
@@ -32,6 +31,14 @@ from parallel_web_tools.cli.commands import (
 def runner():
     """Create a CLI test runner."""
     return CliRunner()
+
+
+@pytest.fixture
+def mock_cli_client():
+    """Patch CLI client creation and return the injected mock client."""
+    client = mock.MagicMock()
+    with mock.patch("parallel_web_tools.core.auth.get_client", return_value=client):
+        yield client
 
 
 class TestParseCommaSeparated:
@@ -245,12 +252,17 @@ class TestMainCLI:
 class TestAuthCommand:
     """Tests for the auth command."""
 
-    def test_auth_with_env_var(self, runner):
-        """Should show authenticated via environment."""
+    def test_auth_with_env_var(self, runner, tmp_path):
+        """Should show authenticated via environment when no stored credentials."""
+        token_file = tmp_path / "nonexistent.json"
         with mock.patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}):
-            result = runner.invoke(main, ["auth"])
-            assert result.exit_code == 0
-            assert "PARALLEL_API_KEY" in result.output or "environment" in result.output
+            with (
+                mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file),
+                mock.patch("parallel_web_tools.core.credentials.LEGACY_CREDENTIALS_FILE", token_file),
+            ):
+                result = runner.invoke(main, ["auth"])
+                assert result.exit_code == 0
+                assert "PARALLEL_API_KEY" in result.output or "environment" in result.output
 
     def test_auth_not_authenticated(self, runner, tmp_path):
         """Should show not authenticated when no credentials."""
@@ -258,10 +270,58 @@ class TestAuthCommand:
 
         with mock.patch.dict(os.environ, {}, clear=True):
             os.environ.pop("PARALLEL_API_KEY", None)
-            with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+            with (
+                mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file),
+                mock.patch("parallel_web_tools.core.credentials.LEGACY_CREDENTIALS_FILE", token_file),
+            ):
                 result = runner.invoke(main, ["auth"])
                 assert result.exit_code == 0
                 assert "Not authenticated" in result.output or "not" in result.output.lower()
+
+    def test_auth_warns_when_env_var_overrides_stored(self, runner):
+        """When PARALLEL_API_KEY is set AND stored creds exist, the override must be obvious."""
+        status = {
+            "authenticated": True,
+            "method": "environment",
+            "env_var_set": True,
+            "has_stored_credentials": True,
+            "stored_overridden_by_env": True,
+            "token_file": "/tmp/auth.json",
+            "version": 1,
+            "selected_org_id": "org_123",
+            "selected_org_name": "Acme Org",
+            "has_control_api_tokens": True,
+        }
+        with mock.patch("parallel_web_tools.cli.commands.get_auth_status", return_value=status):
+            result = runner.invoke(main, ["auth"])
+
+        assert result.exit_code == 0
+        # Active source labelled.
+        assert "PARALLEL_API_KEY" in result.output
+        # Override is loud.
+        assert "OVERRIDES" in result.output
+        # Stored org is shown so the user knows what's being shadowed.
+        assert "Acme Org" in result.output
+        assert "inactive" in result.output
+
+    def test_auth_json_includes_selected_org_name(self, runner):
+        """Should include selected org name in JSON output for OAuth auth."""
+        status = {
+            "authenticated": True,
+            "method": "oauth",
+            "token_file": "/tmp/auth.json",
+            "version": 1,
+            "selected_org_id": "org_123",
+            "selected_org_name": "Acme Org",
+            "has_control_api_tokens": True,
+        }
+
+        with mock.patch("parallel_web_tools.cli.commands.get_auth_status", return_value=status):
+            result = runner.invoke(main, ["auth", "--json"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert output["selected_org_name"] == "Acme Org"
 
 
 class TestLogoutCommand:
@@ -271,7 +331,10 @@ class TestLogoutCommand:
         """Should handle logout when no credentials exist."""
         token_file = tmp_path / "nonexistent.json"
 
-        with mock.patch("parallel_web_tools.core.auth.TOKEN_FILE", token_file):
+        with (
+            mock.patch("parallel_web_tools.core.credentials.CREDENTIALS_FILE", token_file),
+            mock.patch("parallel_web_tools.core.credentials.LEGACY_CREDENTIALS_FILE", token_file),
+        ):
             result = runner.invoke(main, ["logout"])
             assert result.exit_code == 0
             assert "No stored credentials" in result.output or "no" in result.output.lower()
@@ -976,7 +1039,7 @@ class TestValidateEnrichArgs:
 class TestSearchCommandMocked:
     """Tests for the search command with mocked Parallel SDK."""
 
-    def test_search_successful_json_output(self, runner):
+    def test_search_successful_json_output(self, runner, mock_cli_client):
         """Should output JSON for successful search."""
         mock_search_result = mock.MagicMock()
         mock_search_result.search_id = "search_123"
@@ -992,17 +1055,8 @@ class TestSearchCommandMocked:
         mock_search_result.usage = None
         mock_search_result.warnings = []
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.search.return_value = mock_search_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.search.return_value = mock_search_result
+        result = runner.invoke(main, ["search", "test query", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1011,7 +1065,7 @@ class TestSearchCommandMocked:
         assert len(output["results"]) == 1
         assert output["results"][0]["url"] == "https://example.com"
 
-    def test_search_warnings_serialized_in_json_output(self, runner):
+    def test_search_warnings_serialized_in_json_output(self, runner, mock_cli_client):
         """Should serialize SDK Warning objects as dicts in JSON output."""
         mock_search_result = mock.MagicMock()
         mock_search_result.search_id = "search_456"
@@ -1032,17 +1086,8 @@ class TestSearchCommandMocked:
         mock_search_result.usage = None
         mock_search_result.warnings = [warning_obj]
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.search.return_value = mock_search_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.search.return_value = mock_search_result
+        result = runner.invoke(main, ["search", "test query", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1052,38 +1097,20 @@ class TestSearchCommandMocked:
         assert warning["message"] == "Excerpts truncated to 500 characters"
         assert warning["detail"] == {"max_chars_total": 500}
 
-    def test_search_api_error_json_mode(self, runner):
+    def test_search_api_error_json_mode(self, runner, mock_cli_client):
         """Should output JSON error when API fails in --json mode."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.search.side_effect = RuntimeError("API unavailable")
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.search.side_effect = RuntimeError("API unavailable")
+        result = runner.invoke(main, ["search", "test query", "--json"])
 
         assert result.exit_code == EXIT_API_ERROR
         output = json.loads(result.output)
         assert output["error"]["message"] == "API unavailable"
         assert output["error"]["type"] == "RuntimeError"
 
-    def test_search_api_error_console_mode(self, runner):
+    def test_search_api_error_console_mode(self, runner, mock_cli_client):
         """Should output formatted error when API fails in console mode."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.search.side_effect = RuntimeError("API unavailable")
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test query"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.search.side_effect = RuntimeError("API unavailable")
+        result = runner.invoke(main, ["search", "test query"])
 
         assert result.exit_code == EXIT_API_ERROR
         assert "API unavailable" in result.output
@@ -1436,27 +1463,18 @@ class TestSearchExtractV1Validation:
         assert result.exit_code != 0
         assert "20 URLs" in result.output
 
-    def test_extract_accepts_exactly_20_urls(self, runner):
+    def test_extract_accepts_exactly_20_urls(self, runner, mock_cli_client):
         """At-the-limit case should not be blocked by the check."""
         urls = [f"https://example.com/{i}" for i in range(20)]
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_result = mock.MagicMock()
-                mock_result.extract_id = "ext_20"
-                mock_result.session_id = None
-                mock_result.results = []
-                mock_result.errors = []
-                mock_result.usage = None
-                mock_result.warnings = None
-                mock_client.extract.return_value = mock_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", *urls, "--json"])
-
-                del sys.modules["parallel"]
+        mock_result = mock.MagicMock()
+        mock_result.extract_id = "ext_20"
+        mock_result.session_id = None
+        mock_result.results = []
+        mock_result.errors = []
+        mock_result.usage = None
+        mock_result.warnings = None
+        mock_cli_client.extract.return_value = mock_result
+        result = runner.invoke(main, ["extract", *urls, "--json"])
         assert result.exit_code == 0
 
     def test_extract_rejects_objective_over_5000_chars(self, runner):
@@ -1489,7 +1507,7 @@ class TestSearchExtractV1Validation:
 class TestV1ResponseFieldsSurfaced:
     """Tests that V1 response fields (session_id, usage) are surfaced in output."""
 
-    def test_search_output_includes_session_id_and_usage(self, runner):
+    def test_search_output_includes_session_id_and_usage(self, runner, mock_cli_client):
         """Search output should include session_id and usage fields when present."""
         mock_result = mock.MagicMock()
         mock_result.search_id = "search_v1"
@@ -1501,24 +1519,15 @@ class TestV1ResponseFieldsSurfaced:
         mock_result.usage = [usage_item]
         mock_result.warnings = []
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.search.return_value = mock_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["search", "test", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.search.return_value = mock_result
+        result = runner.invoke(main, ["search", "test", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.stdout)
         assert output["session_id"] == "sess_xyz"
         assert output["usage"] == [{"name": "search_basic", "count": 1}]
 
-    def test_extract_output_includes_session_id_and_usage(self, runner):
+    def test_extract_output_includes_session_id_and_usage(self, runner, mock_cli_client):
         """Extract output should include session_id and usage fields when present."""
         mock_result = mock.MagicMock()
         mock_result.extract_id = "ext_v1"
@@ -1537,17 +1546,8 @@ class TestV1ResponseFieldsSurfaced:
         mock_result.usage = [usage_item]
         mock_result.warnings = None
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.extract.return_value = mock_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.extract.return_value = mock_result
+        result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.stdout)
@@ -1575,22 +1575,13 @@ class TestSearchDeprecationWarnings:
             ("agentic", "advanced"),
         ],
     )
-    def test_deprecated_modes_emit_warning_to_stderr(self, runner, deprecated_mode, expected_new):
+    def test_deprecated_modes_emit_warning_to_stderr(self, runner, mock_cli_client, deprecated_mode, expected_new):
         """Should warn on deprecated mode values and translate them."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                self._setup_mock_search(mock_client)
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(
-                    main,
-                    ["search", "test", "--mode", deprecated_mode, "--json"],
-                )
-
-                del sys.modules["parallel"]
+        self._setup_mock_search(mock_cli_client)
+        result = runner.invoke(
+            main,
+            ["search", "test", "--mode", deprecated_mode, "--json"],
+        )
 
         assert result.exit_code == 0
         assert "[deprecated]" in result.stderr
@@ -1599,26 +1590,17 @@ class TestSearchDeprecationWarnings:
         # JSON stdout must remain clean
         json.loads(result.stdout)
         # SDK call uses translated mode
-        call_kwargs = mock_client.search.call_args.kwargs
+        call_kwargs = mock_cli_client.search.call_args.kwargs
         assert call_kwargs["mode"] == expected_new
 
     @pytest.mark.parametrize("new_mode", ["basic", "advanced"])
-    def test_new_modes_do_not_emit_warning(self, runner, new_mode):
+    def test_new_modes_do_not_emit_warning(self, runner, mock_cli_client, new_mode):
         """Should not warn when V1-native mode values are used."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                self._setup_mock_search(mock_client)
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(
-                    main,
-                    ["search", "test", "--mode", new_mode, "--json"],
-                )
-
-                del sys.modules["parallel"]
+        self._setup_mock_search(mock_cli_client)
+        result = runner.invoke(
+            main,
+            ["search", "test", "--mode", new_mode, "--json"],
+        )
 
         assert result.exit_code == 0
         assert "[deprecated]" not in result.stderr
@@ -1643,22 +1625,13 @@ class TestExtractDeprecationWarnings:
         mock_result.warnings = None
         mock_client.extract.return_value = mock_result
 
-    def test_no_excerpts_emits_warning_and_strips_excerpts_from_output(self, runner):
+    def test_no_excerpts_emits_warning_and_strips_excerpts_from_output(self, runner, mock_cli_client):
         """--no-excerpts should warn (semantics changed) and strip excerpts client-side."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                self._setup_mock_extract(mock_client)
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(
-                    main,
-                    ["extract", "https://example.com", "--no-excerpts", "--json"],
-                )
-
-                del sys.modules["parallel"]
+        self._setup_mock_extract(mock_cli_client)
+        result = runner.invoke(
+            main,
+            ["extract", "https://example.com", "--no-excerpts", "--json"],
+        )
 
         assert result.exit_code == 0
         assert "[deprecated]" in result.stderr
@@ -1667,22 +1640,13 @@ class TestExtractDeprecationWarnings:
         # Excerpts should be stripped from the CLI output
         assert "excerpts" not in output["results"][0]
 
-    def test_no_no_excerpts_keeps_excerpts_and_no_warning(self, runner):
+    def test_no_no_excerpts_keeps_excerpts_and_no_warning(self, runner, mock_cli_client):
         """Default extract should not warn and should include excerpts."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                self._setup_mock_extract(mock_client)
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(
-                    main,
-                    ["extract", "https://example.com", "--json"],
-                )
-
-                del sys.modules["parallel"]
+        self._setup_mock_extract(mock_cli_client)
+        result = runner.invoke(
+            main,
+            ["extract", "https://example.com", "--json"],
+        )
 
         assert result.exit_code == 0
         assert "[deprecated]" not in result.stderr
@@ -1693,26 +1657,17 @@ class TestExtractDeprecationWarnings:
 class TestExtractCommandMocked:
     """Tests for the extract command with mocked Parallel SDK."""
 
-    def test_extract_api_error_json_mode(self, runner):
+    def test_extract_api_error_json_mode(self, runner, mock_cli_client):
         """Should output JSON error when extract API fails in --json mode."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.extract.side_effect = ConnectionError("Network error")
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.extract.side_effect = ConnectionError("Network error")
+        result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == EXIT_API_ERROR
         output = json.loads(result.output)
         assert output["error"]["type"] == "ConnectionError"
         assert "Network error" in output["error"]["message"]
 
-    def test_extract_successful_json_output(self, runner):
+    def test_extract_successful_json_output(self, runner, mock_cli_client):
         """Should output structured JSON for successful extraction."""
         mock_extract_result = mock.MagicMock()
         mock_extract_result.extract_id = "ext_123"
@@ -1728,17 +1683,8 @@ class TestExtractCommandMocked:
         mock_extract_result.usage = None
         mock_extract_result.warnings = None
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.extract.return_value = mock_extract_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.extract.return_value = mock_extract_result
+        result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1749,7 +1695,7 @@ class TestExtractCommandMocked:
         assert output["results"][0]["publish_date"] == "2025-01-15"
         assert output["warnings"] == []
 
-    def test_extract_warnings_serialized_in_json_output(self, runner):
+    def test_extract_warnings_serialized_in_json_output(self, runner, mock_cli_client):
         """Should serialize SDK Warning objects as dicts in JSON output."""
         mock_extract_result = mock.MagicMock()
         mock_extract_result.extract_id = "ext_456"
@@ -1769,17 +1715,8 @@ class TestExtractCommandMocked:
         mock_extract_result.usage = None
         mock_extract_result.warnings = [warning_obj]
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.extract.return_value = mock_extract_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.extract.return_value = mock_extract_result
+        result = runner.invoke(main, ["extract", "https://example.com", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -1789,7 +1726,7 @@ class TestExtractCommandMocked:
         assert warning["message"] == "Excerpts truncated"
         assert warning["detail"] == {"max_chars_total": 500}
 
-    def test_extract_errors_serialized_in_json_output(self, runner):
+    def test_extract_errors_serialized_in_json_output(self, runner, mock_cli_client):
         """Should serialize extract errors with correct API field names."""
         mock_extract_result = mock.MagicMock()
         mock_extract_result.extract_id = "ext_789"
@@ -1804,17 +1741,8 @@ class TestExtractCommandMocked:
         mock_extract_result.usage = None
         mock_extract_result.warnings = None
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch.dict("sys.modules"):
-                mock_parallel_mod = mock.MagicMock()
-                mock_client = mock.MagicMock()
-                mock_client.extract.return_value = mock_extract_result
-                mock_parallel_mod.Parallel.return_value = mock_client
-                sys.modules["parallel"] = mock_parallel_mod
-
-                result = runner.invoke(main, ["extract", "https://example.com/broken", "--json"])
-
-                del sys.modules["parallel"]
+        mock_cli_client.extract.return_value = mock_extract_result
+        result = runner.invoke(main, ["extract", "https://example.com/broken", "--json"])
 
         assert result.exit_code == 0
         output = json.loads(result.output)
@@ -2685,3 +2613,496 @@ class TestCompletion:
         with mock.patch("parallel_web_tools.cli.commands._STANDALONE_MODE", True):
             result = runner.invoke(main, ["completion", "install", "--shell", "bash"])
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# login email <addr> → magic link
+# ---------------------------------------------------------------------------
+
+
+def _device_info():
+    from parallel_web_tools.core.auth import DeviceCodeInfo
+
+    return DeviceCodeInfo(
+        device_code="dc_xyz",
+        user_code="ABCD-1234",
+        verification_uri="http://verif.example",
+        verification_uri_complete="http://verif.example?user_code=ABCD-1234",
+        expires_in=600,
+        interval=5,
+    )
+
+
+def _fake_get_api_key(info):
+    """Factory: a get_api_key stub that invokes on_device_code(info) then returns."""
+
+    def fake(force_login=False, on_device_code=None, login_hint=None, **_):
+        # Match auth.get_api_key's signature loosely so both kwargs- and args-based calls work.
+        assert on_device_code is not None
+        on_device_code(info)
+        return "sk_fake"
+
+    return fake
+
+
+class TestLoginEmailCommand:
+    def test_sends_magic_link_and_skips_browser(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        mock_send.assert_called_once_with(client_id="cid_xyz", email="u@example.com", user_code="ABCD-1234")
+        mock_browser.assert_not_called()
+        assert "Magic link sent to u@example.com" in result.output
+        # Still shows the code as a fallback path.
+        assert "ABCD-1234" in result.output
+
+    def test_json_mode_reports_magic_link_sent(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "--json", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        mock_browser.assert_not_called()
+        # First line is the waiting_for_authorization payload; the trailing
+        # "authenticated" line is appended by _run_login.
+        first_line = result.output.splitlines()[0]
+        payload = json.loads(first_line)
+        assert payload["status"] == "waiting_for_authorization"
+        assert payload["magic_link_sent"] is True
+        assert payload["user_code"] == "ABCD-1234"
+
+    def test_falls_back_when_magic_link_fails(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch(
+                "parallel_web_tools.core.auth.send_magic_link",
+                side_effect=Exception("SMTP unavailable"),
+            ),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+            mock.patch(
+                "parallel_web_tools.core.auth.is_headless",
+                return_value=True,  # keep the test hermetic: don't attempt real browser open
+            ),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        # Magic-link failure path falls through to the manual-flow display.
+        assert "Could not send magic link" in result.output
+        assert "SMTP unavailable" in result.output
+        assert "ABCD-1234" in result.output
+        # Headless env: browser must not open even in the fallback path.
+        mock_browser.assert_not_called()
+
+    def test_json_mode_reports_magic_link_error(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch(
+                "parallel_web_tools.core.auth.send_magic_link",
+                side_effect=Exception("SMTP unavailable"),
+            ),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["login", "--json", "email", "u@example.com"])
+
+        assert result.exit_code == 0
+        first_line = result.output.splitlines()[0]
+        payload = json.loads(first_line)
+        assert payload["magic_link_sent"] is False
+        assert "SMTP unavailable" in payload["magic_link_error"]
+
+
+class TestLoginWithoutEmailUnchanged:
+    def test_no_email_still_opens_browser(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login"])
+
+        assert result.exit_code == 0
+        # No email → no magic-link call.
+        mock_send.assert_not_called()
+        # Browser still opens in the plain `login` flow.
+        mock_browser.assert_called_once()
+
+
+class TestLoginGoogleCommand:
+    def test_opens_browser_with_google_login_hint(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "google"])
+
+        assert result.exit_code == 0
+        # No magic-link send on google login.
+        mock_send.assert_not_called()
+        # Browser opens with the google hint.
+        mock_browser.assert_called_once()
+        opened_url = mock_browser.call_args.args[0]
+        assert "login_hint=login%3Dgoogle" in opened_url
+
+
+class TestLoginSsoCommand:
+    def test_opens_browser_with_sso_hint_and_separate_email_param(self, runner):
+        info = _device_info()
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_api_key",
+                side_effect=_fake_get_api_key(info),
+            ),
+            mock.patch("parallel_web_tools.core.auth.send_magic_link") as mock_send,
+            mock.patch("parallel_web_tools.core.auth.is_headless", return_value=False),
+            mock.patch("webbrowser.open") as mock_browser,
+        ):
+            result = runner.invoke(main, ["login", "sso", "u@example.com"])
+
+        assert result.exit_code == 0
+        # SSO still uses browser-based auth, no magic link.
+        mock_send.assert_not_called()
+        mock_browser.assert_called_once()
+        opened_url = mock_browser.call_args.args[0]
+        # URL-encoded login=sso (no comma-email inside the hint).
+        assert "login_hint=login%3Dsso" in opened_url
+        # Email is a separate top-level query param.
+        assert "email=u%40example.com" in opened_url
+        # And the old bundled form must not leak through.
+        assert "login%3Dsso%2Ce" not in opened_url
+
+
+class TestBuildLoginHint:
+    def test_email_hint_does_not_include_email(self):
+        # Email travels as a separate `email=…` query param via _login_extra_params.
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint("email", "u@example.com") == "login=email"
+
+    def test_login_extra_params_carries_email_for_email_and_sso(self):
+        from parallel_web_tools.cli.commands import _login_extra_params
+
+        assert _login_extra_params("email", "u@example.com") == {"email": "u@example.com"}
+        assert _login_extra_params("sso", "u@example.com") == {"email": "u@example.com"}
+        # google / plain carry no identity → no extra param.
+        assert _login_extra_params("google", None) is None
+        assert _login_extra_params(None, None) is None
+
+    def test_google_ignores_email(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint("google", None) == "login=google"
+
+    def test_sso_hint_does_not_include_email(self):
+        # SSO email travels as a separate `email=…` query param (see _login_extra_params),
+        # NOT embedded in the hint value.
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint("sso", "u@example.com") == "login=sso"
+
+    def test_none_method_returns_none(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        assert _build_login_hint(None, None) is None
+        assert _build_login_hint(None, "u@example.com") is None
+
+    def test_sso_without_email_errors(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        with pytest.raises(ValueError, match="requires an email"):
+            _build_login_hint("sso", None)
+
+    def test_email_without_email_errors(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        with pytest.raises(ValueError, match="requires an email"):
+            _build_login_hint("email", None)
+
+    def test_unknown_method_errors(self):
+        from parallel_web_tools.cli.commands import _build_login_hint
+
+        with pytest.raises(ValueError, match="Unknown login_method"):
+            _build_login_hint("saml", None)
+
+
+# ---------------------------------------------------------------------------
+# balance get / balance add
+# ---------------------------------------------------------------------------
+
+
+def _balance_model(**overrides):
+    """Build a BalanceResponse pydantic instance for CLI-level mocking."""
+    from parallel_web_tools.core.service_types import BalanceResponse
+
+    base = BalanceResponse(
+        org_id="org_abc",
+        credit_balance_cents=1500,
+        pending_debit_balance_cents=0,
+        will_invoice=False,
+    )
+    return base.model_copy(update=overrides) if overrides else base
+
+
+class TestBalanceGroup:
+    def test_group_help_lists_subcommands(self, runner):
+        result = runner.invoke(main, ["balance", "--help"])
+        assert result.exit_code == 0
+        assert "get" in result.output
+        assert "add" in result.output
+
+    def test_get_help(self, runner):
+        result = runner.invoke(main, ["balance", "get", "--help"])
+        assert result.exit_code == 0
+        assert "credit balance" in result.output.lower()
+
+    def test_add_help(self, runner):
+        result = runner.invoke(main, ["balance", "add", "--help"])
+        assert result.exit_code == 0
+        assert "AMOUNT_CENTS" in result.output
+        assert "--idempotency-key" in result.output
+
+
+class TestBalanceGetCommand:
+    def test_json_output(self, runner):
+        balance = _balance_model(credit_balance_cents=1234, pending_debit_balance_cents=56)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", return_value=balance) as mock_get,
+        ):
+            result = runner.invoke(main, ["balance", "--json", "get"])
+
+        assert result.exit_code == 0
+        mock_get.assert_called_once_with("atk")
+        output = json.loads(result.output)
+        assert output["org_id"] == "org_abc"
+        assert output["credit_balance_cents"] == 1234
+        assert output["pending_debit_balance_cents"] == 56
+
+    def test_console_output(self, runner):
+        balance = _balance_model(credit_balance_cents=250)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", return_value=balance),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+
+        assert result.exit_code == 0
+        assert "org_abc" in result.output
+        # $2.50 with a cents-in-parens suffix.
+        assert "$2.50" in result.output
+        assert "250" in result.output
+
+    def test_will_invoice_flag_shown(self, runner):
+        balance = _balance_model(credit_balance_cents=0, will_invoice=True)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", return_value=balance),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+        assert result.exit_code == 0
+        assert "invoice" in result.output.lower()
+
+    def test_reauth_required_exits_auth_error(self, runner):
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        with mock.patch(
+            "parallel_web_tools.cli.commands.get_control_api_access_token",
+            side_effect=ReauthenticationRequired("not logged in"),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+
+        assert result.exit_code == EXIT_AUTH_ERROR
+        assert "Authentication required" in result.output
+
+    def test_service_api_error_exits_api_error(self, runner):
+        from parallel_web_tools.core.service import ServiceApiError
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.get_balance", side_effect=ServiceApiError("boom")),
+        ):
+            result = runner.invoke(main, ["balance", "get"])
+
+        assert result.exit_code == EXIT_API_ERROR
+        assert "Balance API error" in result.output
+
+
+class TestBalanceAddCommand:
+    def test_json_output_derives_idempotency_key(self, runner):
+        balance = _balance_model(credit_balance_cents=1600)
+        captured_key: dict = {}
+
+        def fake_add(token, amount_cents, idempotency_key):
+            captured_key["key"] = idempotency_key
+            return balance
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=fake_add),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.cli.commands.time.time", return_value=1_700_000_123.0),
+        ):
+            result = runner.invoke(main, ["balance", "--json", "add", "100"])
+
+        assert result.exit_code == 0
+        # five_min_bucket = floor(1_700_000_123 / 300) * 300 = 1_700_000_100
+        assert captured_key["key"] == "cid_xyz-100-1700000100"
+        output = json.loads(result.output)
+        assert output["credit_balance_cents"] == 1600
+
+    def test_console_output_shows_charge_and_new_balance(self, runner):
+        balance = _balance_model(credit_balance_cents=1600)
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "100"])
+
+        assert result.exit_code == 0
+        assert "$1.00" in result.output  # charge amount
+        assert "$16.00" in result.output  # new balance
+
+    def test_explicit_idempotency_key_overrides_derivation(self, runner):
+        balance = _balance_model()
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id") as mock_ensure,
+        ):
+            result = runner.invoke(main, ["balance", "add", "100", "--idempotency-key", "fixed-key"])
+
+        assert result.exit_code == 0
+        # ensure_client_id must NOT be called when an explicit key was provided.
+        mock_ensure.assert_not_called()
+        assert mock_add.call_args.args[2] == "fixed-key"
+
+    def test_same_bucket_produces_same_key(self, runner):
+        """Two invocations inside the same 5-min bucket must derive the same key."""
+        keys: list[str] = []
+
+        def capture_key(token, amount_cents, idempotency_key):
+            keys.append(idempotency_key)
+            return _balance_model()
+
+        # 1_700_000_100 is 300-aligned (5_666_667 * 300). Both timestamps fall
+        # inside the [1_700_000_100, 1_700_000_400) bucket.
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=capture_key),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.cli.commands.time.time", side_effect=[1_700_000_100, 1_700_000_399]),
+        ):
+            assert runner.invoke(main, ["balance", "add", "100"]).exit_code == 0
+            assert runner.invoke(main, ["balance", "add", "100"]).exit_code == 0
+
+        assert keys[0] == keys[1] == "cid_xyz-100-1700000100"
+
+    def test_next_bucket_produces_different_key(self, runner):
+        keys: list[str] = []
+
+        def capture_key(token, amount_cents, idempotency_key):
+            keys.append(idempotency_key)
+            return _balance_model()
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=capture_key),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+            mock.patch("parallel_web_tools.cli.commands.time.time", side_effect=[1_700_000_100, 1_700_000_400]),
+        ):
+            runner.invoke(main, ["balance", "add", "100"])
+            runner.invoke(main, ["balance", "add", "100"])
+
+        assert keys[0] == "cid_xyz-100-1700000100"
+        assert keys[1] == "cid_xyz-100-1700000400"
+
+    def test_zero_amount_passes_through_to_service(self, runner):
+        balance = _balance_model()
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "0"])
+
+        assert result.exit_code == 0
+        assert mock_add.call_args.args[1] == 0
+
+    def test_large_amount_passes_through_to_service(self, runner):
+        balance = _balance_model()
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", return_value=balance) as mock_add,
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "1001"])
+
+        assert result.exit_code == 0
+        assert mock_add.call_args.args[1] == 1001
+
+    def test_reauth_required_exits_auth_error(self, runner):
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        with (
+            mock.patch(
+                "parallel_web_tools.cli.commands.get_control_api_access_token",
+                side_effect=ReauthenticationRequired("not logged in"),
+            ),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "100"])
+
+        assert result.exit_code == EXIT_AUTH_ERROR
+        assert "Authentication required" in result.output
+
+    def test_service_api_error_exits_api_error(self, runner):
+        from parallel_web_tools.core.service import ServiceApiError
+
+        with (
+            mock.patch("parallel_web_tools.cli.commands.get_control_api_access_token", return_value="atk"),
+            mock.patch("parallel_web_tools.core.service.add_balance", side_effect=ServiceApiError("card declined")),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_xyz"),
+        ):
+            result = runner.invoke(main, ["balance", "add", "100"])
+
+        assert result.exit_code == EXIT_API_ERROR
+        assert "Balance API error" in result.output
