@@ -34,7 +34,6 @@ from parallel_web_tools.core.auth import (
     request_device_code,
     resolve_api_key,
     revoke_token,
-    send_magic_link,
 )
 
 # ---------------------------------------------------------------------------
@@ -279,50 +278,6 @@ class TestEnsureClientId:
         assert creds is None or creds.client_id is None
         err = capsys.readouterr().err
         assert "client registration failed" in err
-
-
-# ---------------------------------------------------------------------------
-# send_magic_link
-# ---------------------------------------------------------------------------
-
-
-class TestSendMagicLink:
-    def test_happy_path(self):
-        with _patch_auth_urlopen({"ok": True}):
-            # No return value; success = no exception.
-            send_magic_link(client_id="cid_xyz", email="u@example.com", user_code="ABCD-1234")
-
-    def test_posts_expected_payload(self):
-        captured: dict = {}
-        with _patch_auth_urlopen({"ok": True}, capture=captured):
-            send_magic_link(client_id="cid_xyz", email="u@example.com", user_code="ABCD-1234")
-
-        assert captured["method"] == "POST"
-        assert captured["url"].endswith("/api/auth/send-magic-link")
-        body = json.loads(captured["body"])
-        assert body == {
-            "client_id": "cid_xyz",
-            "email": "u@example.com",
-            "emailType": "deviceCode",
-            "queryParams": {"user_code": "ABCD-1234"},
-        }
-        assert any(v == "application/json" for v in captured["headers"].values())
-
-    def test_custom_email_type(self):
-        captured: dict = {}
-        with _patch_auth_urlopen({"ok": True}, capture=captured):
-            send_magic_link(
-                client_id="cid_xyz",
-                email="u@example.com",
-                user_code="ABCD-1234",
-                email_type="customType",
-            )
-        assert json.loads(captured["body"])["emailType"] == "customType"
-
-    def test_raises_on_http_error(self):
-        with _patch_auth_urlopen(_http_error(422, {"error": "invalid_email"})):
-            with pytest.raises(Exception, match="Magic link send failed: 422"):
-                send_magic_link(client_id="cid_xyz", email="bad@x", user_code="ABCD-1234")
 
 
 # ---------------------------------------------------------------------------

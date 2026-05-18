@@ -183,35 +183,6 @@ def register_client(client_name: str = "parallel-cli") -> str:
     return data["client_id"]
 
 
-def send_magic_link(client_id: str, email: str, user_code: str, email_type: str = "deviceCode") -> None:
-    """Ask the platform to email a magic link that auto-authorizes ``user_code``.
-
-    POSTs to ``/api/auth/send-magic-link`` with:
-
-    - ``client_id`` — the registered CLI client.
-    - ``email`` — recipient.
-    - ``emailType`` — ``"deviceCode"`` routes the template that confirms a
-      pending device-flow user code.
-    - ``queryParams.user_code`` — echoed into the magic-link URL so the
-      landing page can pre-confirm the CLI's device code in one click.
-
-    Raises ``Exception`` on any HTTP error so the caller can fall back to
-    the manual URL-and-code flow.
-    """
-    url = f"{get_platform_url()}/api/auth/send-magic-link"
-    body = {
-        "client_id": client_id,
-        "email": email,
-        "emailType": email_type,
-        "queryParams": {"user_code": user_code},
-    }
-    try:
-        _post_json(url, body)
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode()
-        raise Exception(f"Magic link send failed: {e.code} - {err_body}") from e
-
-
 def ensure_client_id() -> str:
     """Return a registered ``client_id``, registering if none is stored yet.
 
