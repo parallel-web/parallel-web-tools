@@ -864,6 +864,57 @@ class TestHandleError:
 
         assert exc_info.value.code == EXIT_API_ERROR
 
+    def test_handle_error_legacy_account_api_failure(self, capsys, tmp_path, monkeypatch):
+        """ReauthenticationRequired on a legacy-migrated creds file should explain the API split."""
+        from parallel_web_tools.core import credentials
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        auth_file = tmp_path / "auth.json"
+        monkeypatch.setattr(credentials, "CREDENTIALS_FILE", auth_file)
+        monkeypatch.setattr(credentials, "AUTH_FILE", auth_file)
+        credentials.save(
+            credentials.Credentials(
+                selected_org_id=credentials.LEGACY_ORG_ID,
+                orgs={credentials.LEGACY_ORG_ID: credentials.OrgCredentials(api_key="old-v0-key")},
+            )
+        )
+
+        error = ReauthenticationRequired("no refresh token available; run 'parallel-cli login'")
+
+        with pytest.raises(SystemExit) as exc_info:
+            _handle_error(error, output_json=True)
+
+        assert exc_info.value.code == EXIT_AUTH_ERROR
+        output = json.loads(capsys.readouterr().out)
+        assert "Account API credentials" in output["error"]["message"]
+        assert "parallel-cli login" in output["error"]["message"]
+
+    def test_handle_error_legacy_message_skipped_when_env_var_set(self, capsys, tmp_path, monkeypatch):
+        """Env-var keys override stored creds, so we shouldn't blame legacy creds."""
+        from parallel_web_tools.core import credentials
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        monkeypatch.setenv("PARALLEL_API_KEY", "env-key")
+        auth_file = tmp_path / "auth.json"
+        monkeypatch.setattr(credentials, "CREDENTIALS_FILE", auth_file)
+        monkeypatch.setattr(credentials, "AUTH_FILE", auth_file)
+        credentials.save(
+            credentials.Credentials(
+                selected_org_id=credentials.LEGACY_ORG_ID,
+                orgs={credentials.LEGACY_ORG_ID: credentials.OrgCredentials(api_key="old-v0-key")},
+            )
+        )
+
+        error = ReauthenticationRequired("authorization grant has expired")
+
+        with pytest.raises(SystemExit):
+            _handle_error(error, output_json=True)
+
+        output = json.loads(capsys.readouterr().out)
+        assert "Account API credentials" not in output["error"]["message"]
+        assert "authorization grant has expired" in output["error"]["message"]
+
 
 class TestWriteJsonOutput:
     """Tests for write_json_output helper function."""
