@@ -70,7 +70,7 @@ pip install parallel-web-tools[all]
 ```
 parallel-cli
 ├── auth                    # Check authentication status
-├── login                   # OAuth login (--device for SSH/containers/CI, or use PARALLEL_API_KEY)
+├── login                   # Device OAuth login (single command)
 ├── logout                  # Remove stored credentials
 ├── search                  # Web search
 ├── extract / fetch         # Extract content from URLs
@@ -111,11 +111,8 @@ parallel-cli
 ### 1. Authenticate
 
 ```bash
-# Interactive OAuth login (opens browser)
+# Device OAuth login (shows code and opens browser)
 parallel-cli login
-
-# Device authorization flow — for SSH, containers, CI, or headless environments
-parallel-cli login --device
 
 # Or set environment variable
 export PARALLEL_API_KEY=your_api_key
