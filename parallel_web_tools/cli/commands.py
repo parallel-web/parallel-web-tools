@@ -174,6 +174,35 @@ def _extract_api_message(error: Exception) -> str:
     return str(error)
 
 
+def _legacy_credentials_in_use() -> bool:
+    """True when the active API key comes from the v0→v1 migrated ``legacy`` org.
+
+    Env-var keys win over stored creds in :func:`resolve_api_key`, so we only
+    flag legacy state when no ``PARALLEL_API_KEY`` is set — otherwise the user's
+    error has nothing to do with their on-disk credentials.
+    """
+    if os.environ.get("PARALLEL_API_KEY"):
+        return False
+    from parallel_web_tools.core import credentials
+
+    creds = credentials.load()
+    if creds is None:
+        return False
+    return creds.selected_org_id == credentials.LEGACY_ORG_ID
+
+
+def _is_legacy_account_api_failure(error: Exception) -> bool:
+    """Detect a legacy user attempting an Account API operation.
+
+    ``ReauthenticationRequired`` fires from :func:`get_control_api_access_token`
+    whenever there are no usable control-API tokens. For a v0→v1 migrated user
+    this is expected: their stored ``api_key`` works for the standard Parallel
+    API, but they never went through the device flow that mints control tokens,
+    so any Account API call fails here.
+    """
+    return isinstance(error, ReauthenticationRequired) and _legacy_credentials_in_use()
+
+
 def _handle_error(
     error: Exception,
     output_json: bool = False,
@@ -186,6 +215,13 @@ def _handle_error(
     Rich-formatted error message.
     """
     message = _extract_api_message(error)
+    if _is_legacy_account_api_failure(error):
+        message = (
+            "This operation requires Account API credentials, but your stored "
+            "credentials only authorize the standard Parallel API. Re-run "
+            "'parallel-cli login' to authenticate against the Account API."
+        )
+        exit_code = EXIT_AUTH_ERROR
     if output_json:
         error_data = {"error": {"message": message, "type": type(error).__name__}}
         print(json.dumps(error_data, indent=2))
