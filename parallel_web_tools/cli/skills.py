@@ -35,19 +35,19 @@ def create_skills_group(
     def skills() -> None:
         """Install and manage Parallel agent skills.
 
-        Set GH_TOKEN for higher GitHub API rate limits when fetching skills.
+        Downloads come from skills.parallel.ai. Set PARALLEL_SKILLS_INDEX_URL to use a custom index.
         """
         pass
 
     @skills.command(name="list")
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_list(output_json: bool) -> None:
-        """List available Parallel skills from GitHub."""
-        from parallel_web_tools.core.skills import SkillsError, get_skills_repo_ref, list_remote_skills
+        """List available Parallel skills from skills.parallel.ai."""
+        from parallel_web_tools.core.skills import SkillsError, get_remote_skills_channel, list_remote_skills
 
         try:
-            ref = get_skills_repo_ref()
-            skill_names = list_remote_skills(ref=ref)
+            ref = get_remote_skills_channel()
+            skill_names = list_remote_skills()
         except SkillsError as e:
             handle_error(e, output_json=output_json, exit_code=exit_api_error, prefix="Skills list failed")
         except Exception as e:
@@ -76,7 +76,7 @@ def create_skills_group(
     )
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_install(project: bool, skill_names: tuple[str, ...], output_json: bool) -> None:
-        """Install Parallel skills from GitHub.
+        """Install Parallel skills from skills.parallel.ai.
 
         When --skill is provided, the managed install set is replaced with exactly
         the listed skills.
@@ -85,7 +85,6 @@ def create_skills_group(
             SkillsError,
             SkillsInputError,
             SkillsInstallLocationError,
-            get_skills_repo_ref,
             install_skills,
             resolve_install_dir,
         )
@@ -95,7 +94,6 @@ def create_skills_group(
             result = install_skills(
                 install_dir=install_dir,
                 selected_skills=list(skill_names) or None,
-                ref=get_skills_repo_ref(),
             )
         except SkillsInstallLocationError as e:
             handle_error(e, output_json=output_json, exit_code=exit_bad_input, prefix="Skills install failed")
@@ -170,7 +168,6 @@ def create_skills_group(
             SkillsError,
             SkillsInputError,
             SkillsInstallLocationError,
-            get_skills_repo_ref,
             reinstall_skills,
             resolve_install_dir,
         )
@@ -180,7 +177,6 @@ def create_skills_group(
             result = reinstall_skills(
                 install_dir=install_dir,
                 selected_skills=list(skill_names) or None,
-                ref=get_skills_repo_ref(),
             )
         except SkillsInstallLocationError as e:
             handle_error(e, output_json=output_json, exit_code=exit_bad_input, prefix="Skills reinstall failed")
