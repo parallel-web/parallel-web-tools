@@ -1,8 +1,6 @@
 """Tests for skills helper module."""
 
-import io
 import json
-import zipfile
 from contextlib import contextmanager
 
 import pytest
@@ -24,18 +22,14 @@ class TestRepoRef:
         assert skills.get_skills_repo_ref() == skills.DEFAULT_SKILLS_REPO_REF
 
 
-class TestGithubHeaders:
-    def test_uses_expected_github_headers(self, monkeypatch):
-        monkeypatch.delenv(skills.GITHUB_TOKEN_ENV, raising=False)
-        headers = skills._github_headers()
-        assert headers["Accept"] == "application/vnd.github+json"
-        assert headers["X-GitHub-Api-Version"] == "2022-11-28"
-        assert "Authorization" not in headers
+class TestIndexUrl:
+    def test_uses_default_index_url(self, monkeypatch):
+        monkeypatch.delenv(skills.SKILLS_INDEX_URL_ENV, raising=False)
+        assert skills.get_skills_index_url() == skills.DEFAULT_SKILLS_INDEX_URL
 
-    def test_uses_gh_token_when_present(self, monkeypatch):
-        monkeypatch.setenv(skills.GITHUB_TOKEN_ENV, "ghp_test123")
-        headers = skills._github_headers()
-        assert headers["Authorization"] == "Bearer ghp_test123"
+    def test_uses_env_index_url_override(self, monkeypatch):
+        monkeypatch.setenv(skills.SKILLS_INDEX_URL_ENV, "https://example.com/index.json")
+        assert skills.get_skills_index_url() == "https://example.com/index.json"
 
 
 class TestResolveInstallDir:
@@ -65,57 +59,68 @@ class TestResolveInstallDir:
             skills.resolve_install_dir(project=True, start=start)
 
 
-def _make_repo_zip() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as zf:
-        zf.writestr("parallel-web-parallel-agent-skills-abc123/skills/parallel-web-search/SKILL.md", "search")
-        zf.writestr("parallel-web-parallel-agent-skills-abc123/skills/parallel-web-extract/SKILL.md", "extract")
-    return buffer.getvalue()
+def _make_index() -> dict:
+    return {
+        "channel": "main",
+        "skills": [
+            {
+                "name": "parallel-web-search",
+                "skill_url": "https://skills.parallel.ai/parallel-web-search/SKILL.md",
+            },
+            {
+                "name": "parallel-web-extract",
+                "skill_url": "https://skills.parallel.ai/parallel-web-extract/SKILL.md",
+            },
+        ],
+    }
 
 
-class TestArchiveInstall:
-    def test_extract_repo_archive_returns_repo_root(self, tmp_path):
-        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path)
-        assert repo_root.name == "parallel-web-parallel-agent-skills-abc123"
-        assert (repo_root / "skills" / "parallel-web-search" / "SKILL.md").read_text() == "search"
+@contextmanager
+def _fake_skills_client():
+    yield object()
 
-    def test_list_remote_skills_from_archive(self, monkeypatch, tmp_path):
-        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path)
 
-        @contextmanager
-        def fake_downloaded_repo_root(ref: str):
-            assert ref == "feature/test-branch"
-            yield repo_root
+class TestCdnInstall:
+    def test_list_remote_skills_from_index(self, monkeypatch):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
 
-        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+        assert skills.list_remote_skills("main") == ["parallel-web-extract", "parallel-web-search"]
+
+    def test_list_remote_skills_ignores_ref_override(self, monkeypatch):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+
         assert skills.list_remote_skills("feature/test-branch") == ["parallel-web-extract", "parallel-web-search"]
 
-    def test_install_skills_from_archive(self, monkeypatch, tmp_path):
-        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path / "archive")
+    def test_install_skills_from_index(self, monkeypatch, tmp_path):
         install_dir = tmp_path / "install"
 
-        @contextmanager
-        def fake_downloaded_repo_root(ref: str):
-            assert ref == "main"
-            yield repo_root
+        def fake_download_skill_markdown(client, skill_name: str, skill_url: str) -> bytes:
+            assert skill_name == "parallel-web-search"
+            assert skill_url.endswith("/parallel-web-search/SKILL.md")
+            return b"search"
 
-        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_markdown", fake_download_skill_markdown)
 
         result = skills.install_skills(install_dir, selected_skills=["parallel-web-search"], ref="main")
 
+        assert result["ref"] == "main"
         assert result["installed_skills"] == ["parallel-web-search"]
         assert (install_dir / "parallel-web-search" / "SKILL.md").read_text() == "search"
         assert not (install_dir / "parallel-web-extract").exists()
 
     def test_install_subset_removes_previously_managed_skills(self, monkeypatch, tmp_path):
-        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path / "archive")
         install_dir = tmp_path / "install"
 
-        @contextmanager
-        def fake_downloaded_repo_root(ref: str):
-            yield repo_root
+        def fake_download_skill_markdown(client, skill_name: str, skill_url: str) -> bytes:
+            return skill_name.encode()
 
-        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_markdown", fake_download_skill_markdown)
 
         skills.install_skills(install_dir, ref="main")
         skills.install_skills(install_dir, selected_skills=["parallel-web-search"], ref="main")
@@ -129,16 +134,30 @@ class TestArchiveInstall:
         assert not any(path.name.startswith("parallel-web-") for path in install_dir.iterdir())
 
     def test_install_skills_rejects_unknown_names(self, monkeypatch, tmp_path):
-        repo_root = skills._extract_repo_archive(_make_repo_zip(), tmp_path / "archive")
-
-        @contextmanager
-        def fake_downloaded_repo_root(ref: str):
-            yield repo_root
-
-        monkeypatch.setattr(skills, "_downloaded_repo_root", fake_downloaded_repo_root)
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
 
         with pytest.raises(skills.SkillsInputError, match="Unknown skills requested"):
             skills.install_skills(tmp_path / "install", selected_skills=["does-not-exist"], ref="main")
+
+    def test_install_skills_ignores_ref_override(self, monkeypatch, tmp_path):
+        install_dir = tmp_path / "install"
+
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_markdown", lambda client, skill_name, skill_url: b"search")
+
+        result = skills.install_skills(install_dir, selected_skills=["parallel-web-search"], ref="feature/test-branch")
+
+        assert result["ref"] == "main"
+
+
+class TestRemoteChannel:
+    def test_get_remote_skills_channel(self, monkeypatch):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+
+        assert skills.get_remote_skills_channel() == "main"
 
 
 class TestUninstall:

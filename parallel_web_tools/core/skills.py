@@ -2,26 +2,21 @@
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import shutil
-import tempfile
 import time
-import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import quote
+from typing import Any
 
 import httpx
 
-SKILLS_REPO_OWNER = "parallel-web"
-SKILLS_REPO_NAME = "parallel-agent-skills"
-SKILLS_REPO_SKILLS_PATH = "skills"
+DEFAULT_SKILLS_INDEX_URL = "https://skills.parallel.ai/index.json"
+SKILLS_INDEX_URL_ENV = "PARALLEL_SKILLS_INDEX_URL"
 DEFAULT_SKILLS_REPO_REF = "main"
 SKILLS_REPO_REF_ENV = "PARALLEL_SKILLS_REPO_REF"
-GITHUB_TOKEN_ENV = "GH_TOKEN"
 GLOBAL_SKILLS_DIR_ENV = "PARALLEL_SKILLS_GLOBAL_DIR"
 
 PROJECT_ROOT_MARKERS = (".git", "pyproject.toml", "package.json")
@@ -45,11 +40,23 @@ class SkillsInputError(SkillsError):
 
 
 def get_skills_repo_ref() -> str:
-    """Return repository ref used for skill downloads."""
+    """Return the legacy requested skills channel/ref override.
+
+    CDN-backed installs ignore this value and always use the channel advertised by
+    the remote index, but we keep the helper for backwards compatibility.
+    """
     configured = os.environ.get(SKILLS_REPO_REF_ENV)
     if configured and configured.strip():
         return configured.strip()
     return DEFAULT_SKILLS_REPO_REF
+
+
+def get_skills_index_url() -> str:
+    """Return the CDN index URL used for skills downloads."""
+    configured = os.environ.get(SKILLS_INDEX_URL_ENV)
+    if configured and configured.strip():
+        return configured.strip()
+    return DEFAULT_SKILLS_INDEX_URL
 
 
 def get_global_skills_dir() -> Path:
@@ -84,108 +91,92 @@ def resolve_install_dir(project: bool, start: Path | None = None) -> Path:
     return root / ".agents" / "skills"
 
 
-def _github_archive_url(ref: str) -> str:
-    encoded_ref = quote(ref, safe="")
-    return f"https://api.github.com/repos/{SKILLS_REPO_OWNER}/{SKILLS_REPO_NAME}/zipball/{encoded_ref}"
+@contextmanager
+def _skills_client() -> Iterator[httpx.Client]:
+    with httpx.Client(timeout=30, follow_redirects=True) as client:
+        yield client
 
 
-def _github_headers() -> dict[str, str]:
-    """Build GitHub API headers for skills archive downloads."""
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    token = os.environ.get(GITHUB_TOKEN_ENV)
-    if token and token.strip():
-        headers["Authorization"] = f"Bearer {token.strip()}"
-    return headers
+def _fetch_json(client: httpx.Client, url: str, description: str) -> dict[str, Any]:
+    response = client.get(url)
+    if response.status_code >= 400:
+        raise SkillsDownloadError(f"Failed to download {description} from {url}: HTTP {response.status_code}")
+
+    try:
+        data = response.json()
+    except ValueError as e:
+        raise SkillsDownloadError(f"Failed to parse {description} from {url} as JSON") from e
+
+    if not isinstance(data, dict):
+        raise SkillsDownloadError(f"Expected {description} at {url} to be a JSON object")
+    return data
 
 
-def _download_repo_archive(client: httpx.Client, ref: str) -> bytes:
-    # TODO: add retry/backoff for transient GitHub API failures (429/5xx).
-    response = client.get(_github_archive_url(ref))
+def _fetch_skills_index(client: httpx.Client) -> dict[str, Any]:
+    return _fetch_json(client, get_skills_index_url(), "skills index")
+
+
+def _index_channel(index: dict[str, Any]) -> str:
+    channel = index.get("channel")
+    if isinstance(channel, str) and channel.strip():
+        return channel.strip()
+    return DEFAULT_SKILLS_REPO_REF
+
+
+def _skills_from_index(index: dict[str, Any]) -> dict[str, dict[str, str]]:
+    raw_skills = index.get("skills")
+    if not isinstance(raw_skills, list):
+        raise SkillsDownloadError("Skills index is missing a valid 'skills' list")
+
+    parsed: dict[str, dict[str, str]] = {}
+    for raw_skill in raw_skills:
+        if not isinstance(raw_skill, dict):
+            raise SkillsDownloadError("Skills index contained an invalid skill entry")
+
+        name = raw_skill.get("name")
+        skill_url = raw_skill.get("skill_url")
+        if not isinstance(name, str) or not name.strip():
+            raise SkillsDownloadError("Skills index contained a skill with an invalid name")
+        if not isinstance(skill_url, str) or not skill_url.strip():
+            raise SkillsDownloadError(f"Skills index entry '{name}' is missing a valid skill_url")
+
+        parsed[name.strip()] = {
+            "name": name.strip(),
+            "skill_url": skill_url.strip(),
+        }
+
+    return parsed
+
+
+def _list_skills_from_index(index: dict[str, Any]) -> list[str]:
+    return sorted(_skills_from_index(index))
+
+
+def _download_skill_markdown(client: httpx.Client, skill_name: str, skill_url: str) -> bytes:
+    response = client.get(skill_url)
     if response.status_code >= 400:
         raise SkillsDownloadError(
-            f"Failed to download skills archive at ref '{ref}' from "
-            f"{SKILLS_REPO_OWNER}/{SKILLS_REPO_NAME}: HTTP {response.status_code}"
+            f"Failed to download skill '{skill_name}' from {skill_url}: HTTP {response.status_code}"
         )
     return response.content
 
 
-def _extract_repo_archive(archive_bytes: bytes, dest_dir: Path) -> Path:
-    """Extract a GitHub zipball into dest_dir and return the archive root."""
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
-            root_name: str | None = None
-
-            for member in zf.infolist():
-                member_path = Path(member.filename)
-                parts = member_path.parts
-                if not parts:
-                    continue
-                if parts[0] in ("", "/"):
-                    raise SkillsDownloadError("Invalid archive entry path")
-                if any(part == ".." for part in parts):
-                    raise SkillsDownloadError("Archive contains unsafe path traversal entry")
-                if root_name is None:
-                    root_name = parts[0]
-
-                target = dest_dir / member_path
-                target_resolved = target.resolve()
-                dest_resolved = dest_dir.resolve()
-                if dest_resolved not in (target_resolved, *target_resolved.parents):
-                    raise SkillsDownloadError("Archive extraction would escape destination directory")
-
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-    except zipfile.BadZipFile as e:
-        raise SkillsDownloadError("Failed to read downloaded skills archive") from e
-
-    if not root_name:
-        raise SkillsDownloadError("Downloaded skills archive was empty")
-
-    root = dest_dir / root_name
-    if not root.exists() or not root.is_dir():
-        raise SkillsDownloadError("Downloaded skills archive had no repository root directory")
-    return root
-
-
-@contextmanager
-def _downloaded_repo_root(ref: str) -> Iterator[Path]:
-    with httpx.Client(timeout=30, follow_redirects=True, headers=_github_headers()) as client:
-        archive_bytes = _download_repo_archive(client, ref)
-
-    with tempfile.TemporaryDirectory(prefix="parallel-skills-") as tmpdir:
-        repo_root = _extract_repo_archive(archive_bytes, Path(tmpdir))
-        yield repo_root
-
-
-def _skills_root(repo_root: Path) -> Path:
-    skills_root = repo_root / SKILLS_REPO_SKILLS_PATH
-    if not skills_root.exists() or not skills_root.is_dir():
-        raise SkillsDownloadError(
-            f"Downloaded repository does not contain a '{SKILLS_REPO_SKILLS_PATH}/' directory at the requested ref"
-        )
-    return skills_root
-
-
-def _list_skills_from_repo_root(repo_root: Path) -> list[str]:
-    skills_root = _skills_root(repo_root)
-    return sorted(path.name for path in skills_root.iterdir() if path.is_dir())
+def get_remote_skills_channel() -> str:
+    """Return the channel advertised by the remote CDN index."""
+    with _skills_client() as client:
+        index = _fetch_skills_index(client)
+    return _index_channel(index)
 
 
 def list_remote_skills(ref: str | None = None) -> list[str]:
-    """Return available skill directory names from the remote repository."""
-    resolved_ref = ref or get_skills_repo_ref()
-    with _downloaded_repo_root(resolved_ref) as repo_root:
-        return _list_skills_from_repo_root(repo_root)
+    """Return available skill names from the CDN index.
+
+    The ref argument is ignored for CDN-backed installs.
+    """
+    del ref
+    with _skills_client() as client:
+        index = _fetch_skills_index(client)
+    return _list_skills_from_index(index)
 
 
 def _manifest_path(install_dir: Path) -> Path:
@@ -194,8 +185,7 @@ def _manifest_path(install_dir: Path) -> Path:
 
 def _write_manifest(install_dir: Path, ref: str, installed_skills: list[str]) -> None:
     data = {
-        "repo": f"{SKILLS_REPO_OWNER}/{SKILLS_REPO_NAME}",
-        "skills_path": SKILLS_REPO_SKILLS_PATH,
+        "source": get_skills_index_url(),
         "ref": ref,
         "installed_skills": sorted(installed_skills),
         "installed_at": int(time.time()),
@@ -226,13 +216,15 @@ def install_skills(
     Only skills previously managed by parallel-cli are reconciled. Unmanaged skill
     directories are left untouched.
     """
-    resolved_ref = ref or get_skills_repo_ref()
+    del ref
 
-    with _downloaded_repo_root(resolved_ref) as repo_root:
-        skills_root = _skills_root(repo_root)
-        available = _list_skills_from_repo_root(repo_root)
+    with _skills_client() as client:
+        index = _fetch_skills_index(client)
+        resolved_ref = _index_channel(index)
+        available_skills = _skills_from_index(index)
+        available = sorted(available_skills)
         requested = sorted(set(selected_skills or available))
-        missing = sorted(name for name in requested if name not in available)
+        missing = sorted(name for name in requested if name not in available_skills)
         if missing:
             raise SkillsInputError(
                 f"Unknown skills requested: {', '.join(missing)}. Available skills: {', '.join(available)}"
@@ -256,7 +248,9 @@ def install_skills(
             skill_dir = install_dir / skill_name
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
-            shutil.copytree(skills_root / skill_name, skill_dir)
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            skill_bytes = _download_skill_markdown(client, skill_name, available_skills[skill_name]["skill_url"])
+            (skill_dir / "SKILL.md").write_bytes(skill_bytes)
 
     _write_manifest(install_dir, resolved_ref, requested)
     return {

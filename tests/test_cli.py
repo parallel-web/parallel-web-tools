@@ -2447,12 +2447,12 @@ class TestEnrichRunJsonOutput:
 
 
 class TestSkillsCommands:
-    def test_skills_help_mentions_github_token_and_replacement_behavior(self, runner):
+    def test_skills_help_mentions_cdn_and_replacement_behavior(self, runner):
         result = runner.invoke(main, ["skills", "--help"])
 
         assert result.exit_code == 0
-        assert "GH_TOKEN" in result.output
-        assert "GitHub API rate limits" in result.output
+        assert "skills.parallel.ai" in result.output
+        assert "PARALLEL_SKILLS_INDEX_URL" in result.output
 
         result = runner.invoke(main, ["skills", "install", "--help"])
 
@@ -2462,7 +2462,7 @@ class TestSkillsCommands:
 
     def test_skills_list_json(self, runner):
         with (
-            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
+            mock.patch("parallel_web_tools.core.skills.get_remote_skills_channel", return_value="main"),
             mock.patch(
                 "parallel_web_tools.core.skills.list_remote_skills",
                 return_value=["parallel-web-extract", "parallel-web-search"],
@@ -2483,7 +2483,6 @@ class TestSkillsCommands:
             mock.patch(
                 "parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"
             ) as mock_dir,
-            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
             mock.patch(
                 "parallel_web_tools.core.skills.install_skills",
                 return_value={
@@ -2507,12 +2506,11 @@ class TestSkillsCommands:
             mock.patch(
                 "parallel_web_tools.core.skills.resolve_install_dir", return_value="/repo/.agents/skills"
             ) as mock_dir,
-            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="test-branch"),
             mock.patch(
                 "parallel_web_tools.core.skills.install_skills",
                 return_value={
                     "install_dir": "/repo/.agents/skills",
-                    "ref": "test-branch",
+                    "ref": "main",
                     "installed_skills": ["parallel-web-search"],
                     "count": 1,
                 },
@@ -2541,7 +2539,6 @@ class TestSkillsCommands:
 
         with (
             mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
-            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
             mock.patch(
                 "parallel_web_tools.core.skills.install_skills",
                 side_effect=SkillsInputError("unknown skill"),
@@ -2574,7 +2571,6 @@ class TestSkillsCommands:
     def test_skills_reinstall_json(self, runner):
         with (
             mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
-            mock.patch("parallel_web_tools.core.skills.get_skills_repo_ref", return_value="main"),
             mock.patch(
                 "parallel_web_tools.core.skills.reinstall_skills",
                 return_value={
