@@ -22,8 +22,9 @@ jobs:
     steps:
       - name: Check if this is a version bump commit
         id: check
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
           if [[ "$COMMIT_MSG" =~ ^chore:\ bump\ version\ to\ ([0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?) ]]; then
             VERSION="${BASH_REMATCH[1]}"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
