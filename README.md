@@ -89,6 +89,7 @@ parallel-cli
 ├── findall                 # Web-scale entity discovery
 │   ├── run                 # Discover entities matching a natural language objective
 │   ├── ingest              # Preview the schema before running
+│   ├── entity-search       # Fast entity search (best-effort optimized for low latency)
 │   ├── status              # Check status of a FindAll run
 │   ├── poll                # Poll until completion
 │   ├── result              # Fetch results of a completed run
@@ -255,6 +256,9 @@ parallel-cli enrich suggest "Find CEO" --json
 # FindAll: discover entities
 parallel-cli findall run "AI startups in healthcare" --json
 
+# FindAll entity-search: fast, low-latency ranked entities (synchronous)
+parallel-cli findall entity-search "AI startups in healthcare" -t companies -n 25
+
 # Monitor: track web changes
 parallel-cli monitor create "Track Tesla SEC filings" --frequency 1d --json
 
@@ -376,6 +380,16 @@ from parallel_web_tools import enrich_findall, extend_findall, get_findall_schem
 schema = get_findall_schema(result.run_id)
 enriched = enrich_findall(result.run_id, ["funding amount", "number of employees"])
 extended = extend_findall(result.run_id, additional_matches=10)
+
+
+# Fast, low-latency entity search (synchronous)
+from parallel_web_tools import entity_search_findall
+
+entities = entity_search_findall(
+    "AI startups in healthcare",
+    entity_type="companies",  # "companies" or "people"
+    match_limit=25,
+)
 ```
 
 ### Monitor

@@ -13,6 +13,7 @@ from parallel_web_tools.core import (
     create_monitor,
     enrich_batch,
     enrich_single,
+    entity_search_findall,
     get_api_key,
     get_async_client,
     get_auth_status,
@@ -66,6 +67,7 @@ __all__ = [
     "run_enrichment_from_dict",
     # FindAll
     "run_findall",
+    "entity_search_findall",
     # Monitor
     "cancel_monitor",
     "create_monitor",

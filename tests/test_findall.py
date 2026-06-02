@@ -15,6 +15,7 @@ from parallel_web_tools.core.findall import (
     _serialize,
     cancel_findall_run,
     create_findall_run,
+    entity_search_findall,
     get_findall_result,
     get_findall_status,
     ingest_findall,
@@ -229,6 +230,53 @@ class TestIngestFindall:
         ) as mock_create:
             ingest_findall("query", api_key="test-key", source="cli")
             mock_create.assert_called_with("test-key", "cli")
+
+
+class TestEntitySearchFindall:
+    """Tests for entity_search_findall function."""
+
+    def _make_response(self, entities=None, entity_set_id="entity_set_xyz"):
+        response = mock.MagicMock()
+        response.model_dump.return_value = {
+            "entity_set_id": entity_set_id,
+            "entities": entities
+            if entities is not None
+            else [{"name": "Acme", "url": "acme.com", "description": "An AI company"}],
+        }
+        return response
+
+    def test_entity_search_basic(self, mock_parallel_client):
+        mock_parallel_client.beta.findall.entity_search.return_value = self._make_response()
+
+        result = entity_search_findall("Find AI companies", entity_type="companies", match_limit=10)
+
+        assert result["entity_set_id"] == "entity_set_xyz"
+        assert result["entities"][0]["name"] == "Acme"
+        mock_parallel_client.beta.findall.entity_search.assert_called_once_with(
+            objective="Find AI companies",
+            entity_type="companies",
+            match_limit=10,
+        )
+
+    def test_entity_search_with_people_and_limit(self, mock_parallel_client):
+        mock_parallel_client.beta.findall.entity_search.return_value = self._make_response(
+            entities=[{"name": "Jane Doe", "url": "linkedin.com/jane", "description": "PM"}],
+        )
+
+        entity_search_findall(
+            "Senior PMs at AT startups",
+            entity_type="people",
+            match_limit=25,
+        )
+
+        call_kwargs = mock_parallel_client.beta.findall.entity_search.call_args.kwargs
+        assert call_kwargs["entity_type"] == "people"
+        assert call_kwargs["match_limit"] == 25
+
+    def test_entity_search_rejects_unknown_entity_type(self, mock_parallel_client):
+        with pytest.raises(ValueError, match="entity_type"):
+            entity_search_findall("query", entity_type="organizations", match_limit=10)
+        mock_parallel_client.beta.findall.entity_search.assert_not_called()
 
 
 class TestCreateFindallRun:
@@ -807,6 +855,73 @@ class TestFindallIngestCommand:
             assert result.exit_code == 0
             assert "people" in result.output
             # Should not crash on None enrichments
+
+
+class TestFindallEntitySearchCommand:
+    """Tests for the findall entity-search CLI command."""
+
+    def test_entity_search_help(self, runner):
+        result = runner.invoke(main, ["findall", "entity-search", "--help"])
+        assert result.exit_code == 0
+        assert "OBJECTIVE" in result.output
+        assert "entity-type" in result.output
+
+    def test_entity_search_basic(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.entity_search_findall") as mock_es:
+            mock_es.return_value = {
+                "entity_set_id": "entity_set_abc",
+                "entities": [
+                    {"name": "Acme", "url": "acme.com", "description": "An AI company"},
+                ],
+            }
+
+            result = runner.invoke(main, ["findall", "entity-search", "AI companies", "-t", "companies"])
+
+            assert result.exit_code == 0
+            assert "Acme" in result.output
+            mock_es.assert_called_once_with(
+                "AI companies",
+                entity_type="companies",
+                match_limit=10,
+                source="cli",
+            )
+
+    def test_entity_search_requires_entity_type(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.entity_search_findall") as mock_es:
+            result = runner.invoke(main, ["findall", "entity-search", "AI companies"])
+
+            assert result.exit_code != 0
+            assert "entity-type" in result.output
+            mock_es.assert_not_called()
+
+    def test_entity_search_json(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.entity_search_findall") as mock_es:
+            payload = {
+                "entity_set_id": "es_json",
+                "entities": [{"name": "Foo", "url": "foo.com", "description": "x"}],
+            }
+            mock_es.return_value = payload
+
+            result = runner.invoke(main, ["findall", "entity-search", "Find foos", "-t", "companies", "--json"])
+
+            assert result.exit_code == 0
+            assert json.loads(result.output) == payload
+
+    def test_entity_search_rejects_unknown_type(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.entity_search_findall") as mock_es:
+            result = runner.invoke(main, ["findall", "entity-search", "query", "-t", "organizations"])
+
+            assert result.exit_code != 0
+            mock_es.assert_not_called()
+
+    def test_entity_search_rejects_out_of_range_limit(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.entity_search_findall") as mock_es:
+            below = runner.invoke(main, ["findall", "entity-search", "query", "-t", "companies", "-n", "3"])
+            above = runner.invoke(main, ["findall", "entity-search", "query", "-t", "companies", "-n", "1001"])
+
+            assert below.exit_code != 0
+            assert above.exit_code != 0
+            mock_es.assert_not_called()
 
 
 class TestFindallStatusCommand:
