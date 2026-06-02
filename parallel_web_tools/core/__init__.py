@@ -25,10 +25,12 @@ from parallel_web_tools.core.batch import (
     run_tasks,
 )
 from parallel_web_tools.core.findall import (
+    ENTITY_SEARCH_ENTITY_TYPES,
     FINDALL_GENERATORS,
     cancel_findall_run,
     create_findall_run,
     enrich_findall,
+    entity_search_findall,
     extend_findall,
     get_findall_result,
     get_findall_schema,
@@ -138,10 +140,12 @@ __all__ = [
     "poll_research",
     "run_research",
     # FindAll
+    "ENTITY_SEARCH_ENTITY_TYPES",
     "FINDALL_GENERATORS",
     "cancel_findall_run",
     "create_findall_run",
     "enrich_findall",
+    "entity_search_findall",
     "extend_findall",
     "get_findall_result",
     "get_findall_schema",

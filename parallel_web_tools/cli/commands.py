@@ -31,6 +31,7 @@ from parallel_web_tools.core import (
     create_monitor,
     create_research_task,
     enrich_findall,
+    entity_search_findall,
     extend_findall,
     get_api_key,
     get_auth_status,
@@ -2751,6 +2752,92 @@ def findall_ingest(objective: str, output_json: bool):
 
             console.print("\n[dim]Use 'parallel-cli findall run' to start a run with this schema[/dim]")
             console.print("[dim]Use --json to get machine-readable output for programmatic use[/dim]")
+
+    except Exception as e:
+        _handle_error(e, output_json=output_json)
+
+
+@findall.command(name="entity-search")
+@click.argument("objective")
+@click.option(
+    "-t",
+    "--entity-type",
+    type=click.Choice(["companies", "people"]),
+    required=True,
+    help="Entity type to search for",
+)
+@click.option(
+    "-n",
+    "--match-limit",
+    type=click.IntRange(5, 1000),
+    default=10,
+    show_default=True,
+    help="Maximum entities to return (5-1000)",
+)
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save result to JSON file")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
+def findall_entity_search(
+    objective: str,
+    entity_type: str,
+    match_limit: int,
+    output_file: str | None,
+    output_json: bool,
+):
+    """Return ranked entities matching a natural language objective.
+
+    A best-effort, low-latency search. For comprehensive match evaluation and
+    enrichment, use `parallel-cli findall run` instead.
+
+    OBJECTIVE is a natural language description of what to find.
+
+    Examples:
+
+        parallel-cli findall entity-search "AI startups in San Francisco" -t companies
+
+        parallel-cli findall entity-search "Senior PMs at AI startups" -t people -n 25
+
+        parallel-cli findall entity-search "Charlotte roofing companies" -t companies -o out.json
+    """
+    try:
+        result = entity_search_findall(
+            objective,
+            entity_type=entity_type,
+            match_limit=match_limit,
+            source="cli",
+        )
+
+        write_json_output(result, output_file, output_json)
+
+        if not output_json:
+            entities = result.get("entities", []) or []
+
+            console.print("\n[bold green]Entity Search Complete![/bold green]")
+            console.print(f"[dim]Entity set: {result.get('entity_set_id')}[/dim]")
+            console.print(f"[dim]Entity type: {entity_type} | Found: {len(entities)}[/dim]\n")
+
+            if entities:
+                from rich.table import Table
+
+                table = Table(title=f"Entities ({len(entities)})")
+                table.add_column("Name", style="cyan", no_wrap=True)
+                table.add_column("URL", style="dim")
+                table.add_column("Description", max_width=50)
+
+                for c in entities:
+                    table.add_row(
+                        c.get("name", ""),
+                        c.get("url", ""),
+                        (c.get("description", "") or "")[:50],
+                    )
+
+                console.print(table)
+                console.print()
+            else:
+                console.print("[yellow]No entities returned.[/yellow]")
+                console.print("[dim]Tip: check that --entity-type matches the objective (companies vs people).[/dim]\n")
+
+            if not output_file:
+                console.print("[dim]Use --output to save full results, or --json for machine-readable output[/dim]")
 
     except Exception as e:
         _handle_error(e, output_json=output_json)

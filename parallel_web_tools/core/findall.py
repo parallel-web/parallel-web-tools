@@ -14,7 +14,7 @@ The typical workflow is:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal, cast
 
 from parallel_web_tools.core.auth import create_client
 from parallel_web_tools.core.polling import poll_until
@@ -28,6 +28,10 @@ FINDALL_GENERATORS = {
 }
 
 FINDALL_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
+
+# Entity types supported by the sync entity-search endpoint.
+EntitySearchEntityType = Literal["companies", "people"]
+ENTITY_SEARCH_ENTITY_TYPES: tuple[EntitySearchEntityType, ...] = ("companies", "people")
 
 
 def _serialize(obj: Any) -> Any:
@@ -575,6 +579,42 @@ def extend_findall(
     result = client.beta.findall.extend(
         findall_id=findall_id,
         additional_match_limit=additional_match_limit,
+    )
+    return _serialize(result)
+
+
+def entity_search_findall(
+    objective: str,
+    entity_type: str,
+    match_limit: int,
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> dict[str, Any]:
+    """Run a synchronous entity search for ranked entities.
+
+    Best-effort, low-latency search that returns ranked entities for a natural
+    language objective. For comprehensive match evaluation and enrichment, use
+    the full FindAll API (run_findall / create_findall_run).
+
+    Args:
+        objective: Natural language description of what to find.
+        entity_type: One of "companies" or "people".
+        match_limit: Maximum entities to return.
+        api_key: Optional API key override.
+        source: Client source identifier for User-Agent.
+
+    Returns:
+        Dict with entity_set_id and a ranked list of entities
+        ({"name", "description", "url"}).
+    """
+    if entity_type not in ENTITY_SEARCH_ENTITY_TYPES:
+        raise ValueError(f"entity_type must be one of {ENTITY_SEARCH_ENTITY_TYPES}, got {entity_type!r}")
+
+    client = create_client(api_key, source)
+    result = client.beta.findall.entity_search(
+        objective=objective,
+        entity_type=cast(EntitySearchEntityType, entity_type),
+        match_limit=match_limit,
     )
     return _serialize(result)
 
