@@ -880,12 +880,14 @@ main.add_command(create_skills_group(console, _handle_error, EXIT_BAD_INPUT, EXI
 # Search Command
 # =============================================================================
 
-# Beta -> V1 mode mapping. Beta had three modes; V1 has two. We keep the old
-# values as accepted CLI inputs and translate them so existing scripts work.
+# Beta -> V1 mode mapping. Beta had three modes; V1 has three (turbo/basic/
+# advanced). We keep the old values as accepted CLI inputs and translate them so
+# existing scripts work.
 _SEARCH_MODE_MAP = {
     "fast": "basic",
     "one-shot": "basic",
     "agentic": "advanced",
+    "turbo": "turbo",
     "basic": "basic",
     "advanced": "advanced",
 }
@@ -956,7 +958,7 @@ def build_search_v1_kwargs(
     "--mode",
     type=click.Choice(list(_SEARCH_MODE_MAP.keys())),
     default="basic",
-    help="Search mode (one-shot/fast → basic, agentic → advanced)",
+    help="Search mode: turbo (fastest), basic, or advanced (one-shot/fast → basic, agentic → advanced)",
     show_default=True,
 )
 @click.option("--max-results", type=int, help="Maximum results (defaults to server-side default of 10)")
