@@ -1244,8 +1244,8 @@ class TestBuildSearchV1Kwargs:
         assert kwargs["mode"] == "advanced"
 
     def test_new_mode_values_pass_through(self):
-        """Should accept V1-native `basic`/`advanced` values directly."""
-        for new_mode in ("basic", "advanced"):
+        """Should accept V1-native `turbo`/`basic`/`advanced` values directly."""
+        for new_mode in ("turbo", "basic", "advanced"):
             kwargs = build_search_v1_kwargs(
                 objective=None,
                 query=("q",),
