@@ -152,7 +152,16 @@ jobs:
 
       - name: Publish to npm
         working-directory: npm
-        run: npm publish --access public
+        env:
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          # Prereleases (rc) must publish under a non-latest dist-tag so that
+          # `npm install` keeps resolving to the last stable release.
+          if [[ "$TAG" == *rc* ]]; then
+            npm publish --access public --tag rc
+          else
+            npm publish --access public --tag latest
+          fi
 
   publish-homebrew:
     needs: release
