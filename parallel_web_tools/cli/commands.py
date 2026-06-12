@@ -2787,7 +2787,8 @@ def findall_entity_search(
 ):
     """Return ranked entities matching a natural language objective.
 
-    A best-effort, low-latency search. For comprehensive match evaluation and
+    A best-effort, low-latency search optimized for recall: results are ranked
+    but not individually verified. For comprehensive match evaluation and
     enrichment, use `parallel-cli findall run` instead.
 
     OBJECTIVE is a natural language description of what to find.
