@@ -1150,7 +1150,7 @@ def build_extract_v1_kwargs(
 @click.option("--full-content", is_flag=True, help="Include complete page content")
 @click.option("--full-content-max-chars", type=int, help="Max characters per result for full content")
 @click.option("--no-excerpts", is_flag=True, help="Strip excerpts from output (V1 always returns them server-side)")
-@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
 @click.option("--excerpt-max-chars-total", type=int, help="Max total characters for excerpts across all URLs")
 @click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
 @click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")

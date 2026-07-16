@@ -395,6 +395,13 @@ class TestExtractCommandHelp:
         assert "Extract content" in result.output
         assert "--json" in result.output
 
+    def test_extract_help_does_not_claim_excerpt_minimum(self, runner):
+        """Extract accepts excerpt sizes below the removed 1000-character minimum."""
+        result = runner.invoke(main, ["extract", "--help"])
+        assert result.exit_code == 0
+        assert "--excerpt-max-chars-per-result" in result.output
+        assert "min 1000" not in result.output
+
 
 class TestFetchCommand:
     """Tests for the fetch command (alias for extract)."""
