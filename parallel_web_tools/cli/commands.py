@@ -880,18 +880,14 @@ main.add_command(create_skills_group(console, _handle_error, EXIT_BAD_INPUT, EXI
 # Search Command
 # =============================================================================
 
-# Beta -> V1 mode mapping. Beta had three modes; V1 has three (turbo/basic/
-# advanced). We keep the old values as accepted CLI inputs and translate them so
-# existing scripts work.
-_SEARCH_MODE_MAP = {
+# V1 modes are listed first in CLI help. Beta modes remain accepted as
+# deprecated aliases so existing scripts keep working.
+_SEARCH_MODES = ("turbo", "basic", "advanced")
+_DEPRECATED_SEARCH_MODE_ALIASES = {
     "fast": "basic",
     "one-shot": "basic",
     "agentic": "advanced",
-    "turbo": "turbo",
-    "basic": "basic",
-    "advanced": "advanced",
 }
-_DEPRECATED_SEARCH_MODES = {"fast", "one-shot", "agentic"}
 
 
 def _emit_deprecation(message: str) -> None:
@@ -926,7 +922,7 @@ def build_search_v1_kwargs(
     if objective:
         kwargs["objective"] = objective
     if mode:
-        kwargs["mode"] = _SEARCH_MODE_MAP.get(mode, mode)
+        kwargs["mode"] = _DEPRECATED_SEARCH_MODE_ALIASES.get(mode, mode)
     if excerpt_max_chars_total is not None:
         kwargs["max_chars_total"] = excerpt_max_chars_total
     if session_id:
@@ -956,16 +952,19 @@ def build_search_v1_kwargs(
 @click.option("-q", "--query", multiple=True, help="Keyword search query (can be repeated)")
 @click.option(
     "--mode",
-    type=click.Choice(list(_SEARCH_MODE_MAP.keys())),
+    type=click.Choice([*_SEARCH_MODES, *_DEPRECATED_SEARCH_MODE_ALIASES]),
     default="basic",
-    help="Search mode: turbo (fastest), basic, or advanced (one-shot/fast → basic, agentic → advanced)",
+    help=(
+        "Search mode: turbo (fastest), basic, or advanced. "
+        "Deprecated aliases: one-shot/fast → basic, agentic → advanced"
+    ),
     show_default=True,
 )
 @click.option("--max-results", type=int, help="Maximum results (defaults to server-side default of 10)")
 @click.option("--include-domains", multiple=True, help="Only search these domains (comma-separated or repeated)")
 @click.option("--exclude-domains", multiple=True, help="Exclude these domains (comma-separated or repeated)")
-@click.option("--after-date", help="Only results after this date (YYYY-MM-DD)")
-@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
+@click.option("--after-date", help="Only results published on or after this date (YYYY-MM-DD)")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
 @click.option(
     "--excerpt-max-chars-total", type=int, default=60000, help="Max total characters for excerpts", show_default=True
 )
@@ -1012,12 +1011,9 @@ def search(
     if not objective and not query:
         raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
-    if mode in _DEPRECATED_SEARCH_MODES:
-        new_mode = _SEARCH_MODE_MAP[mode]
-        _emit_deprecation(
-            f"--mode {mode} is a Beta value and will stop working after the Beta API sunset (June 2026). "
-            f"Use --mode {new_mode} instead."
-        )
+    if mode in _DEPRECATED_SEARCH_MODE_ALIASES:
+        new_mode = _DEPRECATED_SEARCH_MODE_ALIASES[mode]
+        _emit_deprecation(f"--mode {mode} is a deprecated alias. Use --mode {new_mode} instead.")
 
     source_policy: dict[str, Any] = {}
     if include_domains:
@@ -1154,7 +1150,7 @@ def build_extract_v1_kwargs(
 @click.option("--full-content", is_flag=True, help="Include complete page content")
 @click.option("--full-content-max-chars", type=int, help="Max characters per result for full content")
 @click.option("--no-excerpts", is_flag=True, help="Strip excerpts from output (V1 always returns them server-side)")
-@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
 @click.option("--excerpt-max-chars-total", type=int, help="Max total characters for excerpts across all URLs")
 @click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
 @click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
