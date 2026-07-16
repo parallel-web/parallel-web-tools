@@ -358,6 +358,13 @@ class TestSearchCommandHelp:
         assert "--exclude-domains" in result.output
         assert "comma-separated" in result.output
 
+    def test_search_help_prioritizes_native_modes(self, runner):
+        """Should list V1-native modes before deprecated aliases."""
+        result = runner.invoke(main, ["search", "--help"])
+        assert result.exit_code == 0
+        assert "--mode [turbo|basic|advanced|fast|one-shot|agentic]" in result.output
+        assert "Deprecated aliases" in result.output
+
     def test_search_no_args(self, runner):
         """Should error without objective or query."""
         result = runner.invoke(main, ["search"])
@@ -1635,16 +1642,16 @@ class TestSearchDeprecationWarnings:
         )
 
         assert result.exit_code == 0
-        assert "[deprecated]" in result.stderr
-        assert deprecated_mode in result.stderr
-        assert expected_new in result.stderr
+        assert result.stderr.strip() == (
+            f"[deprecated] --mode {deprecated_mode} is a deprecated alias. Use --mode {expected_new} instead."
+        )
         # JSON stdout must remain clean
         json.loads(result.stdout)
         # SDK call uses translated mode
         call_kwargs = mock_cli_client.search.call_args.kwargs
         assert call_kwargs["mode"] == expected_new
 
-    @pytest.mark.parametrize("new_mode", ["basic", "advanced"])
+    @pytest.mark.parametrize("new_mode", ["turbo", "basic", "advanced"])
     def test_new_modes_do_not_emit_warning(self, runner, mock_cli_client, new_mode):
         """Should not warn when V1-native mode values are used."""
         self._setup_mock_search(mock_cli_client)
