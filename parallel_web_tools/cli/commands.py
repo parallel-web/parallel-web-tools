@@ -1014,10 +1014,7 @@ def search(
 
     if mode in _DEPRECATED_SEARCH_MODES:
         new_mode = _SEARCH_MODE_MAP[mode]
-        _emit_deprecation(
-            f"--mode {mode} is a Beta value and will stop working after the Beta API sunset (June 2026). "
-            f"Use --mode {new_mode} instead."
-        )
+        _emit_deprecation(f"--mode {mode} is deprecated. Use --mode {new_mode} instead.")
 
     source_policy: dict[str, Any] = {}
     if include_domains:
