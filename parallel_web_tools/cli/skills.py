@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import NoReturn, Protocol
+from pathlib import Path
+from typing import Any, NoReturn, Protocol
 
 import click
 from rich.console import Console
@@ -17,6 +18,39 @@ class HandleError(Protocol):
         exit_code: int = 0,
         prefix: str = "Error",
     ) -> NoReturn: ...
+
+
+def _project_root_for(install_dir: str, project: bool) -> Path | None:
+    """Return the project root a project-local install dir sits in.
+
+    Project installs land in ``<root>/.agents/skills``; global installs have no
+    project root, so Claude Code's global tree is used instead.
+    """
+    if not project:
+        return None
+    return Path(install_dir).parent.parent
+
+
+def _print_skill_commands(console: Console, skill_names: list[str]) -> None:
+    """Print how to invoke the installed skills.
+
+    Skills installed by the CLI are loose (not bundled in a Claude Code plugin),
+    so their slash command is the un-namespaced folder name.
+    """
+    if not skill_names:
+        return
+    commands = ", ".join(f"/{name}" for name in skill_names)
+    console.print(f"Skill commands: [cyan]{commands}[/cyan]")
+
+
+def _print_claude_code_result(console: Console, claude_code: dict[str, Any]) -> None:
+    if claude_code["linked"] or claude_code["copied"]:
+        console.print(
+            f"Linked into Claude Code ([cyan]{claude_code['claude_skills_dir']}[/cyan]); "
+            "restart Claude Code to pick up the new skills."
+        )
+    for warning in claude_code["warnings"]:
+        console.print(f"[yellow]{warning}[/yellow]")
 
 
 def create_skills_group(
@@ -86,6 +120,7 @@ def create_skills_group(
             SkillsInputError,
             SkillsInstallLocationError,
             install_skills,
+            link_into_claude_code,
             resolve_install_dir,
         )
 
@@ -104,6 +139,13 @@ def create_skills_group(
         except Exception as e:
             handle_error(e, output_json=output_json, exit_code=exit_api_error, prefix="Skills install failed")
 
+        # Make the freshly installed skills visible to Claude Code (best-effort).
+        result["claude_code"] = link_into_claude_code(
+            Path(str(result["install_dir"])),
+            list(result["installed_skills"]),
+            project_root=_project_root_for(str(result["install_dir"]), project),
+        )
+
         if output_json:
             print(json.dumps(result, indent=2))
             return
@@ -112,6 +154,8 @@ def create_skills_group(
         console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Installed ({result['count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
+        _print_skill_commands(console, list(result["installed_skills"]))
+        _print_claude_code_result(console, result["claude_code"])
 
     @skills.command(name="uninstall")
     @click.option(
@@ -122,7 +166,12 @@ def create_skills_group(
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_uninstall(project: bool, output_json: bool) -> None:
         """Uninstall skills previously installed by parallel-cli."""
-        from parallel_web_tools.core.skills import SkillsInstallLocationError, resolve_install_dir, uninstall_skills
+        from parallel_web_tools.core.skills import (
+            SkillsInstallLocationError,
+            resolve_install_dir,
+            uninstall_skills,
+            unlink_from_claude_code,
+        )
 
         try:
             install_dir = resolve_install_dir(project=project)
@@ -131,6 +180,13 @@ def create_skills_group(
             handle_error(e, output_json=output_json, exit_code=exit_bad_input, prefix="Skills uninstall failed")
         except Exception as e:
             handle_error(e, output_json=output_json, exit_code=exit_api_error, prefix="Skills uninstall failed")
+
+        # Drop the Claude Code links pointing at the skills we just removed.
+        result["claude_code"] = unlink_from_claude_code(
+            Path(str(result["install_dir"])),
+            list(result["removed_skills"]),
+            project_root=_project_root_for(str(result["install_dir"]), project),
+        )
 
         if output_json:
             print(json.dumps(result, indent=2))
@@ -144,6 +200,8 @@ def create_skills_group(
         console.print("[bold green]Skills uninstalled[/bold green]")
         console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
         console.print(f"Removed ({result['count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
+        for warning in result["claude_code"]["warnings"]:
+            console.print(f"[yellow]{warning}[/yellow]")
 
     @skills.command(name="reinstall")
     @click.option(
@@ -168,6 +226,7 @@ def create_skills_group(
             SkillsError,
             SkillsInputError,
             SkillsInstallLocationError,
+            link_into_claude_code,
             reinstall_skills,
             resolve_install_dir,
         )
@@ -187,6 +246,12 @@ def create_skills_group(
         except Exception as e:
             handle_error(e, output_json=output_json, exit_code=exit_api_error, prefix="Skills reinstall failed")
 
+        result["claude_code"] = link_into_claude_code(
+            Path(str(result["install_dir"])),
+            list(result["installed_skills"]),
+            project_root=_project_root_for(str(result["install_dir"]), project),
+        )
+
         if output_json:
             print(json.dumps(result, indent=2))
             return
@@ -196,5 +261,7 @@ def create_skills_group(
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Removed ({result['removed_count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
         console.print(f"Installed ({result['installed_count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
+        _print_skill_commands(console, list(result["installed_skills"]))
+        _print_claude_code_result(console, result["claude_code"])
 
     return skills

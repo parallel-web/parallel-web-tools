@@ -2447,6 +2447,14 @@ class TestEnrichRunJsonOutput:
 
 
 class TestSkillsCommands:
+    @pytest.fixture(autouse=True)
+    def isolated_home(self, tmp_path):
+        """Keep the Claude Code linking step away from the real home directory."""
+        home = tmp_path / "home"
+        home.mkdir()
+        with mock.patch("parallel_web_tools.core.skills.Path.home", return_value=home):
+            yield home
+
     def test_skills_help_mentions_cdn_and_replacement_behavior(self, runner):
         result = runner.invoke(main, ["skills", "--help"])
 
@@ -2520,6 +2528,83 @@ class TestSkillsCommands:
 
         assert result.exit_code == 0
         mock_dir.assert_called_once_with(project=True)
+
+    def test_skills_install_links_into_claude_code_and_prints_commands(self, runner, isolated_home):
+        install_dir = isolated_home / ".agents" / "skills"
+        skill_dir = install_dir / "parallel-web-search"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# parallel-web-search\n")
+        (isolated_home / ".claude").mkdir()
+
+        with (
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value=install_dir),
+            mock.patch(
+                "parallel_web_tools.core.skills.install_skills",
+                return_value={
+                    "install_dir": str(install_dir),
+                    "ref": "main",
+                    "installed_skills": ["parallel-web-search"],
+                    "count": 1,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "install"])
+
+        link_path = isolated_home / ".claude" / "skills" / "parallel-web-search"
+        assert result.exit_code == 0
+        assert link_path.is_symlink()
+        assert link_path.resolve() == skill_dir.resolve()
+        assert "/parallel-web-search" in result.output
+        assert "restart Claude Code" in result.output
+
+    def test_skills_install_json_reports_claude_code_step(self, runner, isolated_home):
+        install_dir = isolated_home / ".agents" / "skills"
+
+        with (
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value=install_dir),
+            mock.patch(
+                "parallel_web_tools.core.skills.install_skills",
+                return_value={
+                    "install_dir": str(install_dir),
+                    "ref": "main",
+                    "installed_skills": [],
+                    "count": 0,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "install", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["claude_code"]["claude_dir_present"] is False
+        assert payload["claude_code"]["linked"] == []
+
+    def test_skills_uninstall_removes_claude_code_links(self, runner, isolated_home):
+        install_dir = isolated_home / ".agents" / "skills"
+        install_dir.mkdir(parents=True)
+        claude_skills = isolated_home / ".claude" / "skills"
+        claude_skills.mkdir(parents=True)
+        (claude_skills / "parallel-web-search").symlink_to(
+            install_dir / "parallel-web-search", target_is_directory=True
+        )
+
+        with (
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value=install_dir),
+            mock.patch(
+                "parallel_web_tools.core.skills.uninstall_skills",
+                return_value={
+                    "install_dir": str(install_dir),
+                    "removed_skills": ["parallel-web-search"],
+                    "count": 1,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "uninstall", "--json"])
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["claude_code"]["unlinked"] == ["parallel-web-search"]
+        assert not (claude_skills / "parallel-web-search").is_symlink()
 
     def test_skills_install_project_root_not_found(self, runner):
         from parallel_web_tools.core.skills import SkillsInstallLocationError
