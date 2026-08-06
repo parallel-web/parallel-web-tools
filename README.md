@@ -97,19 +97,14 @@ parallel-cli
 │   ├── extend              # Request additional candidates for a run
 │   ├── schema              # Get the schema for a FindAll run
 │   └── cancel              # Cancel a running FindAll
-├── monitor                 # Continuous web change tracking
-│   ├── create              # Create a new web monitor (event_stream or snapshot)
-│   ├── list                # List monitors (cursor paginated)
-│   ├── get                 # Get monitor details
-│   ├── update              # Update frequency, webhook, metadata
-│   ├── cancel              # Cancel a monitor (irreversible)
-│   ├── events              # List events for a monitor
-│   └── trigger             # Trigger an immediate one-off run
-└── skills                  # Install and manage Parallel agent skills
-    ├── list                # List available skills from skills.parallel.ai
-    ├── install             # Install skills for your coding agents
-    ├── reinstall           # Reinstall the managed skill set
-    └── uninstall           # Remove skills installed by parallel-cli
+└── monitor                 # Continuous web change tracking
+    ├── create              # Create a new web monitor (event_stream or snapshot)
+    ├── list                # List monitors (cursor paginated)
+    ├── get                 # Get monitor details
+    ├── update              # Update frequency, webhook, metadata
+    ├── cancel              # Cancel a monitor (irreversible)
+    ├── events              # List events for a monitor
+    └── trigger             # Trigger an immediate one-off run
 ```
 
 ## Quick Start
@@ -338,26 +333,22 @@ result.result.show()
 
 ## Agent Skills
 
-Install Parallel's agent skills into your coding agent:
-
 ```bash
-parallel-cli skills list                          # See what's available
-parallel-cli skills install                       # Install all skills globally
-parallel-cli skills install --skill parallel-web-search
-parallel-cli skills install --project             # Install into the current project instead
+parallel-cli skills list                                  # See what's available
+parallel-cli skills install                               # Install all skills globally
+parallel-cli skills install --skill parallel-web-search   # Install one
+parallel-cli skills install --project                     # Install into the current project
 ```
 
-Skills install into `~/.agents/skills` (or `<project>/.agents/skills` with `--project`), the
-cross-agent location read by Gemini CLI, Copilot, Codex and Amp. Claude Code only scans its own
-tree, so the installer also links each skill into `~/.claude/skills` (or `<project>/.claude/skills`)
-when a `.claude` directory is present. Links are symlinks to the single canonical copy, so there is
-nothing to keep in sync; on systems where symlinks need privileges the skill folder is copied
-instead. An existing skill of the same name is never overwritten — the CLI reports it and moves on.
-Restart Claude Code after installing to pick up new skills.
+Skills install into `~/.agents/skills` (or `<project>/.agents/skills`), the cross-agent location
+read by Gemini CLI, Copilot, Codex and Amp. Claude Code only scans its own tree, so the installer
+also symlinks each skill into `~/.claude/skills` (or `<project>/.claude/skills`) when a `.claude`
+directory is present. An existing skill of the same name is left untouched. Restart Claude Code to
+pick up new skills.
 
-The CLI installs loose skills, so each one is invoked by its folder name — `/parallel-web-search`,
-not `/parallel:parallel-web-search`. The namespaced form belongs to the Claude Code plugin, which is
-a separate install channel from this CLI.
+These are loose skills, so each is invoked by its folder name — `/parallel-web-search`, not
+`/parallel:parallel-web-search`. The namespaced form belongs to the Claude Code plugin, a separate
+install channel from this CLI.
 
 ## Programmatic Usage
 
