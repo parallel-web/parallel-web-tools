@@ -43,7 +43,7 @@ from parallel_web_tools.core import (
     update_monitor,
 )
 
-__version__ = "0.7.1"
+__version__ = "0.8.1rc1"
 
 __all__ = [
     # Auth
