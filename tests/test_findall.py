@@ -332,6 +332,19 @@ class TestCreateFindallRun:
         assert "exclude_list" not in call_kwargs
         assert "metadata" not in call_kwargs
 
+    def test_create_passes_memory_scope_to_sdk(self, mock_parallel_client):
+        mock_parallel_client.beta.findall.create.return_value = _make_run()
+
+        create_findall_run(
+            objective="q",
+            entity_type="entities",
+            match_conditions=[],
+            memory_scope_key="workspace_acme",
+        )
+
+        call_kwargs = mock_parallel_client.beta.findall.create.call_args.kwargs
+        assert call_kwargs["memory_scope_key"] == "workspace_acme"
+
 
 class TestCancelFindallRun:
     """Tests for cancel_findall_run function."""
@@ -694,6 +707,36 @@ class TestFindallRunCommand:
             assert "findall_test123" in result.output
             mock_ingest.assert_called_once()
             mock_create.assert_called_once()
+
+    def test_run_no_wait_passes_memory_scope_key(self, runner):
+        with (
+            mock.patch("parallel_web_tools.cli.commands.ingest_findall") as mock_ingest,
+            mock.patch("parallel_web_tools.cli.commands.create_findall_run") as mock_create,
+        ):
+            mock_ingest.return_value = {
+                "entity_type": "companies",
+                "match_conditions": [],
+            }
+            mock_create.return_value = {
+                "findall_id": "findall_memory",
+                "status": "queued",
+                "generator": "core",
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "findall",
+                    "run",
+                    "Find companies",
+                    "--no-wait",
+                    "--memory-scope-key",
+                    "workspace_acme",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert mock_create.call_args.kwargs["memory_scope_key"] == "workspace_acme"
 
     def test_run_no_wait_json(self, runner):
         with (
