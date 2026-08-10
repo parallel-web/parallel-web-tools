@@ -17,6 +17,7 @@ from collections.abc import Callable
 from typing import Any, Literal, cast
 
 from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.memory import validate_memory_scope_key
 from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
 
@@ -106,6 +107,7 @@ def create_findall_run(
     metadata: dict[str, Any] | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
+    memory_scope_key: str | None = None,
 ) -> dict[str, Any]:
     """Create a FindAll run without waiting for results.
 
@@ -119,6 +121,8 @@ def create_findall_run(
         metadata: Optional metadata dict.
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
+        memory_scope_key: Optional key identifying the memory scope to use.
+            Omit to use personal memory, if available.
 
     Returns:
         Dict with findall_id, status, generator, and timestamps.
@@ -137,6 +141,9 @@ def create_findall_run(
     if metadata:
         kwargs["metadata"] = metadata
 
+    scope_key = validate_memory_scope_key(memory_scope_key)
+    if scope_key is not None:
+        kwargs["memory_scope_key"] = scope_key
     run = client.beta.findall.create(**kwargs)
     status_info = _extract_status_info(run)
 
@@ -405,6 +412,7 @@ def run_findall(
     on_status: FindAllStatusCallback | None = None,
     source: ClientSource = "python",
     enrich: bool = True,
+    memory_scope_key: str | None = None,
 ) -> dict[str, Any]:
     """Ingest, create, and poll a FindAll run to completion.
 
@@ -427,6 +435,8 @@ def run_findall(
         on_status: Optional callback(status, findall_id, metrics) on each poll.
         source: Client source identifier for User-Agent.
         enrich: Whether to apply suggested enrichments from ingest. Default True.
+        memory_scope_key: Optional key identifying the memory scope to use.
+            Omit to use personal memory, if available.
 
     Returns:
         Dict with findall_id, status, metrics, and candidates.
@@ -460,6 +470,9 @@ def run_findall(
     if metadata:
         kwargs["metadata"] = metadata
 
+    scope_key = validate_memory_scope_key(memory_scope_key)
+    if scope_key is not None:
+        kwargs["memory_scope_key"] = scope_key
     run = client.beta.findall.create(**kwargs)
     findall_id = run.findall_id
 

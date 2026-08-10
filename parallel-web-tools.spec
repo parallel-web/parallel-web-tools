@@ -33,6 +33,7 @@ a = Analysis(
         'parallel_web_tools.core.runner',
         'parallel_web_tools.core.schema',
         'parallel_web_tools.core.research',
+        'parallel_web_tools.core.memory',
         'parallel_web_tools.core.result',
         # CLI (standalone mode - no planner)
         'parallel_web_tools.cli',

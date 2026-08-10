@@ -1657,7 +1657,7 @@ wheels = [
 
 [[package]]
 name = "parallel-web"
-version = "1.1.0"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1667,14 +1667,14 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/51/1d/fefb7d976d3ea2ae61b0d9d6d638c9f837cb9fb96532680b148f33f322a1/parallel_web-1.1.0.tar.gz", hash = "sha256:97d6dbe4aa49b8c2c93f71f818d8883bc45bee71928bd945b7f616cecaacec0d", size = 157720, upload-time = "2026-06-08T18:22:21.298Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/fc/4bc3d44a1927a2b253662f1359053cf43529c940df93bc22139f494f7deb/parallel_web-1.2.0.tar.gz", hash = "sha256:8fa8120cc92b0567cd095cbcb85520856984b4b4ea6ac20ad2fa85eec4b713ab", size = 161683, upload-time = "2026-08-10T18:16:09.795Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/ec/276c02247c973b02e254c9daac1844ccd38f385850c50e00ad46548eb5db/parallel_web-1.1.0-py3-none-any.whl", hash = "sha256:598aa5613c1146a3880a41592c343b0b9c0f51cff7c1ea6d10bc586d2df5e2f9", size = 167673, upload-time = "2026-06-08T18:22:20.068Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/9c/bb8d0c10a9219af875fdfa0a68f5e2fb6aa4f716dc9d7b9338d77a7f78a7/parallel_web-1.2.0-py3-none-any.whl", hash = "sha256:a050382c98ec6b7dac71988a67cd206e99740fb0a68bca2af6f7c403ed54f5aa", size = 175758, upload-time = "2026-08-10T18:16:08.634Z" },
 ]
 
 [[package]]
 name = "parallel-web-tools"
-version = "0.7.1rc2"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1765,7 +1765,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "nest-asyncio", marker = "extra == 'duckdb'", specifier = ">=1.6.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.3.0" },
-    { name = "parallel-web", specifier = ">=1.1.0,<2" },
+    { name = "parallel-web", specifier = ">=1.2.0,<2" },
     { name = "parallel-web-tools", extras = ["all", "spark"], marker = "extra == 'dev'" },
     { name = "parallel-web-tools", extras = ["cli"], marker = "extra == 'bigquery'" },
     { name = "parallel-web-tools", extras = ["cli", "polars"], marker = "extra == 'duckdb'" },

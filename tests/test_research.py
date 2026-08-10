@@ -78,6 +78,16 @@ class TestCreateResearchTask:
         call_args = mock_parallel_client.task_run.create.call_args
         assert "task_spec" not in call_args.kwargs
 
+    def test_create_task_passes_memory_scope_to_sdk(self, mock_parallel_client):
+        mock_task = mock.MagicMock()
+        mock_task.run_id = "trun_memory"
+        mock_parallel_client.task_run.create.return_value = mock_task
+
+        create_research_task("What is AI?", memory_scope_key="workspace_acme")
+
+        call_kwargs = mock_parallel_client.task_run.create.call_args.kwargs
+        assert call_kwargs["memory_scope_key"] == "workspace_acme"
+
     def test_create_task_text_schema(self, mock_parallel_client):
         """Should pass task_spec with text schema when output_schema='text'."""
         mock_task = mock.MagicMock()
@@ -407,6 +417,30 @@ class TestResearchRunCommand:
             assert result.exit_code == 0
             assert "trun_123" in result.output
             mock_create.assert_called_once()
+
+    def test_research_run_passes_memory_scope_key(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.create_research_task") as mock_create:
+            mock_create.return_value = {
+                "run_id": "trun_memory",
+                "interaction_id": "trun_memory",
+                "result_url": "https://platform.parallel.ai/play/deep-research/trun_memory",
+                "status": "pending",
+            }
+
+            result = runner.invoke(
+                main,
+                [
+                    "research",
+                    "run",
+                    "Workspace research",
+                    "--no-wait",
+                    "--memory-scope-key",
+                    "workspace_acme",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert mock_create.call_args.kwargs["memory_scope_key"] == "workspace_acme"
 
     def test_research_run_json_output(self, runner):
         """Should output JSON with --json flag."""
