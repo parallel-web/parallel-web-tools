@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
@@ -140,10 +141,16 @@ def _skills_from_index(index: dict[str, Any]) -> dict[str, dict[str, str]]:
         if not isinstance(skill_url, str) or not skill_url.strip():
             raise SkillsDownloadError(f"Skills index entry '{name}' is missing a valid skill_url")
 
-        parsed[name.strip()] = {
+        entry = {
             "name": name.strip(),
             "skill_url": skill_url.strip(),
         }
+
+        manifest_url = raw_skill.get("manifest_url")
+        if isinstance(manifest_url, str) and manifest_url.strip():
+            entry["manifest_url"] = manifest_url.strip()
+
+        parsed[name.strip()] = entry
 
     return parsed
 
@@ -152,13 +159,81 @@ def _list_skills_from_index(index: dict[str, Any]) -> list[str]:
     return sorted(_skills_from_index(index))
 
 
-def _download_skill_markdown(client: httpx.Client, skill_name: str, skill_url: str) -> bytes:
+def _download_skill_file(client: httpx.Client, skill_name: str, skill_url: str) -> bytes:
     response = client.get(skill_url)
     if response.status_code >= 400:
         raise SkillsDownloadError(
             f"Failed to download skill '{skill_name}' from {skill_url}: HTTP {response.status_code}"
         )
     return response.content
+
+
+def _safe_skill_file_path(skill_name: str, raw_path: str) -> str:
+    """Validate a manifest-declared relative path stays inside the skill directory."""
+    candidate = raw_path.strip().replace("\\", "/")
+    if not candidate:
+        raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained an empty file path")
+
+    posix_path = PurePosixPath(candidate)
+    if posix_path.is_absolute() or any(part in ("..", "") for part in posix_path.parts):
+        raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained an unsafe file path: {raw_path}")
+
+    return str(posix_path)
+
+
+def _resolve_skill_files(client: httpx.Client, skill_name: str, entry: dict[str, str]) -> list[dict[str, str]]:
+    """Resolve every file belonging to a skill.
+
+    Indexes that advertise a ``manifest_url`` carry the full file list (references,
+    scripts, bundled agents). Older or custom indexes without one fall back to the
+    single ``SKILL.md`` document.
+    """
+    skill_only = [{"path": "SKILL.md", "url": entry["skill_url"], "sha256": ""}]
+
+    manifest_url = entry.get("manifest_url")
+    if not manifest_url:
+        return skill_only
+
+    manifest = _fetch_json(client, manifest_url, f"manifest for skill '{skill_name}'")
+    raw_files = manifest.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return skill_only
+
+    resolved: list[dict[str, str]] = []
+    for raw_file in raw_files:
+        if not isinstance(raw_file, dict):
+            raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained an invalid file entry")
+
+        raw_path = raw_file.get("path")
+        file_url = raw_file.get("url")
+        if not isinstance(raw_path, str) or not isinstance(file_url, str) or not file_url.strip():
+            raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained a file entry missing path or url")
+
+        checksum = raw_file.get("sha256")
+        resolved.append(
+            {
+                "path": _safe_skill_file_path(skill_name, raw_path),
+                "url": file_url.strip(),
+                "sha256": checksum.strip().lower() if isinstance(checksum, str) else "",
+            }
+        )
+
+    if not any(file_entry["path"] == "SKILL.md" for file_entry in resolved):
+        raise SkillsDownloadError(f"Manifest for skill '{skill_name}' does not include a SKILL.md entry")
+
+    return resolved
+
+
+def _verify_skill_file_checksum(skill_name: str, file_entry: dict[str, str], content: bytes) -> None:
+    expected = file_entry.get("sha256")
+    if not expected:
+        return
+
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != expected:
+        raise SkillsDownloadError(
+            f"Checksum mismatch for '{skill_name}/{file_entry['path']}': expected {expected}, got {actual}"
+        )
 
 
 def get_remote_skills_channel() -> str:
@@ -244,13 +319,23 @@ def install_skills(
                 if skill_dir.exists() and skill_dir.is_dir():
                     shutil.rmtree(skill_dir)
 
+        file_count = 0
         for skill_name in requested:
+            skill_files = _resolve_skill_files(client, skill_name, available_skills[skill_name])
+
             skill_dir = install_dir / skill_name
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
             skill_dir.mkdir(parents=True, exist_ok=True)
-            skill_bytes = _download_skill_markdown(client, skill_name, available_skills[skill_name]["skill_url"])
-            (skill_dir / "SKILL.md").write_bytes(skill_bytes)
+
+            for file_entry in skill_files:
+                content = _download_skill_file(client, skill_name, file_entry["url"])
+                _verify_skill_file_checksum(skill_name, file_entry, content)
+                target = skill_dir / file_entry["path"]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+
+            file_count += len(skill_files)
 
     _write_manifest(install_dir, resolved_ref, requested)
     return {
@@ -258,6 +343,7 @@ def install_skills(
         "ref": resolved_ref,
         "installed_skills": requested,
         "count": len(requested),
+        "file_count": file_count,
     }
 
 
@@ -302,4 +388,5 @@ def reinstall_skills(
         "installed_skills": install_result["installed_skills"],
         "removed_count": uninstall_result["count"],
         "installed_count": install_result["count"],
+        "file_count": install_result["file_count"],
     }

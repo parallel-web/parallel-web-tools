@@ -112,6 +112,7 @@ def create_skills_group(
         console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Installed ({result['count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
+        console.print(f"Files written: [cyan]{result['file_count']}[/cyan]")
 
     @skills.command(name="uninstall")
     @click.option(
@@ -196,5 +197,6 @@ def create_skills_group(
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Removed ({result['removed_count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
         console.print(f"Installed ({result['installed_count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
+        console.print(f"Files written: [cyan]{result['file_count']}[/cyan]")
 
     return skills
