@@ -429,31 +429,38 @@ def install_skills(
                 if stale_dir.exists() and stale_dir.is_dir():
                     shutil.rmtree(stale_dir)
 
-        installed_here: list[str] = []
-        for skill_name, payload in downloads.items():
+        # Ownership is decided before anything is written. A directory we did not
+        # install is someone else's skill: overwriting it would destroy their work,
+        # and recording it would make uninstall delete it later, so it is left alone
+        # and kept out of the manifest.
+        to_install: list[str] = []
+        for skill_name in downloads:
             skill_dir = install_dir / skill_name
-
-            # A directory we did not install is someone else's skill. Overwriting it
-            # would destroy their work, and recording it would make uninstall delete
-            # it later, so leave it alone and keep it out of the manifest.
             if skill_dir.exists() and skill_name not in previously_managed:
                 skipped.append({"skill": skill_name, "install_dir": str(install_dir)})
                 continue
+            to_install.append(skill_name)
 
+        # Claim ownership up front. An install killed partway through — Ctrl-C, full
+        # disk — then leaves directories this CLI still recognizes as its own, so the
+        # next install replaces them and uninstall can clean them up. Writing the
+        # manifest afterwards instead would strand those partial trees: absent from
+        # the manifest, they would be mistaken for a user's work and skipped forever.
+        _write_manifest(install_dir, resolved_ref, to_install)
+
+        for skill_name in to_install:
+            skill_dir = install_dir / skill_name
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
             skill_dir.mkdir(parents=True, exist_ok=True)
 
-            for relative_path, content in payload:
+            for relative_path, content in downloads[skill_name]:
                 target = _contained_target(skill_name, skill_dir, relative_path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
 
-            installed_here.append(skill_name)
             installed_anywhere.add(skill_name)
-            file_count += len(payload)
-
-        _write_manifest(install_dir, resolved_ref, installed_here)
+            file_count += len(downloads[skill_name])
 
     return {
         "install_dirs": [str(directory) for directory in targets],

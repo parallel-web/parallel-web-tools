@@ -389,6 +389,49 @@ class TestCollisionGuard:
         assert (install_dir / "parallel-web-search" / "SKILL.md").exists()
 
 
+class TestInterruptedInstall:
+    def _patch(self, monkeypatch, doomed: str = "") -> None:
+        """Patch the CDN, and make writing the doomed skill fail like a full disk would."""
+        real = skills._contained_target
+
+        def flaky(skill_name, skill_dir, relative_path):
+            if skill_name == doomed:
+                raise RuntimeError("disk full")
+            return real(skill_name, skill_dir, relative_path)
+
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_file", lambda client, name, url: name.encode())
+        monkeypatch.setattr(skills, "_contained_target", flaky)
+
+    def test_crashed_install_is_repaired_rather_than_skipped(self, monkeypatch, tmp_path):
+        install_dir = tmp_path / ".claude" / "skills"
+        self._patch(monkeypatch, doomed="parallel-web-search")
+        with pytest.raises(RuntimeError, match="disk full"):
+            skills.install_skills([install_dir])
+
+        monkeypatch.undo()
+        self._patch(monkeypatch)
+        result = skills.install_skills([install_dir])
+
+        assert result["skipped_skills"] == []
+        assert (install_dir / "parallel-web-search" / "SKILL.md").read_bytes() == b"parallel-web-search"
+
+    def test_crashed_install_does_not_claim_a_users_skill(self, monkeypatch, tmp_path):
+        install_dir = tmp_path / ".claude" / "skills"
+        mine = install_dir / "parallel-web-extract"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("hand written")
+        self._patch(monkeypatch, doomed="parallel-web-search")
+
+        with pytest.raises(RuntimeError, match="disk full"):
+            skills.install_skills([install_dir])
+
+        manifest = json.loads((install_dir / skills.MANIFEST_FILE_NAME).read_text())
+        assert manifest["installed_skills"] == ["parallel-web-search"]
+        assert (mine / "SKILL.md").read_text() == "hand written"
+
+
 class TestUnsafeManifestPaths:
     @pytest.mark.parametrize(
         "raw_path",
