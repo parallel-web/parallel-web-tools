@@ -47,6 +47,18 @@ def create_skills_group(
         label = "Locations" if len(locations) > 1 else "Location"
         console.print(f"{label}: [cyan]{', '.join(locations)}[/cyan]")
 
+    def print_skipped(result: dict) -> None:
+        skipped = result.get("skipped_skills") or []
+        if not skipped:
+            return
+
+        console.print(f"[yellow]Skipped ({len(skipped)}):[/yellow]")
+        for entry in skipped:
+            console.print(
+                f"[yellow]  {entry['skill']} — {entry['install_dir']}/{entry['skill']} already exists "
+                f"and was not installed by parallel-cli, so it was left untouched[/yellow]"
+            )
+
     @skills.command(name="list")
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_list(output_json: bool) -> None:
@@ -121,6 +133,7 @@ def create_skills_group(
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Installed ({result['count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
         console.print(f"Files written: [cyan]{result['file_count']}[/cyan]")
+        print_skipped(result)
 
     @skills.command(name="uninstall")
     @click.option(
@@ -206,5 +219,6 @@ def create_skills_group(
         console.print(f"Removed ({result['removed_count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
         console.print(f"Installed ({result['installed_count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
         console.print(f"Files written: [cyan]{result['file_count']}[/cyan]")
+        print_skipped(result)
 
     return skills

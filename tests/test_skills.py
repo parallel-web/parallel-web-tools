@@ -312,6 +312,112 @@ class TestMultiTargetInstall:
             skills.install_skills([])
 
 
+class TestCollisionGuard:
+    def _patch(self, monkeypatch) -> None:
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_file", lambda client, skill_name, url: skill_name.encode())
+
+    def test_install_leaves_unmanaged_same_named_skill_untouched(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        install_dir = tmp_path / ".claude" / "skills"
+        mine = install_dir / "parallel-web-search"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("hand written")
+
+        result = skills.install_skills([install_dir], selected_skills=["parallel-web-search"])
+
+        assert (mine / "SKILL.md").read_text() == "hand written"
+        assert result["installed_skills"] == []
+        assert result["count"] == 0
+        assert result["file_count"] == 0
+        assert result["skipped_skills"] == [{"skill": "parallel-web-search", "install_dir": str(install_dir)}]
+
+    def test_skipped_skill_is_absent_from_manifest_and_survives_uninstall(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        install_dir = tmp_path / ".claude" / "skills"
+        mine = install_dir / "parallel-web-search"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("hand written")
+
+        skills.install_skills([install_dir])
+        manifest = json.loads((install_dir / skills.MANIFEST_FILE_NAME).read_text())
+        assert "parallel-web-search" not in manifest["installed_skills"]
+        assert "parallel-web-extract" in manifest["installed_skills"]
+
+        result = skills.uninstall_skills([install_dir])
+
+        assert (mine / "SKILL.md").read_text() == "hand written"
+        assert result["removed_skills"] == ["parallel-web-extract"]
+
+    def test_our_own_skill_is_still_replaced_on_reinstall(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        install_dir = tmp_path / ".agents" / "skills"
+        skills.install_skills([install_dir], selected_skills=["parallel-web-search"])
+        (install_dir / "parallel-web-search" / "stale.md").write_text("stale")
+
+        result = skills.install_skills([install_dir], selected_skills=["parallel-web-search"])
+
+        assert result["installed_skills"] == ["parallel-web-search"]
+        assert result["skipped_skills"] == []
+        assert not (install_dir / "parallel-web-search" / "stale.md").exists()
+
+    def test_skip_is_per_directory(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        agents_dir = tmp_path / ".agents" / "skills"
+        claude_dir = tmp_path / ".claude" / "skills"
+        mine = claude_dir / "parallel-web-search"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("hand written")
+
+        result = skills.install_skills([agents_dir, claude_dir], selected_skills=["parallel-web-search"])
+
+        assert (agents_dir / "parallel-web-search" / "SKILL.md").read_bytes() == b"parallel-web-search"
+        assert (mine / "SKILL.md").read_text() == "hand written"
+        assert result["installed_skills"] == ["parallel-web-search"]
+        assert result["skipped_skills"] == [{"skill": "parallel-web-search", "install_dir": str(claude_dir)}]
+
+    def test_reinstall_accepts_a_one_shot_iterable(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        install_dir = tmp_path / ".agents" / "skills"
+        skills.install_skills([install_dir], selected_skills=["parallel-web-search"])
+
+        result = skills.reinstall_skills((path for path in [install_dir]), selected_skills=["parallel-web-search"])
+
+        assert result["removed_skills"] == ["parallel-web-search"]
+        assert result["installed_skills"] == ["parallel-web-search"]
+        assert (install_dir / "parallel-web-search" / "SKILL.md").exists()
+
+
+class TestUnsafeManifestPaths:
+    @pytest.mark.parametrize(
+        "raw_path",
+        ["C:/outside/payload", "C:\\outside\\payload", "/etc/passwd", "../escape.md", "a/../../escape.md"],
+    )
+    def test_rejects_paths_that_escape_the_skill_directory(self, raw_path):
+        with pytest.raises(skills.SkillsDownloadError, match="unsafe file path"):
+            skills._safe_skill_file_path("migrate-to-parallel", raw_path)
+
+    @pytest.mark.parametrize("raw_path", ["SKILL.md", "references/exa.md", "scripts/scan.py"])
+    def test_accepts_ordinary_relative_paths(self, raw_path):
+        assert skills._safe_skill_file_path("migrate-to-parallel", raw_path) == raw_path
+
+    def test_contained_target_rejects_escapes_that_slip_past_validation(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "migrate-to-parallel"
+        skill_dir.mkdir(parents=True)
+
+        with pytest.raises(skills.SkillsDownloadError, match="resolved outside its directory"):
+            skills._contained_target("migrate-to-parallel", skill_dir, "../../escaped.md")
+
+    def test_contained_target_allows_nested_paths(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "migrate-to-parallel"
+        skill_dir.mkdir(parents=True)
+
+        assert skills._contained_target("migrate-to-parallel", skill_dir, "references/exa.md") == (
+            skill_dir / "references" / "exa.md"
+        )
+
+
 class TestRemoteChannel:
     def test_get_remote_skills_channel(self, monkeypatch):
         monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)

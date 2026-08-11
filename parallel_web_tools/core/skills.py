@@ -9,7 +9,7 @@ import shutil
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import httpx
@@ -230,16 +230,43 @@ def _download_skill_file(client: httpx.Client, skill_name: str, skill_url: str) 
 
 
 def _safe_skill_file_path(skill_name: str, raw_path: str) -> str:
-    """Validate a manifest-declared relative path stays inside the skill directory."""
+    """Validate a manifest-declared relative path stays inside the skill directory.
+
+    Both path flavours are checked, not just the host's. POSIX rules alone accept
+    ``C:/outside/payload``, which pathlib then joins on Windows by discarding the
+    skill directory entirely — so a drive letter has to be rejected here even when
+    this code is running on Linux or macOS.
+    """
     candidate = raw_path.strip().replace("\\", "/")
     if not candidate:
         raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained an empty file path")
 
     posix_path = PurePosixPath(candidate)
-    if posix_path.is_absolute() or any(part in ("..", "") for part in posix_path.parts):
+    windows_path = PureWindowsPath(candidate)
+    unsafe = (
+        posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or bool(windows_path.root)
+        or any(part in ("..", "") for part in posix_path.parts)
+    )
+    if unsafe:
         raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained an unsafe file path: {raw_path}")
 
     return str(posix_path)
+
+
+def _contained_target(skill_name: str, skill_dir: Path, relative_path: str) -> Path:
+    """Join relative_path onto skill_dir, refusing anything that lands outside it.
+
+    A backstop for _safe_skill_file_path: string validation has to anticipate every
+    platform's join semantics, whereas this compares the resolved result.
+    """
+    target = skill_dir / relative_path
+    resolved_root = skill_dir.resolve()
+    if not target.resolve().is_relative_to(resolved_root):
+        raise SkillsDownloadError(f"Manifest for skill '{skill_name}' resolved outside its directory: {relative_path}")
+    return target
 
 
 def _resolve_skill_files(client: httpx.Client, skill_name: str, entry: dict[str, str]) -> list[dict[str, str]]:
@@ -358,8 +385,10 @@ def install_skills(
     """Install selected (or all) skills into every directory in install_dirs.
 
     Only skills previously managed by parallel-cli are reconciled. Unmanaged skill
-    directories are left untouched. Every file is downloaded once and written to each
-    directory, so a mid-download failure leaves no location partially installed.
+    directories are left untouched, including one that merely shares a name with a
+    skill being installed — that one is reported in ``skipped_skills`` instead. Every
+    file is downloaded once and written to each directory, so a mid-download failure
+    leaves no location partially installed.
     """
     del ref
 
@@ -388,8 +417,10 @@ def install_skills(
             downloads[skill_name] = payload
 
     file_count = 0
+    installed_anywhere: set[str] = set()
+    skipped: list[dict[str, str]] = []
     for install_dir in targets:
-        previously_managed = _managed_skills(install_dir)
+        previously_managed = set(_managed_skills(install_dir))
         install_dir.mkdir(parents=True, exist_ok=True)
 
         for skill_name in previously_managed:
@@ -398,26 +429,38 @@ def install_skills(
                 if stale_dir.exists() and stale_dir.is_dir():
                     shutil.rmtree(stale_dir)
 
+        installed_here: list[str] = []
         for skill_name, payload in downloads.items():
             skill_dir = install_dir / skill_name
+
+            # A directory we did not install is someone else's skill. Overwriting it
+            # would destroy their work, and recording it would make uninstall delete
+            # it later, so leave it alone and keep it out of the manifest.
+            if skill_dir.exists() and skill_name not in previously_managed:
+                skipped.append({"skill": skill_name, "install_dir": str(install_dir)})
+                continue
+
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
             skill_dir.mkdir(parents=True, exist_ok=True)
 
             for relative_path, content in payload:
-                target = skill_dir / relative_path
+                target = _contained_target(skill_name, skill_dir, relative_path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
 
+            installed_here.append(skill_name)
+            installed_anywhere.add(skill_name)
             file_count += len(payload)
 
-        _write_manifest(install_dir, resolved_ref, requested)
+        _write_manifest(install_dir, resolved_ref, installed_here)
 
     return {
         "install_dirs": [str(directory) for directory in targets],
         "ref": resolved_ref,
-        "installed_skills": requested,
-        "count": len(requested),
+        "installed_skills": sorted(installed_anywhere),
+        "count": len(installed_anywhere),
+        "skipped_skills": skipped,
         "file_count": file_count,
     }
 
@@ -450,14 +493,21 @@ def reinstall_skills(
     selected_skills: list[str] | None = None,
     ref: str | None = None,
 ) -> dict:
-    """Reinstall skills by uninstalling managed set then installing fresh."""
-    uninstall_result = uninstall_skills(install_dirs)
-    install_result = install_skills(install_dirs, selected_skills=selected_skills, ref=ref)
+    """Reinstall skills by uninstalling managed set then installing fresh.
+
+    Targets are normalized once up front: a one-shot iterable would otherwise be
+    consumed by the uninstall, leaving the install with nothing to write after the
+    existing skills had already been removed.
+    """
+    targets = _normalize_install_dirs(install_dirs)
+    uninstall_result = uninstall_skills(targets)
+    install_result = install_skills(targets, selected_skills=selected_skills, ref=ref)
     return {
         "install_dirs": install_result["install_dirs"],
         "ref": install_result["ref"],
         "removed_skills": uninstall_result["removed_skills"],
         "installed_skills": install_result["installed_skills"],
+        "skipped_skills": install_result["skipped_skills"],
         "removed_count": uninstall_result["count"],
         "installed_count": install_result["count"],
         "file_count": install_result["file_count"],
