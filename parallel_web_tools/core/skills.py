@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -19,6 +19,7 @@ SKILLS_INDEX_URL_ENV = "PARALLEL_SKILLS_INDEX_URL"
 DEFAULT_SKILLS_REPO_REF = "main"
 SKILLS_REPO_REF_ENV = "PARALLEL_SKILLS_REPO_REF"
 GLOBAL_SKILLS_DIR_ENV = "PARALLEL_SKILLS_GLOBAL_DIR"
+CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 
 PROJECT_ROOT_MARKERS = (".git", "pyproject.toml", "package.json")
 MANIFEST_FILE_NAME = ".parallel-cli-skills-manifest.json"
@@ -68,6 +69,14 @@ def get_global_skills_dir() -> Path:
     return Path.home() / ".agents" / "skills"
 
 
+def get_claude_config_dir() -> Path:
+    """Return the Claude Code configuration directory."""
+    configured = os.environ.get(CLAUDE_CONFIG_DIR_ENV)
+    if configured and configured.strip():
+        return Path(configured.strip()).expanduser()
+    return Path.home() / ".claude"
+
+
 def find_project_root(start: Path | None = None) -> Path | None:
     """Find a project root by walking upward for known root markers."""
     cursor = (start or Path.cwd()).resolve()
@@ -79,7 +88,7 @@ def find_project_root(start: Path | None = None) -> Path | None:
 
 
 def resolve_install_dir(project: bool, start: Path | None = None) -> Path:
-    """Resolve install directory for global or project-local skills."""
+    """Resolve the canonical ``.agents/skills`` install directory."""
     if not project:
         return get_global_skills_dir()
 
@@ -90,6 +99,58 @@ def resolve_install_dir(project: bool, start: Path | None = None) -> Path:
             "Run this inside a project containing one of: .git, pyproject.toml, package.json."
         )
     return root / ".agents" / "skills"
+
+
+def resolve_install_dirs(project: bool, start: Path | None = None) -> list[Path]:
+    """Resolve every directory skills should be installed into.
+
+    ``.agents/skills`` is the canonical cross-agent location and always comes first.
+    Claude Code does not read it — it only discovers skills under ``.claude/skills`` —
+    so when a Claude Code configuration directory is present we install there too.
+    Agents that read both (Cursor, for example) de-duplicate by skill name.
+
+    An explicit ``PARALLEL_SKILLS_GLOBAL_DIR`` override targets exactly one directory,
+    on the assumption that a caller naming a path wants only that path written.
+    """
+    canonical = resolve_install_dir(project=project, start=start)
+    if not project and os.environ.get(GLOBAL_SKILLS_DIR_ENV):
+        return [canonical]
+
+    claude_config_dir = canonical.parent.parent / ".claude" if project else get_claude_config_dir()
+    if not claude_config_dir.is_dir():
+        return [canonical]
+
+    return _dedupe_dirs([canonical, claude_config_dir / "skills"])
+
+
+def _dedupe_dirs(dirs: Iterable[Path]) -> list[Path]:
+    """Drop directories that resolve to the same location, preserving order.
+
+    A user who symlinked ``~/.claude/skills`` at ``~/.agents/skills`` would otherwise
+    have the same tree installed, and its manifest rewritten, twice.
+    """
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for directory in dirs:
+        resolved = Path(directory).expanduser().resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(Path(directory))
+    return unique
+
+
+def _normalize_install_dirs(install_dirs: Path | str | Iterable[Path | str]) -> list[Path]:
+    """Accept a single directory or a collection of them and return a clean list."""
+    if isinstance(install_dirs, (str, Path)):
+        candidates: list[Path | str] = [install_dirs]
+    else:
+        candidates = list(install_dirs)
+
+    if not candidates:
+        raise SkillsInstallLocationError("No skills install directory was provided.")
+
+    return _dedupe_dirs(Path(candidate) for candidate in candidates)
 
 
 @contextmanager
@@ -281,17 +342,28 @@ def _read_manifest(install_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _managed_skills(install_dir: Path) -> list[str]:
+    """Return the skill names parallel-cli previously installed into install_dir."""
+    managed_raw = _read_manifest(install_dir).get("installed_skills")
+    if not isinstance(managed_raw, list):
+        return []
+    return [name for name in managed_raw if isinstance(name, str)]
+
+
 def install_skills(
-    install_dir: Path,
+    install_dirs: Path | str | Iterable[Path | str],
     selected_skills: list[str] | None = None,
     ref: str | None = None,
 ) -> dict:
-    """Install selected (or all) skills into install_dir.
+    """Install selected (or all) skills into every directory in install_dirs.
 
     Only skills previously managed by parallel-cli are reconciled. Unmanaged skill
-    directories are left untouched.
+    directories are left untouched. Every file is downloaded once and written to each
+    directory, so a mid-download failure leaves no location partially installed.
     """
     del ref
+
+    targets = _normalize_install_dirs(install_dirs)
 
     with _skills_client() as client:
         index = _fetch_skills_index(client)
@@ -305,41 +377,44 @@ def install_skills(
                 f"Unknown skills requested: {', '.join(missing)}. Available skills: {', '.join(available)}"
             )
 
-        manifest = _read_manifest(install_dir)
-        managed_raw = manifest.get("installed_skills")
-        previously_managed: list[str] = (
-            [name for name in managed_raw if isinstance(name, str)] if isinstance(managed_raw, list) else []
-        )
+        downloads: dict[str, list[tuple[str, bytes]]] = {}
+        for skill_name in requested:
+            skill_files = _resolve_skill_files(client, skill_name, available_skills[skill_name])
+            payload: list[tuple[str, bytes]] = []
+            for file_entry in skill_files:
+                content = _download_skill_file(client, skill_name, file_entry["url"])
+                _verify_skill_file_checksum(skill_name, file_entry, content)
+                payload.append((file_entry["path"], content))
+            downloads[skill_name] = payload
 
+    file_count = 0
+    for install_dir in targets:
+        previously_managed = _managed_skills(install_dir)
         install_dir.mkdir(parents=True, exist_ok=True)
 
         for skill_name in previously_managed:
             if skill_name not in requested:
-                skill_dir = install_dir / skill_name
-                if skill_dir.exists() and skill_dir.is_dir():
-                    shutil.rmtree(skill_dir)
+                stale_dir = install_dir / skill_name
+                if stale_dir.exists() and stale_dir.is_dir():
+                    shutil.rmtree(stale_dir)
 
-        file_count = 0
-        for skill_name in requested:
-            skill_files = _resolve_skill_files(client, skill_name, available_skills[skill_name])
-
+        for skill_name, payload in downloads.items():
             skill_dir = install_dir / skill_name
             if skill_dir.exists():
                 shutil.rmtree(skill_dir)
             skill_dir.mkdir(parents=True, exist_ok=True)
 
-            for file_entry in skill_files:
-                content = _download_skill_file(client, skill_name, file_entry["url"])
-                _verify_skill_file_checksum(skill_name, file_entry, content)
-                target = skill_dir / file_entry["path"]
+            for relative_path, content in payload:
+                target = skill_dir / relative_path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
 
-            file_count += len(skill_files)
+            file_count += len(payload)
 
-    _write_manifest(install_dir, resolved_ref, requested)
+        _write_manifest(install_dir, resolved_ref, requested)
+
     return {
-        "install_dir": str(install_dir),
+        "install_dirs": [str(directory) for directory in targets],
         "ref": resolved_ref,
         "installed_skills": requested,
         "count": len(requested),
@@ -347,42 +422,39 @@ def install_skills(
     }
 
 
-def uninstall_skills(install_dir: Path) -> dict:
-    """Uninstall only manifest-managed skills from install_dir."""
-    manifest = _read_manifest(install_dir)
-    managed_raw = manifest.get("installed_skills")
-    managed: list[str] = (
-        [name for name in managed_raw if isinstance(name, str)] if isinstance(managed_raw, list) else []
-    )
-    removed: list[str] = []
+def uninstall_skills(install_dirs: Path | str | Iterable[Path | str]) -> dict:
+    """Uninstall only manifest-managed skills from every directory in install_dirs."""
+    targets = _normalize_install_dirs(install_dirs)
+    removed: set[str] = set()
 
-    for skill_name in managed:
-        skill_path = install_dir / skill_name
-        if skill_path.exists() and skill_path.is_dir():
-            shutil.rmtree(skill_path)
-            removed.append(skill_name)
+    for install_dir in targets:
+        for skill_name in _managed_skills(install_dir):
+            skill_path = install_dir / skill_name
+            if skill_path.exists() and skill_path.is_dir():
+                shutil.rmtree(skill_path)
+                removed.add(skill_name)
 
-    manifest_path = _manifest_path(install_dir)
-    if manifest_path.exists():
-        manifest_path.unlink()
+        manifest_path = _manifest_path(install_dir)
+        if manifest_path.exists():
+            manifest_path.unlink()
 
     return {
-        "install_dir": str(install_dir),
+        "install_dirs": [str(directory) for directory in targets],
         "removed_skills": sorted(removed),
         "count": len(removed),
     }
 
 
 def reinstall_skills(
-    install_dir: Path,
+    install_dirs: Path | str | Iterable[Path | str],
     selected_skills: list[str] | None = None,
     ref: str | None = None,
 ) -> dict:
     """Reinstall skills by uninstalling managed set then installing fresh."""
-    uninstall_result = uninstall_skills(install_dir)
-    install_result = install_skills(install_dir, selected_skills=selected_skills, ref=ref)
+    uninstall_result = uninstall_skills(install_dirs)
+    install_result = install_skills(install_dirs, selected_skills=selected_skills, ref=ref)
     return {
-        "install_dir": install_result["install_dir"],
+        "install_dirs": install_result["install_dirs"],
         "ref": install_result["ref"],
         "removed_skills": uninstall_result["removed_skills"],
         "installed_skills": install_result["installed_skills"],

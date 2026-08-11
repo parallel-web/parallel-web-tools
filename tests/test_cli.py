@@ -2481,12 +2481,12 @@ class TestSkillsCommands:
     def test_skills_install_global_default(self, runner):
         with (
             mock.patch(
-                "parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"
+                "parallel_web_tools.core.skills.resolve_install_dirs", return_value=["/tmp/.agents/skills"]
             ) as mock_dir,
             mock.patch(
                 "parallel_web_tools.core.skills.install_skills",
                 return_value={
-                    "install_dir": "/tmp/.agents/skills",
+                    "install_dirs": ["/tmp/.agents/skills"],
                     "ref": "main",
                     "installed_skills": ["parallel-web-search"],
                     "count": 1,
@@ -2504,12 +2504,12 @@ class TestSkillsCommands:
     def test_skills_install_project_sets_project_flag(self, runner):
         with (
             mock.patch(
-                "parallel_web_tools.core.skills.resolve_install_dir", return_value="/repo/.agents/skills"
+                "parallel_web_tools.core.skills.resolve_install_dirs", return_value=["/repo/.agents/skills"]
             ) as mock_dir,
             mock.patch(
                 "parallel_web_tools.core.skills.install_skills",
                 return_value={
-                    "install_dir": "/repo/.agents/skills",
+                    "install_dirs": ["/repo/.agents/skills"],
                     "ref": "main",
                     "installed_skills": ["parallel-web-search"],
                     "count": 1,
@@ -2525,7 +2525,7 @@ class TestSkillsCommands:
         from parallel_web_tools.core.skills import SkillsInstallLocationError
 
         with mock.patch(
-            "parallel_web_tools.core.skills.resolve_install_dir",
+            "parallel_web_tools.core.skills.resolve_install_dirs",
             side_effect=SkillsInstallLocationError("no project root"),
         ):
             result = runner.invoke(main, ["skills", "install", "--project", "--json"])
@@ -2538,7 +2538,7 @@ class TestSkillsCommands:
         from parallel_web_tools.core.skills import SkillsInputError
 
         with (
-            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dirs", return_value=["/tmp/.agents/skills"]),
             mock.patch(
                 "parallel_web_tools.core.skills.install_skills",
                 side_effect=SkillsInputError("unknown skill"),
@@ -2550,13 +2550,36 @@ class TestSkillsCommands:
         payload = json.loads(result.output)
         assert payload["error"]["message"] == "unknown skill"
 
+    def test_skills_install_reports_every_location(self, runner):
+        with (
+            mock.patch(
+                "parallel_web_tools.core.skills.resolve_install_dirs",
+                return_value=["/tmp/.agents/skills", "/tmp/.claude/skills"],
+            ),
+            mock.patch(
+                "parallel_web_tools.core.skills.install_skills",
+                return_value={
+                    "install_dirs": ["/tmp/.agents/skills", "/tmp/.claude/skills"],
+                    "ref": "main",
+                    "installed_skills": ["parallel-web-search"],
+                    "count": 1,
+                    "file_count": 2,
+                },
+            ),
+        ):
+            result = runner.invoke(main, ["skills", "install"])
+
+        assert result.exit_code == 0
+        assert "Locations:" in result.output
+        assert "/tmp/.claude/skills" in result.output
+
     def test_skills_uninstall_json(self, runner):
         with (
-            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dirs", return_value=["/tmp/.agents/skills"]),
             mock.patch(
                 "parallel_web_tools.core.skills.uninstall_skills",
                 return_value={
-                    "install_dir": "/tmp/.agents/skills",
+                    "install_dirs": ["/tmp/.agents/skills"],
                     "removed_skills": ["parallel-web-search"],
                     "count": 1,
                 },
@@ -2570,11 +2593,11 @@ class TestSkillsCommands:
 
     def test_skills_reinstall_json(self, runner):
         with (
-            mock.patch("parallel_web_tools.core.skills.resolve_install_dir", return_value="/tmp/.agents/skills"),
+            mock.patch("parallel_web_tools.core.skills.resolve_install_dirs", return_value=["/tmp/.agents/skills"]),
             mock.patch(
                 "parallel_web_tools.core.skills.reinstall_skills",
                 return_value={
-                    "install_dir": "/tmp/.agents/skills",
+                    "install_dirs": ["/tmp/.agents/skills"],
                     "ref": "main",
                     "removed_skills": ["parallel-web-search"],
                     "installed_skills": ["parallel-web-extract"],

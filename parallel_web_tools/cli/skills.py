@@ -36,8 +36,16 @@ def create_skills_group(
         """Install and manage Parallel agent skills.
 
         Downloads come from skills.parallel.ai. Set PARALLEL_SKILLS_INDEX_URL to use a custom index.
+
+        Skills install to .agents/skills, and also to .claude/skills when a Claude Code
+        configuration directory is present, since Claude Code reads only its own directory.
         """
         pass
+
+    def print_locations(result: dict) -> None:
+        locations = result["install_dirs"]
+        label = "Locations" if len(locations) > 1 else "Location"
+        console.print(f"{label}: [cyan]{', '.join(locations)}[/cyan]")
 
     @skills.command(name="list")
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
@@ -86,13 +94,13 @@ def create_skills_group(
             SkillsInputError,
             SkillsInstallLocationError,
             install_skills,
-            resolve_install_dir,
+            resolve_install_dirs,
         )
 
         try:
-            install_dir = resolve_install_dir(project=project)
+            install_dirs = resolve_install_dirs(project=project)
             result = install_skills(
-                install_dir=install_dir,
+                install_dirs=install_dirs,
                 selected_skills=list(skill_names) or None,
             )
         except SkillsInstallLocationError as e:
@@ -109,7 +117,7 @@ def create_skills_group(
             return
 
         console.print("[bold green]Skills installed[/bold green]")
-        console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+        print_locations(result)
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Installed ({result['count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")
         console.print(f"Files written: [cyan]{result['file_count']}[/cyan]")
@@ -123,11 +131,11 @@ def create_skills_group(
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_uninstall(project: bool, output_json: bool) -> None:
         """Uninstall skills previously installed by parallel-cli."""
-        from parallel_web_tools.core.skills import SkillsInstallLocationError, resolve_install_dir, uninstall_skills
+        from parallel_web_tools.core.skills import SkillsInstallLocationError, resolve_install_dirs, uninstall_skills
 
         try:
-            install_dir = resolve_install_dir(project=project)
-            result = uninstall_skills(install_dir=install_dir)
+            install_dirs = resolve_install_dirs(project=project)
+            result = uninstall_skills(install_dirs=install_dirs)
         except SkillsInstallLocationError as e:
             handle_error(e, output_json=output_json, exit_code=exit_bad_input, prefix="Skills uninstall failed")
         except Exception as e:
@@ -139,11 +147,11 @@ def create_skills_group(
 
         if result["count"] == 0:
             console.print("[yellow]No managed skills found to uninstall[/yellow]")
-            console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+            print_locations(result)
             return
 
         console.print("[bold green]Skills uninstalled[/bold green]")
-        console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+        print_locations(result)
         console.print(f"Removed ({result['count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
 
     @skills.command(name="reinstall")
@@ -170,13 +178,13 @@ def create_skills_group(
             SkillsInputError,
             SkillsInstallLocationError,
             reinstall_skills,
-            resolve_install_dir,
+            resolve_install_dirs,
         )
 
         try:
-            install_dir = resolve_install_dir(project=project)
+            install_dirs = resolve_install_dirs(project=project)
             result = reinstall_skills(
-                install_dir=install_dir,
+                install_dirs=install_dirs,
                 selected_skills=list(skill_names) or None,
             )
         except SkillsInstallLocationError as e:
@@ -193,7 +201,7 @@ def create_skills_group(
             return
 
         console.print("[bold green]Skills reinstalled[/bold green]")
-        console.print(f"Location: [cyan]{result['install_dir']}[/cyan]")
+        print_locations(result)
         console.print(f"Ref: [cyan]{result['ref']}[/cyan]")
         console.print(f"Removed ({result['removed_count']}): [cyan]{', '.join(result['removed_skills'])}[/cyan]")
         console.print(f"Installed ({result['installed_count']}): [cyan]{', '.join(result['installed_skills'])}[/cyan]")

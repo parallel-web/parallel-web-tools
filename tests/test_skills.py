@@ -60,6 +60,78 @@ class TestResolveInstallDir:
             skills.resolve_install_dir(project=True, start=start)
 
 
+class TestResolveInstallDirs:
+    def test_global_adds_claude_dir_when_present(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(skills.GLOBAL_SKILLS_DIR_ENV, raising=False)
+        monkeypatch.delenv(skills.CLAUDE_CONFIG_DIR_ENV, raising=False)
+        monkeypatch.setattr("parallel_web_tools.core.skills.Path.home", lambda: tmp_path)
+        (tmp_path / ".claude").mkdir()
+
+        assert skills.resolve_install_dirs(project=False) == [
+            tmp_path / ".agents" / "skills",
+            tmp_path / ".claude" / "skills",
+        ]
+
+    def test_global_skips_claude_dir_when_absent(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(skills.GLOBAL_SKILLS_DIR_ENV, raising=False)
+        monkeypatch.delenv(skills.CLAUDE_CONFIG_DIR_ENV, raising=False)
+        monkeypatch.setattr("parallel_web_tools.core.skills.Path.home", lambda: tmp_path)
+
+        assert skills.resolve_install_dirs(project=False) == [tmp_path / ".agents" / "skills"]
+
+    def test_global_honors_claude_config_dir_env(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(skills.GLOBAL_SKILLS_DIR_ENV, raising=False)
+        monkeypatch.setattr("parallel_web_tools.core.skills.Path.home", lambda: tmp_path)
+        custom_claude = tmp_path / "elsewhere" / "claude-config"
+        custom_claude.mkdir(parents=True)
+        monkeypatch.setenv(skills.CLAUDE_CONFIG_DIR_ENV, str(custom_claude))
+
+        assert skills.resolve_install_dirs(project=False) == [
+            tmp_path / ".agents" / "skills",
+            custom_claude / "skills",
+        ]
+
+    def test_global_env_override_targets_single_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("parallel_web_tools.core.skills.Path.home", lambda: tmp_path)
+        (tmp_path / ".claude").mkdir()
+        monkeypatch.setenv(skills.GLOBAL_SKILLS_DIR_ENV, str(tmp_path / "custom-skills"))
+
+        assert skills.resolve_install_dirs(project=False) == [tmp_path / "custom-skills"]
+
+    def test_project_adds_claude_dir_when_present(self, tmp_path):
+        project_root = tmp_path / "repo"
+        nested = project_root / "src" / "module"
+        nested.mkdir(parents=True)
+        (project_root / "pyproject.toml").write_text("[project]\nname='x'\n")
+        (project_root / ".claude").mkdir()
+
+        assert skills.resolve_install_dirs(project=True, start=nested) == [
+            project_root / ".agents" / "skills",
+            project_root / ".claude" / "skills",
+        ]
+
+    def test_project_ignores_claude_config_dir_env(self, monkeypatch, tmp_path):
+        project_root = tmp_path / "repo"
+        project_root.mkdir()
+        (project_root / "pyproject.toml").write_text("[project]\nname='x'\n")
+        global_claude = tmp_path / "home" / ".claude"
+        global_claude.mkdir(parents=True)
+        monkeypatch.setenv(skills.CLAUDE_CONFIG_DIR_ENV, str(global_claude))
+
+        assert skills.resolve_install_dirs(project=True, start=project_root) == [project_root / ".agents" / "skills"]
+
+    def test_symlinked_claude_dir_is_deduped(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(skills.GLOBAL_SKILLS_DIR_ENV, raising=False)
+        monkeypatch.delenv(skills.CLAUDE_CONFIG_DIR_ENV, raising=False)
+        monkeypatch.setattr("parallel_web_tools.core.skills.Path.home", lambda: tmp_path)
+        agents_skills = tmp_path / ".agents" / "skills"
+        agents_skills.mkdir(parents=True)
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude" / "skills").symlink_to(agents_skills, target_is_directory=True)
+
+        assert skills.resolve_install_dirs(project=False) == [agents_skills]
+
+
 def _make_index() -> dict:
     return {
         "channel": "main",
@@ -151,6 +223,93 @@ class TestCdnInstall:
         result = skills.install_skills(install_dir, selected_skills=["parallel-web-search"], ref="feature/test-branch")
 
         assert result["ref"] == "main"
+
+
+class TestMultiTargetInstall:
+    def _patch(self, monkeypatch) -> None:
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_file", lambda client, skill_name, url: skill_name.encode())
+
+    def test_install_writes_every_target(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        agents_dir = tmp_path / ".agents" / "skills"
+        claude_dir = tmp_path / ".claude" / "skills"
+
+        result = skills.install_skills([agents_dir, claude_dir], selected_skills=["parallel-web-search"])
+
+        assert result["install_dirs"] == [str(agents_dir), str(claude_dir)]
+        assert result["file_count"] == 2
+        for install_dir in (agents_dir, claude_dir):
+            assert (install_dir / "parallel-web-search" / "SKILL.md").read_bytes() == b"parallel-web-search"
+            assert (install_dir / skills.MANIFEST_FILE_NAME).exists()
+
+    def test_install_downloads_each_file_once(self, monkeypatch, tmp_path):
+        downloaded: list[str] = []
+
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(
+            skills,
+            "_download_skill_file",
+            lambda client, skill_name, url: (downloaded.append(url), skill_name.encode())[1],
+        )
+
+        skills.install_skills([tmp_path / "a", tmp_path / "b", tmp_path / "c"], selected_skills=["parallel-web-search"])
+
+        assert len(downloaded) == 1
+
+    def test_failed_download_leaves_no_target_written(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+
+        def explode(client, skill_name, url):
+            raise skills.SkillsDownloadError("network down")
+
+        monkeypatch.setattr(skills, "_download_skill_file", explode)
+        agents_dir = tmp_path / ".agents" / "skills"
+
+        with pytest.raises(skills.SkillsDownloadError):
+            skills.install_skills([agents_dir, tmp_path / ".claude" / "skills"])
+
+        assert not agents_dir.exists()
+
+    def test_uninstall_clears_every_target(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        agents_dir = tmp_path / ".agents" / "skills"
+        claude_dir = tmp_path / ".claude" / "skills"
+        skills.install_skills([agents_dir, claude_dir], selected_skills=["parallel-web-search"])
+
+        result = skills.uninstall_skills([agents_dir, claude_dir])
+
+        assert result["removed_skills"] == ["parallel-web-search"]
+        assert result["count"] == 1
+        for install_dir in (agents_dir, claude_dir):
+            assert not (install_dir / "parallel-web-search").exists()
+            assert not (install_dir / skills.MANIFEST_FILE_NAME).exists()
+
+    def test_install_prunes_dropped_skills_from_every_target(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        targets = [tmp_path / ".agents" / "skills", tmp_path / ".claude" / "skills"]
+        skills.install_skills(targets)
+        skills.install_skills(targets, selected_skills=["parallel-web-search"])
+
+        for install_dir in targets:
+            assert (install_dir / "parallel-web-search").exists()
+            assert not (install_dir / "parallel-web-extract").exists()
+
+    def test_duplicate_targets_are_written_once(self, monkeypatch, tmp_path):
+        self._patch(monkeypatch)
+        install_dir = tmp_path / ".agents" / "skills"
+
+        result = skills.install_skills([install_dir, install_dir], selected_skills=["parallel-web-search"])
+
+        assert result["install_dirs"] == [str(install_dir)]
+        assert result["file_count"] == 1
+
+    def test_empty_target_list_is_rejected(self, tmp_path):
+        with pytest.raises(skills.SkillsInstallLocationError):
+            skills.install_skills([])
 
 
 class TestRemoteChannel:
