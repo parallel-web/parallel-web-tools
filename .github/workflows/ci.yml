@@ -54,6 +54,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+
       - name: Install dependencies
         run: uv sync --all-extras
 
