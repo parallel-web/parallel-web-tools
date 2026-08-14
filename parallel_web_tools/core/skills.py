@@ -106,8 +106,14 @@ def resolve_install_dirs(project: bool, start: Path | None = None) -> list[Path]
 
     ``.agents/skills`` is the canonical cross-agent location and always comes first.
     Claude Code does not read it — it only discovers skills under ``.claude/skills`` —
-    so when a Claude Code configuration directory is present we install there too.
-    Agents that read both (Cursor, for example) de-duplicate by skill name.
+    so when Claude Code is present we install there too. Agents that read both
+    (Cursor, for example) de-duplicate by skill name.
+
+    Global installs mirror into the Claude Code configuration directory when it
+    exists; its absence means no Claude Code on this machine. Project installs
+    mirror into ``<root>/.claude/skills``, created if needed whenever the machine
+    has Claude Code — a repo missing ``.claude`` just hasn't stored Claude settings
+    yet, and skipping it would leave the skills invisible to Claude Code there.
 
     An explicit ``PARALLEL_SKILLS_GLOBAL_DIR`` override targets exactly one directory,
     on the assumption that a caller naming a path wants only that path written.
@@ -116,9 +122,14 @@ def resolve_install_dirs(project: bool, start: Path | None = None) -> list[Path]
     if not project and os.environ.get(GLOBAL_SKILLS_DIR_ENV):
         return [canonical]
 
-    claude_config_dir = canonical.parent.parent / ".claude" if project else get_claude_config_dir()
-    if not claude_config_dir.is_dir():
-        return [canonical]
+    if project:
+        claude_config_dir = canonical.parent.parent / ".claude"
+        if not claude_config_dir.is_dir() and not get_claude_config_dir().is_dir():
+            return [canonical]
+    else:
+        claude_config_dir = get_claude_config_dir()
+        if not claude_config_dir.is_dir():
+            return [canonical]
 
     return _dedupe_dirs([canonical, claude_config_dir / "skills"])
 

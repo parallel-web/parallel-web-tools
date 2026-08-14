@@ -110,13 +110,27 @@ class TestResolveInstallDirs:
             project_root / ".claude" / "skills",
         ]
 
-    def test_project_ignores_claude_config_dir_env(self, monkeypatch, tmp_path):
+    def test_project_mirrors_locally_when_machine_has_claude(self, monkeypatch, tmp_path):
+        """A repo without .claude still gets one when Claude Code exists on the machine,
+        and the mirror stays project-local — never the global config directory."""
         project_root = tmp_path / "repo"
         project_root.mkdir()
         (project_root / "pyproject.toml").write_text("[project]\nname='x'\n")
         global_claude = tmp_path / "home" / ".claude"
         global_claude.mkdir(parents=True)
         monkeypatch.setenv(skills.CLAUDE_CONFIG_DIR_ENV, str(global_claude))
+
+        assert skills.resolve_install_dirs(project=True, start=project_root) == [
+            project_root / ".agents" / "skills",
+            project_root / ".claude" / "skills",
+        ]
+
+    def test_project_skips_claude_dir_when_machine_has_no_claude(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(skills.CLAUDE_CONFIG_DIR_ENV, raising=False)
+        monkeypatch.setattr("parallel_web_tools.core.skills.Path.home", lambda: tmp_path / "home")
+        project_root = tmp_path / "repo"
+        project_root.mkdir()
+        (project_root / "pyproject.toml").write_text("[project]\nname='x'\n")
 
         assert skills.resolve_install_dirs(project=True, start=project_root) == [project_root / ".agents" / "skills"]
 
