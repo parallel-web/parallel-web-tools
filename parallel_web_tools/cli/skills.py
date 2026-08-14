@@ -86,7 +86,8 @@ def create_skills_group(
     @click.option(
         "--project",
         is_flag=True,
-        help="Install to .agents/skills in detected project root (default is global install).",
+        help="Install into the detected project root — .agents/skills, plus .claude/skills "
+        "when Claude Code is present (default is global install).",
     )
     @click.option(
         "--skill",
@@ -139,7 +140,7 @@ def create_skills_group(
     @click.option(
         "--project",
         is_flag=True,
-        help="Uninstall from .agents/skills in detected project root (default is global install).",
+        help="Uninstall from the detected project root's skill directories (default is global install).",
     )
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_uninstall(project: bool, output_json: bool) -> None:
@@ -171,7 +172,7 @@ def create_skills_group(
     @click.option(
         "--project",
         is_flag=True,
-        help="Reinstall in .agents/skills in detected project root (default is global install).",
+        help="Reinstall in the detected project root's skill directories (default is global install).",
     )
     @click.option(
         "--skill",
