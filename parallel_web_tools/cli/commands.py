@@ -1088,18 +1088,19 @@ def memory_clear(memory_scope_key: str | None, confirm_clear: bool, output_json:
 # Search Command
 # =============================================================================
 
-# Beta -> V1 mode mapping. Beta had three modes; V1 has three (turbo/basic/
-# advanced). We keep the old values as accepted CLI inputs and translate them so
-# existing scripts work.
+# Search mode translation. V1 accepts turbo/fast/basic/advanced natively; the
+# Beta-only values stay accepted CLI inputs and are translated so existing
+# scripts keep working. Beta's `fast` used to downgrade to basic, but V1 now has
+# a native fast mode of its own, so the name passes through.
 _SEARCH_MODE_MAP = {
-    "fast": "basic",
-    "one-shot": "basic",
-    "agentic": "advanced",
     "turbo": "turbo",
+    "fast": "fast",
     "basic": "basic",
     "advanced": "advanced",
+    "one-shot": "basic",
+    "agentic": "advanced",
 }
-_DEPRECATED_SEARCH_MODES = {"fast", "one-shot", "agentic"}
+_DEPRECATED_SEARCH_MODES = {"one-shot", "agentic"}
 
 
 def _emit_deprecation(message: str) -> None:
@@ -1166,7 +1167,8 @@ def build_search_v1_kwargs(
     "--mode",
     type=click.Choice(list(_SEARCH_MODE_MAP.keys())),
     default="basic",
-    help="Search mode: turbo (fastest), basic, or advanced (one-shot/fast → basic, agentic → advanced)",
+    help="Search mode: turbo (fastest), fast (high quality within ~1s), basic, "
+    "or advanced (highest quality; one-shot → basic, agentic → advanced)",
     show_default=True,
 )
 @click.option("--max-results", type=int, help="Maximum results (defaults to server-side default of 10)")
