@@ -1201,20 +1201,6 @@ class TestBuildSearchV1Kwargs:
         assert kwargs["search_queries"] == ["first query", "second query"]
         assert kwargs["objective"] == "overarching goal"
 
-    def test_mode_fast_maps_to_basic(self):
-        """Should map old `fast` mode to V1 `basic`."""
-        kwargs = build_search_v1_kwargs(
-            objective=None,
-            query=("q",),
-            mode="fast",
-            max_results=None,
-            source_policy=None,
-            excerpt_max_chars_per_result=None,
-            excerpt_max_chars_total=None,
-            fetch_policy=None,
-        )
-        assert kwargs["mode"] == "basic"
-
     def test_mode_one_shot_maps_to_basic(self):
         """Should map old `one-shot` mode to V1 `basic`."""
         kwargs = build_search_v1_kwargs(
@@ -1244,8 +1230,8 @@ class TestBuildSearchV1Kwargs:
         assert kwargs["mode"] == "advanced"
 
     def test_new_mode_values_pass_through(self):
-        """Should accept V1-native `turbo`/`basic`/`advanced` values directly."""
-        for new_mode in ("turbo", "basic", "advanced"):
+        """Should accept V1-native `turbo`/`fast`/`basic`/`advanced` values directly."""
+        for new_mode in ("turbo", "fast", "basic", "advanced"):
             kwargs = build_search_v1_kwargs(
                 objective=None,
                 query=("q",),
@@ -1621,7 +1607,6 @@ class TestSearchDeprecationWarnings:
     @pytest.mark.parametrize(
         "deprecated_mode,expected_new",
         [
-            ("fast", "basic"),
             ("one-shot", "basic"),
             ("agentic", "advanced"),
         ],
@@ -1644,7 +1629,7 @@ class TestSearchDeprecationWarnings:
         call_kwargs = mock_cli_client.search.call_args.kwargs
         assert call_kwargs["mode"] == expected_new
 
-    @pytest.mark.parametrize("new_mode", ["basic", "advanced"])
+    @pytest.mark.parametrize("new_mode", ["turbo", "fast", "basic", "advanced"])
     def test_new_modes_do_not_emit_warning(self, runner, mock_cli_client, new_mode):
         """Should not warn when V1-native mode values are used."""
         self._setup_mock_search(mock_cli_client)
