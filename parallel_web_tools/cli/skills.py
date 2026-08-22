@@ -33,7 +33,11 @@ def create_skills_group(
 
     @click.group(name="skills")
     def skills() -> None:
-        """Install and manage Parallel agent skills.
+        """Install, update, and manage Parallel agent skills.
+
+        Run parallel-cli skills install to install or update managed skills after
+        updating parallel-cli. Use parallel-cli skills reinstall for a clean reinstall.
+        Skills not managed by parallel-cli are left untouched.
 
         Downloads come from skills.parallel.ai. Set PARALLEL_SKILLS_INDEX_URL to use a custom index.
 
@@ -93,14 +97,16 @@ def create_skills_group(
         "--skill",
         "skill_names",
         multiple=True,
-        help="Skill name to install (repeatable). Defaults to all. Skills not listed will be removed.",
+        help="Skill name to install (repeatable). Defaults to all. Other managed skills will be removed.",
     )
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_install(project: bool, skill_names: tuple[str, ...], output_json: bool) -> None:
-        """Install Parallel skills from skills.parallel.ai.
+        """Install or update Parallel skills from skills.parallel.ai.
+
+        Run again after updating parallel-cli to refresh managed skills.
 
         When --skill is provided, the managed install set is replaced with exactly
-        the listed skills.
+        the listed skills. Unmanaged skills are never overwritten or removed.
         """
         from parallel_web_tools.core.skills import (
             SkillsError,
@@ -178,14 +184,14 @@ def create_skills_group(
         "--skill",
         "skill_names",
         multiple=True,
-        help="Skill name to reinstall (repeatable). Defaults to all. Skills not listed will be removed.",
+        help="Skill name to reinstall (repeatable). Defaults to all. Other managed skills will be removed.",
     )
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_reinstall(project: bool, skill_names: tuple[str, ...], output_json: bool) -> None:
         """Reinstall Parallel skills (uninstall managed set then install fresh).
 
         When --skill is provided, the managed install set is replaced with exactly
-        the listed skills.
+        the listed skills. Unmanaged skills are never overwritten or removed.
         """
         from parallel_web_tools.core.skills import (
             SkillsError,
