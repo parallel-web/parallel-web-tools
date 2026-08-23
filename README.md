@@ -117,6 +117,9 @@ parallel-cli
     └── clear               # Permanently clear selected Memory
 ```
 
+Run `parallel-cli skills install` to install or update agent skills. When using
+`--skill`, other managed skills are removed; unmanaged skills are preserved.
+
 ## Quick Start
 
 ### 1. Authenticate
@@ -235,28 +238,6 @@ parallel-cli memory clear --scope-key workspace_acme --confirm-clear --json
 Omit `--scope-key` / `--memory-scope-key` to use personal Memory when the
 credential and account are eligible. Application credentials require a stable
 scope key containing only letters, digits, underscores, or hyphens.
-
-### 7. Install or Update Agent Skills
-
-```bash
-# List the available Parallel agent skills
-parallel-cli skills list
-
-# Install all skills, or update managed skills after updating parallel-cli
-parallel-cli skills install
-
-# Replace the managed set with only the selected skills
-parallel-cli skills install --skill parallel-web-search
-
-# Perform a clean reinstall of managed skills when needed
-parallel-cli skills reinstall
-```
-
-Skills install globally to `~/.agents/skills` and, when Claude Code is present,
-`~/.claude/skills`. Add `--project` to install into the current project's skill
-directories instead. Repeating `install` refreshes CLI-managed skills; `--skill`
-removes previously managed skills that are not selected. Unmanaged skills are
-never overwritten or removed.
 
 ## Non-Interactive Mode (for AI Agents & Scripts)
 

@@ -2432,40 +2432,27 @@ class TestEnrichRunJsonOutput:
 
 
 class TestSkillsCommands:
-    def test_main_help_mentions_skill_updates(self, runner):
-        result = runner.invoke(main, ["--help"])
-
-        assert result.exit_code == 0
-        assert "Install, update, and manage Parallel agent skills" in result.output
-
-    def test_skills_help_mentions_update_commands_and_cdn(self, runner):
+    def test_skills_help_mentions_updates_cdn_and_managed_replacement(self, runner):
         result = runner.invoke(main, ["skills", "--help"])
 
         assert result.exit_code == 0
         help_text = " ".join(result.output.split())
         assert "parallel-cli skills install to install or update managed skills" in help_text
-        assert "parallel-cli skills reinstall for a clean reinstall" in help_text
-        assert "Skills not managed by parallel-cli are left untouched" in help_text
         assert "skills.parallel.ai" in result.output
         assert "PARALLEL_SKILLS_INDEX_URL" in result.output
 
-    def test_skills_install_help_explains_updates_and_managed_replacement(self, runner):
         result = runner.invoke(main, ["skills", "install", "--help"])
 
         assert result.exit_code == 0
         help_text = " ".join(result.output.split())
         assert "Install or update Parallel skills" in help_text
-        assert "Run again after updating parallel-cli to refresh managed skills" in help_text
         assert "Unmanaged skills are never overwritten or removed" in help_text
         assert "Other managed skills will be removed" in help_text
 
-    def test_skills_reinstall_help_preserves_unmanaged_skills(self, runner):
         result = runner.invoke(main, ["skills", "reinstall", "--help"])
 
         assert result.exit_code == 0
-        help_text = " ".join(result.output.split())
-        assert "Unmanaged skills are never overwritten or removed" in help_text
-        assert "Other managed skills will be removed" in help_text
+        assert "Other managed skills will be removed" in " ".join(result.output.split())
 
     def test_skills_list_json(self, runner):
         with (

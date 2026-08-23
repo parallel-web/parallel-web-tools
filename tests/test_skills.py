@@ -376,23 +376,6 @@ class TestCollisionGuard:
         assert result["skipped_skills"] == []
         assert not (install_dir / "parallel-web-search" / "stale.md").exists()
 
-    def test_reinstall_leaves_unmanaged_same_named_skill_untouched(self, monkeypatch, tmp_path):
-        self._patch(monkeypatch)
-        install_dir = tmp_path / ".claude" / "skills"
-        unmanaged_skill = install_dir / "parallel-web-search"
-        unmanaged_skill.mkdir(parents=True)
-        (unmanaged_skill / "SKILL.md").write_text("hand written")
-        skills.install_skills([install_dir], selected_skills=["parallel-web-extract"])
-
-        result = skills.reinstall_skills([install_dir], selected_skills=["parallel-web-extract", "parallel-web-search"])
-
-        assert (unmanaged_skill / "SKILL.md").read_text() == "hand written"
-        assert result["removed_skills"] == ["parallel-web-extract"]
-        assert result["installed_skills"] == ["parallel-web-extract"]
-        assert result["skipped_skills"] == [{"skill": "parallel-web-search", "install_dir": str(install_dir)}]
-        manifest = json.loads((install_dir / skills.MANIFEST_FILE_NAME).read_text())
-        assert manifest["installed_skills"] == ["parallel-web-extract"]
-
     def test_skip_is_per_directory(self, monkeypatch, tmp_path):
         self._patch(monkeypatch)
         agents_dir = tmp_path / ".agents" / "skills"

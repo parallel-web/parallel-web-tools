@@ -35,9 +35,7 @@ def create_skills_group(
     def skills() -> None:
         """Install, update, and manage Parallel agent skills.
 
-        Run parallel-cli skills install to install or update managed skills after
-        updating parallel-cli. Use parallel-cli skills reinstall for a clean reinstall.
-        Skills not managed by parallel-cli are left untouched.
+        Run parallel-cli skills install to install or update managed skills.
 
         Downloads come from skills.parallel.ai. Set PARALLEL_SKILLS_INDEX_URL to use a custom index.
 
@@ -102,8 +100,6 @@ def create_skills_group(
     @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
     def skills_install(project: bool, skill_names: tuple[str, ...], output_json: bool) -> None:
         """Install or update Parallel skills from skills.parallel.ai.
-
-        Run again after updating parallel-cli to refresh managed skills.
 
         When --skill is provided, the managed install set is replaced with exactly
         the listed skills. Unmanaged skills are never overwritten or removed.
@@ -191,7 +187,7 @@ def create_skills_group(
         """Reinstall Parallel skills (uninstall managed set then install fresh).
 
         When --skill is provided, the managed install set is replaced with exactly
-        the listed skills. Unmanaged skills are never overwritten or removed.
+        the listed skills.
         """
         from parallel_web_tools.core.skills import (
             SkillsError,
