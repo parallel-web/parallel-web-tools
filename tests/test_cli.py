@@ -2432,18 +2432,27 @@ class TestEnrichRunJsonOutput:
 
 
 class TestSkillsCommands:
-    def test_skills_help_mentions_cdn_and_replacement_behavior(self, runner):
+    def test_skills_help_mentions_updates_cdn_and_managed_replacement(self, runner):
         result = runner.invoke(main, ["skills", "--help"])
 
         assert result.exit_code == 0
+        help_text = " ".join(result.output.split())
+        assert "parallel-cli skills install to install or update managed skills" in help_text
         assert "skills.parallel.ai" in result.output
         assert "PARALLEL_SKILLS_INDEX_URL" in result.output
 
         result = runner.invoke(main, ["skills", "install", "--help"])
 
         assert result.exit_code == 0
-        assert "Skills not" in result.output
-        assert "listed will be removed" in result.output
+        help_text = " ".join(result.output.split())
+        assert "Install or update Parallel skills" in help_text
+        assert "Unmanaged skills are never overwritten or removed" in help_text
+        assert "Other managed skills will be removed" in help_text
+
+        result = runner.invoke(main, ["skills", "reinstall", "--help"])
+
+        assert result.exit_code == 0
+        assert "Other managed skills will be removed" in " ".join(result.output.split())
 
     def test_skills_list_json(self, runner):
         with (

@@ -106,11 +106,19 @@ parallel-cli
 │   ├── cancel              # Cancel a monitor (irreversible)
 │   ├── events              # List events for a monitor
 │   └── trigger             # Trigger an immediate one-off run
+├── skills                  # Install, update, and manage Parallel agent skills
+│   ├── install             # Install or update managed Parallel skills
+│   ├── list                # List available Parallel skills
+│   ├── reinstall           # Cleanly reinstall managed Parallel skills
+│   └── uninstall           # Remove only CLI-managed Parallel skills
 └── memory                  # Saved Task, Monitor, and FindAll entries
     ├── retrieve            # Search Memory or list recent entries
     ├── evict               # Remove one entry from Memory
     └── clear               # Permanently clear selected Memory
 ```
+
+Run `parallel-cli skills install` to install or update agent skills. When using
+`--skill`, other managed skills are removed; unmanaged skills are preserved.
 
 ## Quick Start
 
