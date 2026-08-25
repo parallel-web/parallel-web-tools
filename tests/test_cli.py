@@ -2984,3 +2984,24 @@ class TestBalanceAddCommand:
 
         assert result.exit_code == EXIT_API_ERROR
         assert "Balance API error" in result.output
+
+
+class TestUnicodeSafeStreams:
+    """Output streams must not crash on unencodable characters (e.g. Windows cp1252)."""
+
+    def test_helper_replaces_unencodable_characters(self):
+        import io
+
+        from parallel_web_tools.cli.commands import _make_output_streams_unicode_safe
+
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+        with mock.patch("sys.stdout", stream):
+            # Before the fix this raises UnicodeEncodeError on cp1252.
+            _make_output_streams_unicode_safe()
+            print("arrow -> \u2192")
+            stream.flush()
+
+        output = raw.getvalue().decode("cp1252")
+        assert "\u2192" not in output  # cannot be encoded in cp1252
+        assert "arrow" in output  # text itself still printed

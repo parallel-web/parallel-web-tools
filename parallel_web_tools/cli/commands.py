@@ -81,6 +81,25 @@ if not _STANDALONE_MODE:
         # CLI extras not installed (pyyaml, questionary)
         pass
 
+
+def _make_output_streams_unicode_safe() -> None:
+    """Prevent UnicodeEncodeError crashes on legacy consoles (e.g. Windows cp1252).
+
+    Help text and other CLI output can contain non-ASCII characters (arrows,
+    box-drawing characters). On consoles using legacy code pages these cannot
+    be encoded, which would crash instead of printing. Reconfigure the streams
+    so unencodable characters are replaced with escape sequences instead.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="backslashreplace")
+            except Exception:  # noqa: BLE001 - never fail startup over this
+                pass
+
+
+_make_output_streams_unicode_safe()
+
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
