@@ -128,13 +128,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Upgrade npm
-        # Trusted publishing (OIDC) requires npm >= 11.5.1, newer than the
-        # version bundled with Node 20.
-        run: npm install -g npm@latest
+        # Trusted publishing (OIDC) requires npm >= 11.5.1. Pin the major so
+        # a future npm release cannot unexpectedly require a newer runtime.
+        run: npm install -g npm@11
 
       - name: Get version from tag
         id: version

@@ -14,6 +14,7 @@ CLI and data enrichment utilities for the [Parallel API](https://docs.parallel.a
 - **Content Extraction** - Extract clean markdown from any URL
 - **Data Enrichment** - Enrich CSV, JSON, DuckDB, and BigQuery data with AI
 - **Follow-up Context** - Chain research and enrichment tasks using `--previous-interaction-id`
+- **Research Memory** - Recall, scope, evict, or clear saved Task, Monitor, and FindAll work
 - **AI-Assisted Planning** - Use natural language to define what data you want
 - **Multiple Integrations** - Polars, DuckDB, Snowflake, BigQuery, Spark
 
@@ -97,15 +98,27 @@ parallel-cli
 │   ├── extend              # Request additional candidates for a run
 │   ├── schema              # Get the schema for a FindAll run
 │   └── cancel              # Cancel a running FindAll
-└── monitor                 # Continuous web change tracking
-    ├── create              # Create a new web monitor (event_stream or snapshot)
-    ├── list                # List monitors (cursor paginated)
-    ├── get                 # Get monitor details
-    ├── update              # Update frequency, webhook, metadata
-    ├── cancel              # Cancel a monitor (irreversible)
-    ├── events              # List events for a monitor
-    └── trigger             # Trigger an immediate one-off run
+├── monitor                 # Continuous web change tracking
+│   ├── create              # Create a new web monitor (event_stream or snapshot)
+│   ├── list                # List monitors (cursor paginated)
+│   ├── get                 # Get monitor details
+│   ├── update              # Update frequency, webhook, metadata
+│   ├── cancel              # Cancel a monitor (irreversible)
+│   ├── events              # List events for a monitor
+│   └── trigger             # Trigger an immediate one-off run
+├── skills                  # Install, update, and manage Parallel agent skills
+│   ├── install             # Install or update managed Parallel skills
+│   ├── list                # List available Parallel skills
+│   ├── reinstall           # Cleanly reinstall managed Parallel skills
+│   └── uninstall           # Remove only CLI-managed Parallel skills
+└── memory                  # Saved Task, Monitor, and FindAll entries
+    ├── retrieve            # Search Memory or list recent entries
+    ├── evict               # Remove one entry from Memory
+    └── clear               # Permanently clear selected Memory
 ```
+
+Run `parallel-cli skills install` to install or update agent skills. When using
+`--skill`, other managed skills are removed; unmanaged skills are preserved.
 
 ## Quick Start
 
@@ -189,6 +202,43 @@ parallel-cli enrich run \
 parallel-cli enrich deploy --system bigquery --project my-gcp-project
 ```
 
+### 6. Recall Memory Entries
+
+Memory is an explicit recall layer for completed Task, Monitor, and FindAll work.
+Saving is asynchronous, so a newly completed run may take a short time to appear.
+
+```bash
+# Retrieve prior work by relevance
+parallel-cli memory retrieve --query "serverless inference vendors" --json
+
+# List the most recent saved work
+parallel-cli memory retrieve --query "" --json
+
+# Keep application or workspace research in an isolated memory scope
+parallel-cli research run "Compare inference vendors" \
+    --memory-scope-key workspace_acme
+parallel-cli findall run "Serverless inference vendors" \
+    --memory-scope-key workspace_acme
+parallel-cli monitor create "Track vendor pricing changes" \
+    --memory-scope-key workspace_acme
+
+# Retrieve from the same memory scope
+parallel-cli memory retrieve \
+    --query "inference vendors" \
+    --scope-key workspace_acme \
+    --json
+
+# Remove one Memory entry without deleting the Task itself
+parallel-cli memory evict --kind task --id trun_abc123 --json
+
+# Permanently clear a specific memory scope (underlying resources remain)
+parallel-cli memory clear --scope-key workspace_acme --confirm-clear --json
+```
+
+Omit `--scope-key` / `--memory-scope-key` to use personal Memory when the
+credential and account are eligible. Application credentials require a stable
+scope key containing only letters, digits, underscores, or hyphens.
+
 ## Non-Interactive Mode (for AI Agents & Scripts)
 
 All commands support `--json` output and can be fully controlled via CLI arguments.
@@ -261,6 +311,9 @@ parallel-cli findall entity-search "AI startups in healthcare" -t companies -n 2
 
 # Monitor: track web changes
 parallel-cli monitor create "Track Tesla SEC filings" --frequency 1d --json
+
+# Recall prior Memory entries
+parallel-cli memory retrieve --query "Tesla filings" --json
 
 # Plan without prompts (provide all args)
 parallel-cli enrich plan -o config.yaml \
@@ -408,6 +461,36 @@ monitors = list_monitors()
 # Get monitor details
 details = get_monitor(monitor["monitor_id"])
 ```
+
+### Memory
+
+Retrieve and manage Memory entries:
+
+```python
+from parallel_web_tools import clear_memory, evict_memory, retrieve_memory
+
+# Relevant prior work across Task, Monitor, and FindAll
+memories = retrieve_memory("serverless inference vendors", limit=10)
+
+# Retrieve from an isolated memory scope
+scoped = retrieve_memory(
+    "inference vendors",
+    memory_scope_key="workspace_acme",
+)
+
+# Remove one run from Memory; the underlying Task run remains available
+evict_memory(
+    "task",
+    "trun_abc123",
+    memory_scope_key="workspace_acme",
+)
+
+# Clear the selected memory; underlying runs remain available
+clear_memory(memory_scope_key="workspace_acme")
+```
+
+These functions use the generated `client.beta.memory` resource provided by
+`parallel-web` 1.2.0 or later.
 
 ## YAML Configuration Format
 

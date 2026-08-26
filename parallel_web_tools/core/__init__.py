@@ -39,6 +39,18 @@ from parallel_web_tools.core.findall import (
     poll_findall,
     run_findall,
 )
+from parallel_web_tools.core.memory import (
+    MAX_MEMORY_QUERY_CHARS,
+    MAX_MEMORY_RESULTS,
+    MEMORY_KINDS,
+    MemoryApiError,
+    MemoryInputError,
+    MemoryKind,
+    clear_memory,
+    evict_memory,
+    retrieve_memory,
+    validate_memory_scope_key,
+)
 from parallel_web_tools.core.monitor import (
     MONITOR_EVENT_TYPES,
     MONITOR_FREQUENCY_PRESETS,
@@ -139,6 +151,17 @@ __all__ = [
     "get_research_status",
     "poll_research",
     "run_research",
+    # Memory
+    "MAX_MEMORY_QUERY_CHARS",
+    "MAX_MEMORY_RESULTS",
+    "MEMORY_KINDS",
+    "MemoryApiError",
+    "MemoryInputError",
+    "MemoryKind",
+    "clear_memory",
+    "evict_memory",
+    "retrieve_memory",
+    "validate_memory_scope_key",
     # FindAll
     "ENTITY_SEARCH_ENTITY_TYPES",
     "FINDALL_GENERATORS",

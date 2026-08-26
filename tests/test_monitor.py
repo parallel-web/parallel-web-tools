@@ -133,6 +133,14 @@ class TestCreateMonitor:
         assert kwargs["type"] == "snapshot"
         assert kwargs["settings"] == {"task_run_id": "trun_xyz"}
 
+    def test_passes_memory_scope_to_sdk(self, mock_client):
+        mock_client.monitor.create.return_value = _model(monitor_id="mon_memory")
+
+        create_monitor("track stuff", memory_scope_key="workspace_acme")
+
+        kwargs = mock_client.monitor.create.call_args.kwargs
+        assert kwargs["memory_scope_key"] == "workspace_acme"
+
     def test_event_stream_requires_query(self, mock_client):
         with pytest.raises(ValueError, match="query is required"):
             create_monitor(None, "1d")
@@ -347,6 +355,23 @@ class TestMonitorCreateCommand:
 
         assert result.exit_code == 0
         assert json.loads(result.output)["monitor_id"] == "mon_json"
+
+    def test_passes_memory_scope_key(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.create_monitor") as patched:
+            patched.return_value = {"monitor_id": "mon_memory"}
+            result = runner.invoke(
+                main,
+                [
+                    "monitor",
+                    "create",
+                    "track stuff",
+                    "--memory-scope-key",
+                    "workspace_acme",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert patched.call_args.kwargs["memory_scope_key"] == "workspace_acme"
 
     def test_invalid_metadata_json(self, runner):
         result = runner.invoke(main, ["monitor", "create", "test", "--metadata", "not-json"])

@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.memory import validate_memory_scope_key
 from parallel_web_tools.core.user_agent import ClientSource
 
 # Friendly aliases for SDK frequency strings.
@@ -72,6 +73,7 @@ def create_monitor(
     processor: str | None = None,
     api_key: str | None = None,
     source: ClientSource = "python",
+    memory_scope_key: str | None = None,
 ) -> dict[str, Any]:
     """Create a new monitor.
 
@@ -92,6 +94,8 @@ def create_monitor(
         processor: ``lite`` (default, fast/cheap) or ``base`` (more thorough).
         api_key: Optional API key override.
         source: Client source identifier for User-Agent.
+        memory_scope_key: Optional key identifying the memory scope to use.
+            Omit to use personal memory, if available.
 
     Returns:
         Dict representation of the created Monitor.
@@ -126,6 +130,9 @@ def create_monitor(
     if processor is not None:
         kwargs["processor"] = processor
 
+    scope_key = validate_memory_scope_key(memory_scope_key)
+    if scope_key is not None:
+        kwargs["memory_scope_key"] = scope_key
     return _to_dict(client.monitor.create(**kwargs))
 
 
