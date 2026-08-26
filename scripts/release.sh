@@ -96,6 +96,9 @@ update_version_files() {
 	sedi "s/parallel-web-tools>=.*/parallel-web-tools>=$new_version/" \
 		"$PROJECT_ROOT/parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt"
 
+	# 4. uv.lock (records this package's own version; stale locks dirty every working tree)
+	(cd "$PROJECT_ROOT" && uv lock)
+
 	# 5. npm/package.json
 	sedi "s/\"version\": \".*\"/\"version\": \"$npm_version\"/" "$PROJECT_ROOT/npm/package.json"
 }
@@ -161,7 +164,8 @@ git add \
 	pyproject.toml \
 	parallel_web_tools/__init__.py \
 	parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt \
-	npm/package.json
+	npm/package.json \
+	uv.lock
 
 # Commit — if pre-commit hooks modify files (e.g. uv.lock), re-stage and retry
 if ! git commit -m "chore: bump version to $NEW_VERSION"; then
@@ -171,7 +175,8 @@ if ! git commit -m "chore: bump version to $NEW_VERSION"; then
 		parallel_web_tools/__init__.py \
 		tests/test_cli.py \
 		parallel_web_tools/integrations/bigquery/cloud_function/requirements.txt \
-		npm/package.json
+		npm/package.json \
+		uv.lock
 	# Also stage any lock files updated by hooks
 	git diff --name-only | xargs -r git add
 	git commit -m "chore: bump version to $NEW_VERSION"

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.memory import validate_memory_scope_key
 from parallel_web_tools.core.polling import poll_until
 from parallel_web_tools.core.user_agent import ClientSource
 
@@ -100,6 +101,7 @@ def create_research_task(
     previous_interaction_id: str | None = None,
     output_schema: OutputSchemaType = "auto",
     text_description: str | None = None,
+    memory_scope_key: str | None = None,
 ) -> dict[str, Any]:
     """Create a deep research task without waiting for results.
 
@@ -114,6 +116,8 @@ def create_research_task(
             "text" (markdown report with inline citations).
         text_description: Optional steering description for text-schema reports
             (e.g. "Keep under 1000 words, focus on M&A activity").
+        memory_scope_key: Optional key identifying the memory scope to use.
+            Omit to use personal memory, if available.
 
     Returns:
         Dict with run_id, interaction_id, result_url, output_schema, and other metadata.
@@ -130,6 +134,9 @@ def create_research_task(
     if task_spec is not None:
         create_kwargs["task_spec"] = task_spec
 
+    scope_key = validate_memory_scope_key(memory_scope_key)
+    if scope_key is not None:
+        create_kwargs["memory_scope_key"] = scope_key
     task = client.task_run.create(**create_kwargs)
 
     return {
@@ -289,6 +296,7 @@ def run_research(
     previous_interaction_id: str | None = None,
     output_schema: OutputSchemaType = "auto",
     text_description: str | None = None,
+    memory_scope_key: str | None = None,
 ) -> dict[str, Any]:
     """Run deep research and wait for results.
 
@@ -308,6 +316,8 @@ def run_research(
         output_schema: "auto" (default; API-chosen structured output) or
             "text" (markdown report with inline citations).
         text_description: Optional steering description for text-schema reports.
+        memory_scope_key: Optional key identifying the memory scope to use.
+            Omit to use personal memory, if available.
 
     Returns:
         Dict with content and metadata, including the requested output_schema.
@@ -328,6 +338,9 @@ def run_research(
     if task_spec is not None:
         create_kwargs["task_spec"] = task_spec
 
+    scope_key = validate_memory_scope_key(memory_scope_key)
+    if scope_key is not None:
+        create_kwargs["memory_scope_key"] = scope_key
     task = client.task_run.create(**create_kwargs)
     run_id = task.run_id
     interaction_id = getattr(task, "interaction_id", run_id)

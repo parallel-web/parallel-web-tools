@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import click
 import httpx
@@ -21,17 +21,22 @@ from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     FINDALL_GENERATORS,
     JSON_SCHEMA_TYPE_MAP,
+    MEMORY_KINDS,
     MONITOR_PROCESSORS,
     MONITOR_TYPES,
     RESEARCH_PROCESSORS,
+    MemoryInputError,
+    MemoryKind,
     ReauthenticationRequired,
     cancel_findall_run,
     cancel_monitor,
+    clear_memory,
     create_findall_run,
     create_monitor,
     create_research_task,
     enrich_findall,
     entity_search_findall,
+    evict_memory,
     extend_findall,
     get_api_key,
     get_auth_status,
@@ -50,11 +55,13 @@ from parallel_web_tools.core import (
     poll_findall,
     poll_research,
     poll_task_group,
+    retrieve_memory,
     run_enrichment_from_dict,
     run_findall,
     run_research,
     trigger_monitor,
     update_monitor,
+    validate_memory_scope_key,
 )
 
 # Standalone CLI (PyInstaller) has limited features to reduce bundle size
@@ -266,6 +273,23 @@ def parse_comma_separated(values: tuple[str, ...]) -> list[str]:
         parts = [p.strip() for p in value.split(",")]
         result.extend(p for p in parts if p)  # Skip empty strings
     return result
+
+
+class MemoryScopeKeyType(click.ParamType):
+    """Click validator for personal/application Memory scope keys."""
+
+    name = "memory scope key"
+
+    def convert(self, value, param, ctx):
+        if value is None:
+            return None
+        try:
+            return validate_memory_scope_key(value)
+        except MemoryInputError as exc:
+            self.fail(str(exc), param, ctx)
+
+
+MEMORY_SCOPE_KEY = MemoryScopeKeyType()
 
 
 def write_json_output(data: dict[str, Any], output_file: str | None, output_json: bool) -> None:
@@ -496,7 +520,7 @@ def _auto_update():
 @click.group(cls=ParallelCLI)
 @click.version_option(version=__version__, prog_name="parallel-cli")
 def main():
-    """Parallel CLI - Search, research, enrich, and monitor the web."""
+    """Parallel CLI - Search, research, enrich, monitor, and recall the web."""
     pass
 
 
@@ -877,14 +901,197 @@ main.add_command(create_skills_group(console, _handle_error, EXIT_BAD_INPUT, EXI
 
 
 # =============================================================================
+# Memory Commands
+# =============================================================================
+
+
+@main.group()
+def memory():
+    """Search and manage saved Task, Monitor, and FindAll entries."""
+    pass
+
+
+def _render_memory_results(result: dict[str, Any]) -> None:
+    """Render bounded Memory previews for human-readable CLI output."""
+    results = result.get("results", [])
+    if not results:
+        console.print("[yellow]No Memory entries found.[/yellow]")
+        return
+
+    noun = "entry" if len(results) == 1 else "entries"
+    console.print(f"[bold green]Found {len(results)} {noun} in Memory.[/bold green]\n")
+    for index, item in enumerate(results, 1):
+        kind = item.get("kind", "unknown")
+        source_id = item.get("id", "unknown")
+        updated_at = item.get("updated_at", "unknown")
+        console.print(f"[bold cyan]{index}. {kind} · {source_id}[/bold cyan]")
+        console.print(f"   [dim]Updated: {updated_at}[/dim]")
+
+        input_excerpt = item.get("input_excerpt")
+        if input_excerpt:
+            console.print("   [bold]Input[/bold]")
+            console.print(f"   {input_excerpt}", markup=False)
+
+        if kind == "task" and item.get("output_excerpt"):
+            console.print("   [bold]Output[/bold]")
+            console.print(f"   {item['output_excerpt']}", markup=False)
+        elif kind == "findall":
+            console.print(f"   [bold]Matched entities:[/bold] {item.get('matched_count', 0)}")
+        elif kind == "monitor":
+            console.print(f"   [bold]Status:[/bold] {item.get('status', 'unknown')}")
+            for event in item.get("matched_events", []):
+                console.print(
+                    f"   [dim]Event {event.get('event_id', 'unknown')} · {event.get('detected_at', 'unknown')}[/dim]"
+                )
+                if event.get("excerpt"):
+                    console.print(f"   {event['excerpt']}", markup=False)
+        console.print()
+
+
+@memory.command(name="retrieve")
+@click.argument("query_arg", required=False, metavar="[QUERY]")
+@click.option("--query", "query_option", help="Semantic query. Omit or pass an empty string for recent memories.")
+@click.option("--limit", type=click.IntRange(1, 25), default=10, show_default=True)
+@click.option("--kind", type=click.Choice(list(MEMORY_KINDS)), help="Filter by entry kind.")
+@click.option("--since", help="RFC 3339 lower timestamp bound, including a timezone.")
+@click.option(
+    "--scope-key",
+    "--memory-scope-key",
+    "memory_scope_key",
+    type=MEMORY_SCOPE_KEY,
+    help="Optional key identifying the memory scope to use. Omit to use personal memory, if available.",
+)
+@click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to a JSON file.")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout.")
+def memory_retrieve(
+    query_arg: str | None,
+    query_option: str | None,
+    limit: int,
+    kind: str | None,
+    since: str | None,
+    memory_scope_key: str | None,
+    output_file: str | None,
+    output_json: bool,
+):
+    """Search Memory or list recent entries.
+
+    Provide QUERY to rank entries by relevance. Omit it to return the most
+    recent entries.
+    """
+    if query_arg is not None and query_option is not None:
+        raise click.UsageError("Provide the query either as QUERY or with --query, not both.")
+    query = query_option if query_option is not None else (query_arg or "")
+
+    try:
+        result = retrieve_memory(
+            query=query,
+            limit=limit,
+            kind=cast(MemoryKind | None, kind),
+            since=since,
+            memory_scope_key=memory_scope_key,
+            source="cli",
+        )
+    except MemoryInputError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid Memory request")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, prefix="Memory API error")
+        return
+
+    write_json_output(result, output_file, output_json)
+    if not output_json:
+        _render_memory_results(result)
+
+
+@memory.command(name="evict")
+@click.option("--kind", type=click.Choice(list(MEMORY_KINDS)), required=True, help="Entry kind.")
+@click.option("--id", "source_id", required=True, help="Exact entry ID.")
+@click.option(
+    "--scope-key",
+    "--memory-scope-key",
+    "memory_scope_key",
+    type=MEMORY_SCOPE_KEY,
+    help="Optional key identifying the memory scope to use. Omit to use personal memory, if available.",
+)
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout.")
+def memory_evict(kind: str, source_id: str, memory_scope_key: str | None, output_json: bool):
+    """Remove one entry from Memory.
+
+    The underlying Task, Monitor, or FindAll resource is not deleted.
+    """
+    try:
+        result = evict_memory(
+            kind=cast(MemoryKind, kind),
+            source_id=source_id,
+            memory_scope_key=memory_scope_key,
+            source="cli",
+        )
+    except MemoryInputError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid Memory request")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, prefix="Memory API error")
+        return
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    memory_label = f"Memory scope {memory_scope_key!r}" if memory_scope_key else "personal Memory"
+    console.print(f"[bold green]Removed {kind} entry {source_id} from {memory_label}.[/bold green]")
+    console.print("[dim]The underlying Task, Monitor, or FindAll resource was not deleted.[/dim]")
+
+
+@memory.command(name="clear")
+@click.option(
+    "--scope-key",
+    "--memory-scope-key",
+    "memory_scope_key",
+    type=MEMORY_SCOPE_KEY,
+    help="Optional key identifying the memory scope to use. Omit to use personal memory, if available.",
+)
+@click.option(
+    "--confirm-clear",
+    is_flag=True,
+    help="Confirm permanent clearing of the selected Memory.",
+)
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout.")
+def memory_clear(memory_scope_key: str | None, confirm_clear: bool, output_json: bool):
+    """Remove all entries from selected Memory.
+
+    The underlying Task, Monitor, and FindAll resources are not deleted.
+    """
+    if not confirm_clear:
+        error = MemoryInputError("clear requires --confirm-clear")
+        _handle_error(error, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid Memory request")
+        return
+
+    try:
+        result = clear_memory(memory_scope_key=memory_scope_key, source="cli")
+    except MemoryInputError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid Memory request")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, prefix="Memory API error")
+        return
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    memory_label = f"Memory scope {memory_scope_key!r}" if memory_scope_key else "personal Memory"
+    console.print(f"[bold green]Cleared {memory_label}.[/bold green]")
+    console.print("[dim]Underlying Task, Monitor, and FindAll resources were not deleted.[/dim]")
+
+
+# =============================================================================
 # Search Command
 # =============================================================================
 
-# V1 modes are listed first in CLI help. Beta modes remain accepted as
-# deprecated aliases so existing scripts keep working.
-_SEARCH_MODES = ("turbo", "basic", "advanced")
+# V1 modes are listed first in CLI help. Beta-only modes remain accepted as
+# deprecated aliases so existing scripts keep working. Fast is now V1-native.
+_SEARCH_MODES = ("turbo", "fast", "basic", "advanced")
 _DEPRECATED_SEARCH_MODE_ALIASES = {
-    "fast": "basic",
     "one-shot": "basic",
     "agentic": "advanced",
 }
@@ -955,8 +1162,8 @@ def build_search_v1_kwargs(
     type=click.Choice([*_SEARCH_MODES, *_DEPRECATED_SEARCH_MODE_ALIASES]),
     default="basic",
     help=(
-        "Search mode: turbo (fastest), basic, or advanced. "
-        "Deprecated aliases: one-shot/fast → basic, agentic → advanced"
+        "Search mode: turbo (fastest), fast (high quality within ~1s), basic, "
+        "or advanced (highest quality). Deprecated aliases: one-shot → basic, agentic → advanced"
     ),
     show_default=True,
 )
@@ -1956,6 +2163,12 @@ def research():
     "--previous-interaction-id",
     help="Interaction ID from a previous task to reuse as context",
 )
+@click.option(
+    "--memory-scope-key",
+    "--scope-key",
+    type=MEMORY_SCOPE_KEY,
+    help="Optional key identifying the memory scope to use. Omit to use personal memory, if available.",
+)
 def research_run(
     query: str | None,
     input_file: str | None,
@@ -1970,6 +2183,7 @@ def research_run(
     force: bool,
     output_json: bool,
     previous_interaction_id: str | None,
+    memory_scope_key: str | None,
 ):
     """Run deep research on a question or topic.
 
@@ -2000,6 +2214,8 @@ def research_run(
       echo "My research question" | parallel-cli research run - --json
       parallel-cli research run "What are the implications?" \\
           --previous-interaction-id trun_abc123
+      parallel-cli research run "Research for this workspace" \\
+          --memory-scope-key workspace_acme
     """
     output_schema = "text" if use_text else "auto"
 
@@ -2037,6 +2253,8 @@ def research_run(
             "output_paths": planned_paths,
             "force": force,
         }
+        if memory_scope_key is not None:
+            dry_run_data["memory_scope_key"] = memory_scope_key
         if output_json:
             print(json.dumps(dry_run_data, indent=2))
         else:
@@ -2065,6 +2283,7 @@ def research_run(
                 previous_interaction_id=previous_interaction_id,
                 output_schema=output_schema,
                 text_description=text_description,
+                memory_scope_key=memory_scope_key,
             )
             run_id_box.append(result["run_id"])
 
@@ -2117,6 +2336,7 @@ def research_run(
                 previous_interaction_id=previous_interaction_id,
                 output_schema=output_schema,
                 text_description=text_description,
+                memory_scope_key=memory_scope_key,
             )
 
             _save_and_display_research(result, output_base, output_json, force=force)
@@ -2536,6 +2756,12 @@ def findall():
     is_flag=True,
     help="Ingest schema via API to preview entity type and conditions, but don't create the run",
 )
+@click.option(
+    "--memory-scope-key",
+    "--scope-key",
+    type=MEMORY_SCOPE_KEY,
+    help="Optional key identifying the memory scope to use. Omit to use personal memory, if available.",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save results to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def findall_run(
@@ -2548,6 +2774,7 @@ def findall_run(
     poll_interval: int,
     no_wait: bool,
     dry_run: bool,
+    memory_scope_key: str | None,
     output_file: str | None,
     output_json: bool,
 ):
@@ -2589,6 +2816,8 @@ def findall_run(
                 "match_conditions": schema.get("match_conditions", []),
                 "enrichments": schema.get("enrichments", []),
             }
+            if memory_scope_key is not None:
+                dry_run_data["memory_scope_key"] = memory_scope_key
 
             if output_json:
                 print(json.dumps(dry_run_data, indent=2, default=str))
@@ -2635,6 +2864,7 @@ def findall_run(
                 exclude_list=exclude_list,
                 metadata=metadata,
                 source="cli",
+                memory_scope_key=memory_scope_key,
             )
 
             if output_json:
@@ -2690,6 +2920,7 @@ def findall_run(
                 poll_interval=poll_interval,
                 on_status=on_status,
                 source="cli",
+                memory_scope_key=memory_scope_key,
             )
 
             _output_findall_result(result, output_file, output_json)
@@ -3201,6 +3432,12 @@ def monitor():
     is_flag=True,
     help="event_stream only: include a sample of historical events on first run.",
 )
+@click.option(
+    "--memory-scope-key",
+    "--scope-key",
+    type=MEMORY_SCOPE_KEY,
+    help="Optional key identifying the memory scope to use. Omit to use personal memory, if available.",
+)
 @click.option("-o", "--output", "output_file", type=click.Path(), help="Save result to JSON file")
 @click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout")
 def monitor_create(
@@ -3213,6 +3450,7 @@ def monitor_create(
     metadata_json: str | None,
     output_schema_json: str | None,
     include_backfill: bool,
+    memory_scope_key: str | None,
     output_file: str | None,
     output_json: bool,
 ):
@@ -3268,6 +3506,7 @@ def monitor_create(
             include_backfill=include_backfill or None,
             processor=processor,
             source="cli",
+            memory_scope_key=memory_scope_key,
         )
 
         write_json_output(result, output_file, output_json)
