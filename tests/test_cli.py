@@ -358,6 +358,13 @@ class TestSearchCommandHelp:
         assert "--exclude-domains" in result.output
         assert "comma-separated" in result.output
 
+    def test_search_help_prioritizes_native_modes(self, runner):
+        """Should list V1-native modes before deprecated aliases."""
+        result = runner.invoke(main, ["search", "--help"])
+        assert result.exit_code == 0
+        assert "--mode [turbo|fast|basic|advanced|one-shot|agentic]" in result.output
+        assert "Deprecated aliases" in result.output
+
     def test_search_no_args(self, runner):
         """Should error without objective or query."""
         result = runner.invoke(main, ["search"])
@@ -1620,9 +1627,9 @@ class TestSearchDeprecationWarnings:
         )
 
         assert result.exit_code == 0
-        assert "[deprecated]" in result.stderr
-        assert deprecated_mode in result.stderr
-        assert expected_new in result.stderr
+        assert result.stderr.strip() == (
+            f"[deprecated] --mode {deprecated_mode} is a deprecated alias. Use --mode {expected_new} instead."
+        )
         # JSON stdout must remain clean
         json.loads(result.stdout)
         # SDK call uses translated mode
@@ -1640,6 +1647,7 @@ class TestSearchDeprecationWarnings:
 
         assert result.exit_code == 0
         assert "[deprecated]" not in result.stderr
+        assert mock_cli_client.search.call_args.kwargs["mode"] == new_mode
 
 
 class TestExtractDeprecationWarnings:

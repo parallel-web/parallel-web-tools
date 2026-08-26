@@ -1088,19 +1088,13 @@ def memory_clear(memory_scope_key: str | None, confirm_clear: bool, output_json:
 # Search Command
 # =============================================================================
 
-# Search mode translation. V1 accepts turbo/fast/basic/advanced natively; the
-# Beta-only values stay accepted CLI inputs and are translated so existing
-# scripts keep working. Beta's `fast` used to downgrade to basic, but V1 now has
-# a native fast mode of its own, so the name passes through.
-_SEARCH_MODE_MAP = {
-    "turbo": "turbo",
-    "fast": "fast",
-    "basic": "basic",
-    "advanced": "advanced",
+# V1 modes are listed first in CLI help; fast is now native and passes through.
+# Beta-only names remain deprecated aliases so existing scripts keep working.
+_SEARCH_MODES = ("turbo", "fast", "basic", "advanced")
+_DEPRECATED_SEARCH_MODE_ALIASES = {
     "one-shot": "basic",
     "agentic": "advanced",
 }
-_DEPRECATED_SEARCH_MODES = {"one-shot", "agentic"}
 
 
 def _emit_deprecation(message: str) -> None:
@@ -1135,7 +1129,7 @@ def build_search_v1_kwargs(
     if objective:
         kwargs["objective"] = objective
     if mode:
-        kwargs["mode"] = _SEARCH_MODE_MAP.get(mode, mode)
+        kwargs["mode"] = _DEPRECATED_SEARCH_MODE_ALIASES.get(mode, mode)
     if excerpt_max_chars_total is not None:
         kwargs["max_chars_total"] = excerpt_max_chars_total
     if session_id:
@@ -1165,10 +1159,12 @@ def build_search_v1_kwargs(
 @click.option("-q", "--query", multiple=True, help="Keyword search query (can be repeated)")
 @click.option(
     "--mode",
-    type=click.Choice(list(_SEARCH_MODE_MAP.keys())),
+    type=click.Choice([*_SEARCH_MODES, *_DEPRECATED_SEARCH_MODE_ALIASES]),
     default="basic",
-    help="Search mode: turbo (fastest), fast (high quality within ~1s), basic, "
-    "or advanced (highest quality; one-shot → basic, agentic → advanced)",
+    help=(
+        "Search mode: turbo (fastest), fast (high quality within ~1s), basic, "
+        "or advanced (highest quality). Deprecated aliases: one-shot → basic, agentic → advanced"
+    ),
     show_default=True,
 )
 @click.option("--max-results", type=int, help="Maximum results (defaults to server-side default of 10)")
@@ -1222,12 +1218,9 @@ def search(
     if not objective and not query:
         raise click.UsageError("Provide an OBJECTIVE argument or at least one --query option.")
 
-    if mode in _DEPRECATED_SEARCH_MODES:
-        new_mode = _SEARCH_MODE_MAP[mode]
-        _emit_deprecation(
-            f"--mode {mode} is a Beta value and will stop working after the Beta API sunset (June 2026). "
-            f"Use --mode {new_mode} instead."
-        )
+    if mode in _DEPRECATED_SEARCH_MODE_ALIASES:
+        new_mode = _DEPRECATED_SEARCH_MODE_ALIASES[mode]
+        _emit_deprecation(f"--mode {mode} is a deprecated alias. Use --mode {new_mode} instead.")
 
     source_policy: dict[str, Any] = {}
     if include_domains:
