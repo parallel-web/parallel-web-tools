@@ -29,6 +29,8 @@ TEMPLATE = Path(__file__).parent.parent / "homebrew" / "parallel-cli.rb"
 PLATFORMS = {
     "darwin-arm64": "PLACEHOLDER_DARWIN_ARM64",
     "darwin-x64": "PLACEHOLDER_DARWIN_X64",
+    "linux-arm64": "PLACEHOLDER_LINUX_ARM64",
+    "linux-x64": "PLACEHOLDER_LINUX_X64",
 }
 
 
