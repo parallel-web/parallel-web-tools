@@ -946,6 +946,15 @@ class TestWriteJsonOutput:
         output = json.loads(capsys.readouterr().out)
         assert output == data
 
+    def test_preserves_non_ascii_characters(self, tmp_path, capsys):
+        output_file = tmp_path / "output.json"
+        data = {"title": "中文搜索"}
+
+        write_json_output(data, str(output_file), output_json=True)
+
+        assert "中文搜索" in output_file.read_text(encoding="utf-8")
+        assert "中文搜索" in capsys.readouterr().out
+
     def test_write_to_both(self, tmp_path, capsys):
         """Should write to file AND stdout when both specified."""
         output_file = tmp_path / "output.json"
