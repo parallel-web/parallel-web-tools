@@ -1,13 +1,25 @@
 cask "parallel-cli" do
   version "PLACEHOLDER_VERSION"
 
-  on_arm do
-    sha256 "PLACEHOLDER_DARWIN_ARM64"
-    url "https://github.com/parallel-web/parallel-web-tools/releases/download/v#{version}/parallel-cli-darwin-arm64.zip"
+  on_macos do
+    on_arm do
+      sha256 "PLACEHOLDER_DARWIN_ARM64"
+      url "https://github.com/parallel-web/parallel-web-tools/releases/download/v#{version}/parallel-cli-darwin-arm64.zip"
+    end
+    on_intel do
+      sha256 "PLACEHOLDER_DARWIN_X64"
+      url "https://github.com/parallel-web/parallel-web-tools/releases/download/v#{version}/parallel-cli-darwin-x64.zip"
+    end
   end
-  on_intel do
-    sha256 "PLACEHOLDER_DARWIN_X64"
-    url "https://github.com/parallel-web/parallel-web-tools/releases/download/v#{version}/parallel-cli-darwin-x64.zip"
+  on_linux do
+    on_arm do
+      sha256 "PLACEHOLDER_LINUX_ARM64"
+      url "https://github.com/parallel-web/parallel-web-tools/releases/download/v#{version}/parallel-cli-linux-arm64.zip"
+    end
+    on_intel do
+      sha256 "PLACEHOLDER_LINUX_X64"
+      url "https://github.com/parallel-web/parallel-web-tools/releases/download/v#{version}/parallel-cli-linux-x64.zip"
+    end
   end
 
   name "Parallel CLI"
@@ -18,8 +30,10 @@ cask "parallel-cli" do
 
   preflight do
     # Strip quarantine — binary is not notarized (same approach as kreuzberg, etc.)
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{staged_path}/parallel-cli"]
+    if OS.mac?
+      system_command "/usr/bin/xattr",
+                     args: ["-dr", "com.apple.quarantine", "#{staged_path}/parallel-cli"]
+    end
   end
 
   zap trash: "~/.parallel-cli"
