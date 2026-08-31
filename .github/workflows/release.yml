@@ -192,7 +192,7 @@ jobs:
           TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
         run: |
           mkdir -p checksums
-          for platform in darwin-arm64 darwin-x64; do
+          for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
             gh release download "$TAG" \
               --pattern "parallel-cli-${platform}.zip.sha256" \
               --dir checksums || echo "Warning: No checksum for ${platform}"

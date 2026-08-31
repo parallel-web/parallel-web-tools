@@ -1088,8 +1088,8 @@ def memory_clear(memory_scope_key: str | None, confirm_clear: bool, output_json:
 # Search Command
 # =============================================================================
 
-# V1 modes are listed first in CLI help. Beta-only modes remain accepted as
-# deprecated aliases so existing scripts keep working. Fast is now V1-native.
+# V1 modes are listed first in CLI help; fast is now native and passes through.
+# Beta-only names remain deprecated aliases so existing scripts keep working.
 _SEARCH_MODES = ("turbo", "fast", "basic", "advanced")
 _DEPRECATED_SEARCH_MODE_ALIASES = {
     "one-shot": "basic",

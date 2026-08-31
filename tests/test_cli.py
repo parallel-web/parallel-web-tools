@@ -1667,6 +1667,7 @@ class TestSearchDeprecationWarnings:
 
         assert result.exit_code == 0
         assert "[deprecated]" not in result.stderr
+        assert mock_cli_client.search.call_args.kwargs["mode"] == new_mode
 
 
 class TestExtractDeprecationWarnings:
