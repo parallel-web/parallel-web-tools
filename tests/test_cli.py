@@ -365,6 +365,19 @@ class TestSearchCommandHelp:
         assert "--mode [turbo|fast|basic|advanced|one-shot|agentic]" in result.output
         assert "Deprecated aliases" in result.output
 
+    def test_search_help_describes_after_date_as_inclusive(self, runner):
+        """Should reflect the API's inclusive after_date behavior."""
+        result = runner.invoke(main, ["search", "--help"])
+        assert result.exit_code == 0
+        assert "published on or after" in result.output
+
+    def test_search_help_does_not_claim_excerpt_minimum(self, runner):
+        """Search accepts excerpt sizes below the removed 1000-character minimum."""
+        result = runner.invoke(main, ["search", "--help"])
+        assert result.exit_code == 0
+        assert "--excerpt-max-chars-per-result" in result.output
+        assert "min 1000" not in result.output
+
     def test_search_no_args(self, runner):
         """Should error without objective or query."""
         result = runner.invoke(main, ["search"])
@@ -381,6 +394,13 @@ class TestExtractCommandHelp:
         assert result.exit_code == 0
         assert "Extract content" in result.output
         assert "--json" in result.output
+
+    def test_extract_help_does_not_claim_excerpt_minimum(self, runner):
+        """Extract accepts excerpt sizes below the removed 1000-character minimum."""
+        result = runner.invoke(main, ["extract", "--help"])
+        assert result.exit_code == 0
+        assert "--excerpt-max-chars-per-result" in result.output
+        assert "min 1000" not in result.output
 
 
 class TestFetchCommand:

@@ -1170,8 +1170,8 @@ def build_search_v1_kwargs(
 @click.option("--max-results", type=int, help="Maximum results (defaults to server-side default of 10)")
 @click.option("--include-domains", multiple=True, help="Only search these domains (comma-separated or repeated)")
 @click.option("--exclude-domains", multiple=True, help="Exclude these domains (comma-separated or repeated)")
-@click.option("--after-date", help="Only results after this date (YYYY-MM-DD)")
-@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
+@click.option("--after-date", help="Only results published on or after this date (YYYY-MM-DD)")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
 @click.option(
     "--excerpt-max-chars-total", type=int, default=60000, help="Max total characters for excerpts", show_default=True
 )
@@ -1357,7 +1357,7 @@ def build_extract_v1_kwargs(
 @click.option("--full-content", is_flag=True, help="Include complete page content")
 @click.option("--full-content-max-chars", type=int, help="Max characters per result for full content")
 @click.option("--no-excerpts", is_flag=True, help="Strip excerpts from output (V1 always returns them server-side)")
-@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts (min 1000)")
+@click.option("--excerpt-max-chars-per-result", type=int, help="Max characters per result for excerpts")
 @click.option("--excerpt-max-chars-total", type=int, help="Max total characters for excerpts across all URLs")
 @click.option("--max-age-seconds", type=int, help="Max age in seconds before fetching live content (min 600)")
 @click.option("--timeout-seconds", type=float, help="Timeout in seconds for fetching live content")
