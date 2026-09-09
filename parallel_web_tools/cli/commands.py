@@ -301,12 +301,12 @@ def write_json_output(data: dict[str, Any], output_file: str | None, output_json
         output_json: If True, print JSON to stdout.
     """
     if output_file:
-        with open(output_file, "w") as f:
-            json.dump(data, f, indent=2)
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
         console.print(f"[dim]Results saved to {output_file}[/dim]\n")
 
     if output_json:
-        print(json.dumps(data, indent=2))
+        print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def parse_columns(columns_json: str | None) -> list[dict[str, str]] | None:
