@@ -202,7 +202,7 @@ main() {
     local checksum_url="${archive_url}.sha256"
 
     # Create directories
-    mkdir -p "$BIN_DIR"
+    mkdir -p "$BIN_DIR" "$(dirname "$INSTALL_DIR")"
     local tmp_dir
     tmp_dir=$(mktemp -d)
     local tmp_archive="${tmp_dir}/${archive_name}"
