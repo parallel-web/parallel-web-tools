@@ -76,6 +76,8 @@ def main() -> int:
         "ruff-format",
         "ruff-check",
     ]
+    if url == ENV_URLS["dev"]:
+        cmd.append("--allow-private-network")
     result = subprocess.run(cmd)
     return result.returncode
 
