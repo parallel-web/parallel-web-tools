@@ -168,3 +168,7 @@ dev = [
     "tach>=0.34.1",
     "ty>=0.0.33",
 ]
+# Standalone binary build env (release.yml); excludes dev tools so PyInstaller can't bundle them
+build = [
+    "pyinstaller>=6.20.0",
+]
