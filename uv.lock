@@ -1793,7 +1793,7 @@ requires-dist = [
     { name = "questionary", marker = "extra == 'cli'", specifier = ">=2.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
-    { name = "snowflake-connector-python", marker = "extra == 'snowflake'", specifier = ">=4.7.3" },
+    { name = "snowflake-connector-python", marker = "extra == 'snowflake'", specifier = ">=4.7.3,<5" },
     { name = "sqlalchemy", marker = "extra == 'bigquery'", specifier = ">=2.0.0" },
     { name = "sqlalchemy-bigquery", marker = "extra == 'bigquery'", specifier = ">=1.11.0" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.33" },

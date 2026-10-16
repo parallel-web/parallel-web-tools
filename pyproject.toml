@@ -69,7 +69,7 @@ duckdb = [
 ]
 # Snowflake integration
 snowflake = [
-    "snowflake-connector-python>=4.7.3",
+    "snowflake-connector-python>=4.7.3,<5",
 ]
 # SQLAlchemy-based BigQuery connector (for YAML configs and ETL)
 bigquery = [
