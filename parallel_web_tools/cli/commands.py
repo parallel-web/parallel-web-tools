@@ -63,6 +63,17 @@ from parallel_web_tools.core import (
     update_monitor,
     validate_memory_scope_key,
 )
+from parallel_web_tools.core.feedback import (
+    CONSENT_PREFERENCES,
+    FEEDBACK_CATEGORIES,
+    FEEDBACK_PRODUCTS,
+    FEEDBACK_SEVERITIES,
+    FeedbackInputError,
+    get_feedback_consent,
+    parse_example,
+    send_feedback,
+    set_feedback_consent,
+)
 
 # Standalone CLI (PyInstaller) has limited features to reduce bundle size
 # YAML config and interactive planner require: pip install parallel-web-tools[cli]
@@ -1082,6 +1093,189 @@ def memory_clear(memory_scope_key: str | None, confirm_clear: bool, output_json:
     memory_label = f"Memory scope {memory_scope_key!r}" if memory_scope_key else "personal Memory"
     console.print(f"[bold green]Cleared {memory_label}.[/bold green]")
     console.print("[dim]Underlying Task, Monitor, and FindAll resources were not deleted.[/dim]")
+
+
+# =============================================================================
+# Feedback Commands
+# =============================================================================
+
+
+@main.group()
+def feedback():
+    """Report significant problems with Parallel to the Parallel team."""
+    pass
+
+
+def _example_option(_ctx: click.Context, _param: click.Parameter, values: tuple[str, ...]) -> list[dict[str, str]]:
+    try:
+        return [parse_example(value) for value in values]
+    except FeedbackInputError as e:
+        raise click.BadParameter(str(e)) from e
+
+
+def _render_feedback_preview(response: dict[str, Any]) -> None:
+    preview = response.get("preview", {})
+    context = preview.get("context", {})
+    console.print("[bold]Parallel would receive:[/bold]")
+    console.print(
+        f"  {preview.get('category')} · {preview.get('product')} · {preview.get('severity')}",
+        markup=False,
+    )
+    console.print(f"  Message: {preview.get('message', '')}", markup=False)
+    for label in ("expected", "actual"):
+        if preview.get(label):
+            console.print(f"  {label.capitalize()}: {preview[label]}", markup=False)
+    for example in preview.get("examples", []):
+        note = f" — {example['issue']}" if example.get("issue") else ""
+        console.print(f"  • {example.get('id')}{note}", markup=False)
+    console.print(f"  From: {context.get('sender', 'unknown')}", markup=False)
+    if preview.get("redactions"):
+        console.print(f"  [dim]{preview['redactions']} secret(s) removed.[/dim]")
+    if preview.get("recipient"):
+        console.print(f"  {preview['recipient']}", markup=False, style="dim")
+
+
+def _render_feedback_result(response: dict[str, Any]) -> None:
+    if response.get("duplicate"):
+        console.print(f"[yellow]Parallel already received this report as {response.get('feedback_id')}.[/yellow]")
+    else:
+        console.print(f"[bold green]Sent to Parallel as {response.get('feedback_id')}.[/bold green]")
+    if response.get("consent_preference") == "always":
+        console.print("[dim]Later reports are sent without asking. Reset with: parallel-cli feedback consent ask[/dim]")
+
+
+def _ask_feedback_consent(response: dict[str, Any]) -> str | None:
+    """Ask whether to send the previewed report; returns the consent, or None to stop."""
+    can_remember = response.get("preview", {}).get("remember_scope") is not None
+    choices = ["s", "a", "n"] if can_remember else ["s", "n"]
+    console.print(
+        "Send it? [bold]s[/bold]end"
+        + (", send and don't ask [bold]a[/bold]gain" if can_remember else "")
+        + ", or [bold]n[/bold]o"
+    )
+    answer = click.prompt("", type=click.Choice(choices), show_choices=False, prompt_suffix="> ")
+    return {"s": "this_report", "a": "always"}.get(answer)
+
+
+@feedback.command(name="send")
+@click.option("-m", "--message", required=True, help="What you were doing, what went wrong, and what you expected.")
+@click.option("--category", type=click.Choice(list(FEEDBACK_CATEGORIES)), required=True, help="The kind of problem.")
+@click.option(
+    "--product", type=click.Choice(list(FEEDBACK_PRODUCTS)), required=True, help="The Parallel product involved."
+)
+@click.option(
+    "--severity",
+    type=click.Choice(list(FEEDBACK_SEVERITIES)),
+    default="degraded",
+    show_default=True,
+    help="blocking, degraded (a workaround was needed) or minor.",
+)
+@click.option(
+    "--example",
+    "examples",
+    multiple=True,
+    callback=_example_option,
+    help="A request ID, optionally with a note: 'trun_abc:Returned the wrong CEO'. Repeatable.",
+)
+@click.option("--expected", help="The overall expected behavior.")
+@click.option("--actual", help="The overall observed behavior.")
+@click.option(
+    "--consent",
+    type=click.Choice(["this_report", "always"]),
+    help="The user approved sending this report (this_report) and, with always, later ones.",
+)
+@click.option("--preview-id", help="The preview_id of the preview the user approved.")
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout; never prompts.")
+def feedback_send(
+    message: str,
+    category: str,
+    product: str,
+    severity: str,
+    examples: list[dict[str, str]],
+    expected: str | None,
+    actual: str | None,
+    consent: str | None,
+    preview_id: str | None,
+    output_json: bool,
+):
+    """Report a significant problem, such as wrong results for specific runs.
+
+    Nothing is sent until the user agrees. Without --consent the CLI shows
+    exactly what Parallel would receive and asks; with --json it prints that
+    preview so an agent can ask the user, then rerun with --consent and
+    --preview-id.
+    """
+
+    def send(user_consent: str, approved_preview: str | None) -> dict[str, Any]:
+        return send_feedback(
+            message=message,
+            category=category,
+            product=product,
+            severity=severity,
+            examples=examples,
+            expected=expected,
+            actual=actual,
+            user_consent=user_consent,
+            preview_id=approved_preview,
+            source="cli",
+        )
+
+    try:
+        response = send(consent or "not_asked", preview_id)
+        if response.get("status") == "consent_required" and not output_json:
+            _render_feedback_preview(response)
+            approved = _ask_feedback_consent(response)
+            if approved is None:
+                console.print("Nothing was sent.")
+                return
+            response = send(approved, response.get("preview_id"))
+    except FeedbackInputError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid feedback")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, prefix="Feedback API error")
+        return
+
+    if output_json:
+        print(json.dumps(response, indent=2))
+    elif response.get("status") == "consent_required":
+        _render_feedback_preview(response)
+        console.print(response.get("next_step", "Nothing was sent."), markup=False, style="yellow")
+    else:
+        _render_feedback_result(response)
+
+
+@feedback.command(name="consent")
+@click.argument("preference", required=False, type=click.Choice(list(CONSENT_PREFERENCES)))
+@click.option("--json", "output_json", is_flag=True, help="Output JSON to stdout.")
+def feedback_consent(preference: str | None, output_json: bool):
+    """Show or set whether feedback reports are sent without asking.
+
+    With no argument, shows the current preference. 'always' sends reports
+    without a preview; 'ask' previews each report first. Only personal
+    credentials can store a preference.
+    """
+    try:
+        if preference is None:
+            result = get_feedback_consent(source="cli")
+        else:
+            result = set_feedback_consent(preference, source="cli")
+    except FeedbackInputError as e:
+        _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid feedback consent")
+        return
+    except Exception as e:
+        _handle_error(e, output_json=output_json, prefix="Feedback API error")
+        return
+
+    if output_json:
+        print(json.dumps(result, indent=2))
+        return
+    if result.get("preference") == "always":
+        console.print("Feedback reports are sent [bold]without asking[/bold].")
+    else:
+        console.print("Each feedback report is [bold]previewed[/bold] and needs approval.")
+    if result.get("scope"):
+        console.print(f"Applies to {result['scope']}.", markup=False, style="dim")
 
 
 # =============================================================================

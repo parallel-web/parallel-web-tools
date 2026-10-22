@@ -111,10 +111,13 @@ parallel-cli
 │   ├── list                # List available Parallel skills
 │   ├── reinstall           # Cleanly reinstall managed Parallel skills
 │   └── uninstall           # Remove only CLI-managed Parallel skills
-└── memory                  # Saved Task, Monitor, and FindAll entries
-    ├── retrieve            # Search Memory or list recent entries
-    ├── evict               # Remove one entry from Memory
-    └── clear               # Permanently clear selected Memory
+├── memory                  # Saved Task, Monitor, and FindAll entries
+│   ├── retrieve            # Search Memory or list recent entries
+│   ├── evict               # Remove one entry from Memory
+│   └── clear               # Permanently clear selected Memory
+└── feedback                # Report problems to the Parallel team
+    ├── send                # Preview a report, then send it with consent
+    └── consent             # Show or set "don't ask again"
 ```
 
 Run `parallel-cli skills install` to install or update agent skills. When using
@@ -238,6 +241,30 @@ parallel-cli memory clear --scope-key workspace_acme --confirm-clear --json
 Omit `--scope-key` / `--memory-scope-key` to use personal Memory when the
 credential and account are eligible. Application credentials require a stable
 scope key containing only letters, digits, underscores, or hyphens.
+
+### 7. Report a Problem to Parallel
+
+Report significant problems, such as wrong results for specific runs, with the
+request IDs attached. Nothing is sent until the user agrees: the CLI shows
+exactly what Parallel would receive and asks first.
+
+```bash
+parallel-cli feedback send \
+    -m "Eval runs return the wrong CEO for most companies." \
+    --category results_quality --product task --severity blocking \
+    --example "trun_abc123:Returned John Roe; expected Jane Doe"
+
+# Agents: --json prints the preview without sending. Show it to the user, then
+# rerun with their answer and the preview's preview_id.
+parallel-cli feedback send ... --json
+parallel-cli feedback send ... --consent this_report --preview-id <preview_id> --json
+
+# Show or reset "don't ask again" (personal credentials only)
+parallel-cli feedback consent
+parallel-cli feedback consent ask
+```
+
+Feedback is not available to organizations on zero or partial data retention.
 
 ## Non-Interactive Mode (for AI Agents & Scripts)
 

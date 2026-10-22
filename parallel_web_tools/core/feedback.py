@@ -1,0 +1,139 @@
+"""Send feedback about Parallel to the Parallel team.
+
+The API sends nothing until the user consents: a first call returns a preview of
+exactly what Parallel would receive, and the user approves it for this report
+(``this_report``) or for all later ones (``always``).
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Literal
+
+from parallel_web_tools.core.auth import create_client
+from parallel_web_tools.core.user_agent import ClientSource
+
+FeedbackCategory = Literal["results_quality", "error", "latency", "missing_capability", "docs", "billing", "other"]
+FeedbackProduct = Literal["search", "extract", "task", "findall", "monitor", "responses", "mcp", "cli", "other"]
+FeedbackSeverity = Literal["blocking", "degraded", "minor"]
+UserConsent = Literal["not_asked", "this_report", "always"]
+ConsentPreference = Literal["ask", "always"]
+
+FEEDBACK_CATEGORIES: tuple[FeedbackCategory, ...] = (
+    "results_quality",
+    "error",
+    "latency",
+    "missing_capability",
+    "docs",
+    "billing",
+    "other",
+)
+FEEDBACK_PRODUCTS: tuple[FeedbackProduct, ...] = (
+    "search",
+    "extract",
+    "task",
+    "findall",
+    "monitor",
+    "responses",
+    "mcp",
+    "cli",
+    "other",
+)
+FEEDBACK_SEVERITIES: tuple[FeedbackSeverity, ...] = ("blocking", "degraded", "minor")
+USER_CONSENTS: tuple[UserConsent, ...] = ("not_asked", "this_report", "always")
+CONSENT_PREFERENCES: tuple[ConsentPreference, ...] = ("ask", "always")
+
+MIN_MESSAGE_CHARS = 20
+MAX_MESSAGE_CHARS = 4000
+MAX_EXAMPLES = 50
+MAX_NOTE_CHARS = 1000
+_EXAMPLE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+_FEEDBACK_PATH = "/v1beta/feedback"
+_CONSENT_PATH = "/v1beta/feedback/consent"
+
+
+class FeedbackInputError(ValueError):
+    """Raised when a feedback request is invalid before it reaches the API."""
+
+
+def parse_example(raw: str) -> dict[str, str]:
+    """Parse ``ID`` or ``ID:note`` into an example; IDs never contain a colon."""
+    example_id, sep, note = raw.partition(":")
+    example_id = example_id.strip()
+    if not _EXAMPLE_ID_RE.fullmatch(example_id):
+        raise FeedbackInputError(
+            f"example {raw!r} must start with a Parallel ID such as search_..., extract_..., or trun_..."
+        )
+    note = note.strip()
+    if len(note) > MAX_NOTE_CHARS:
+        raise FeedbackInputError(f"example note must be at most {MAX_NOTE_CHARS} characters")
+    return {"id": example_id, "issue": note} if sep and note else {"id": example_id}
+
+
+def _check_choice(value: str, choices: tuple[str, ...], field: str) -> None:
+    if value not in choices:
+        raise FeedbackInputError(f"{field} must be one of: {', '.join(choices)}")
+
+
+def send_feedback(
+    message: str,
+    category: str,
+    product: str,
+    *,
+    severity: str = "degraded",
+    examples: list[dict[str, str]] | None = None,
+    expected: str | None = None,
+    actual: str | None = None,
+    user_consent: str = "not_asked",
+    preview_id: str | None = None,
+    api_key: str | None = None,
+    source: ClientSource = "python",
+) -> dict[str, Any]:
+    """Preview or send a feedback report.
+
+    With ``user_consent="not_asked"`` and no stored ``always`` preference, the
+    response has ``status="consent_required"`` and a preview; nothing is sent.
+    """
+    if not MIN_MESSAGE_CHARS <= len(message) <= MAX_MESSAGE_CHARS:
+        raise FeedbackInputError(f"message must be {MIN_MESSAGE_CHARS}-{MAX_MESSAGE_CHARS} characters")
+    _check_choice(category, FEEDBACK_CATEGORIES, "category")
+    _check_choice(product, FEEDBACK_PRODUCTS, "product")
+    _check_choice(severity, FEEDBACK_SEVERITIES, "severity")
+    _check_choice(user_consent, USER_CONSENTS, "user_consent")
+    if examples is not None and len(examples) > MAX_EXAMPLES:
+        raise FeedbackInputError(f"examples must be at most {MAX_EXAMPLES}")
+
+    body: dict[str, Any] = {
+        "message": message,
+        "category": category,
+        "product": product,
+        "severity": severity,
+    }
+    if examples:
+        body["examples"] = examples
+    if expected:
+        body["expected"] = expected
+    if actual:
+        body["actual"] = actual
+    body["user_consent"] = user_consent
+    if preview_id:
+        body["preview_id"] = preview_id
+
+    client = create_client(api_key, source)
+    return client.post(path=_FEEDBACK_PATH, body=body, cast_to=dict)
+
+
+def get_feedback_consent(*, api_key: str | None = None, source: ClientSource = "python") -> dict[str, Any]:
+    """Return whether reports are sent without asking (``always``) or previewed first (``ask``)."""
+    client = create_client(api_key, source)
+    return client.get(_CONSENT_PATH, cast_to=dict)
+
+
+def set_feedback_consent(
+    preference: str, *, api_key: str | None = None, source: ClientSource = "python"
+) -> dict[str, Any]:
+    """Store ``always`` or reset to ``ask``. Only personal credentials can store a preference."""
+    _check_choice(preference, CONSENT_PREFERENCES, "preference")
+    client = create_client(api_key, source)
+    return client.put(path=_CONSENT_PATH, body={"preference": preference}, cast_to=dict)
