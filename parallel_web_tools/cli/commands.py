@@ -1168,7 +1168,8 @@ def _ask_feedback_consent(response: dict[str, Any]) -> str | None:
     type=click.Choice(list(FEEDBACK_SEVERITIES)),
     default="degraded",
     show_default=True,
-    help="blocking, degraded (a workaround was needed) or minor.",
+    help="blocking (the work could not continue), degraded (a workaround was needed) "
+    "or minor (noticeable, but the work went on unchanged).",
 )
 @click.option(
     "--example",
