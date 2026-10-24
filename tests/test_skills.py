@@ -474,6 +474,49 @@ class TestUnsafeManifestPaths:
             skill_dir / "references" / "exa.md"
         )
 
+    def test_managed_names_cannot_delete_outside_their_own_directory(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_file", lambda client, name, url: name.encode())
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        install_dir = tmp_path / "repo" / ".agents" / "skills"
+        mine = install_dir / "custom-skill"
+        mine.mkdir(parents=True)
+        manifest = install_dir / skills.MANIFEST_FILE_NAME
+        hostile = json.dumps({"installed_skills": ["../../../victim", "."]})
+
+        manifest.write_text(hostile)
+        skills.install_skills(install_dir)
+        manifest.write_text(hostile)
+        skills.uninstall_skills(install_dir)
+
+        assert victim.exists()
+        assert mine.exists()
+
+    @pytest.mark.parametrize("name", ["../escaped", "..\\escaped", "C:escaped"])
+    def test_index_rejects_names_that_are_not_one_path_component(self, name):
+        index = {"skills": [{"name": name, "skill_url": "https://skills.parallel.ai/x/SKILL.md"}]}
+
+        with pytest.raises(skills.SkillsDownloadError, match="invalid name"):
+            skills._skills_from_index(index)
+
+    def test_manifest_link_is_replaced_not_written_through(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_file", lambda client, name, url: name.encode())
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep me")
+        install_dir = tmp_path / "repo" / ".agents" / "skills"
+        install_dir.mkdir(parents=True)
+        manifest = install_dir / skills.MANIFEST_FILE_NAME
+        manifest.symlink_to(outside)
+
+        skills.install_skills(install_dir)
+
+        assert outside.read_text() == "keep me"
+        assert json.loads(manifest.read_text())["installed_skills"] == ["parallel-web-extract", "parallel-web-search"]
+
 
 class TestRemoteChannel:
     def test_get_remote_skills_channel(self, monkeypatch):

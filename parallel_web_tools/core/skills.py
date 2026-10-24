@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -208,7 +209,7 @@ def _skills_from_index(index: dict[str, Any]) -> dict[str, dict[str, str]]:
 
         name = raw_skill.get("name")
         skill_url = raw_skill.get("skill_url")
-        if not isinstance(name, str) or not name.strip():
+        if not isinstance(name, str) or not _is_safe_skill_name(name.strip()):
             raise SkillsDownloadError("Skills index contained a skill with an invalid name")
         if not isinstance(skill_url, str) or not skill_url.strip():
             raise SkillsDownloadError(f"Skills index entry '{name}' is missing a valid skill_url")
@@ -265,6 +266,11 @@ def _safe_skill_file_path(skill_name: str, raw_path: str) -> str:
         raise SkillsDownloadError(f"Manifest for skill '{skill_name}' contained an unsafe file path: {raw_path}")
 
     return str(posix_path)
+
+
+def _is_safe_skill_name(name: str) -> bool:
+    """Whether name is a single path component, so ``install_dir / name`` cannot leave install_dir."""
+    return name not in ("", ".", "..") and PurePosixPath(name).name == name and PureWindowsPath(name).name == name
 
 
 def _contained_target(skill_name: str, skill_dir: Path, relative_path: str) -> Path:
@@ -366,7 +372,11 @@ def _write_manifest(install_dir: Path, ref: str, installed_skills: list[str]) ->
         "managed_by": "parallel-cli",
     }
     install_dir.mkdir(parents=True, exist_ok=True)
-    _manifest_path(install_dir).write_text(json.dumps(data, indent=2))
+    # Replace rather than write in place: a repository can ship the manifest as a link to a file elsewhere.
+    fd, temp_path = tempfile.mkstemp(dir=install_dir, prefix=f"{MANIFEST_FILE_NAME}.")
+    with os.fdopen(fd, "w") as handle:
+        json.dump(data, handle, indent=2)
+    os.replace(temp_path, _manifest_path(install_dir))
 
 
 def _read_manifest(install_dir: Path) -> dict:
@@ -381,11 +391,14 @@ def _read_manifest(install_dir: Path) -> dict:
 
 
 def _managed_skills(install_dir: Path) -> list[str]:
-    """Return the skill names parallel-cli previously installed into install_dir."""
+    """Return the skill names parallel-cli previously installed into install_dir.
+
+    A project's manifest arrives with the repository, so its names are untrusted.
+    """
     managed_raw = _read_manifest(install_dir).get("installed_skills")
     if not isinstance(managed_raw, list):
         return []
-    return [name for name in managed_raw if isinstance(name, str)]
+    return [name for name in managed_raw if isinstance(name, str) and _is_safe_skill_name(name)]
 
 
 def install_skills(
