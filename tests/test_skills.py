@@ -501,6 +501,22 @@ class TestUnsafeManifestPaths:
         with pytest.raises(skills.SkillsDownloadError, match="invalid name"):
             skills._skills_from_index(index)
 
+    def test_manifest_link_is_replaced_not_written_through(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(skills, "_skills_client", _fake_skills_client)
+        monkeypatch.setattr(skills, "_fetch_skills_index", lambda client: _make_index())
+        monkeypatch.setattr(skills, "_download_skill_file", lambda client, name, url: name.encode())
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep me")
+        install_dir = tmp_path / "repo" / ".agents" / "skills"
+        install_dir.mkdir(parents=True)
+        manifest = install_dir / skills.MANIFEST_FILE_NAME
+        manifest.symlink_to(outside)
+
+        skills.install_skills(install_dir)
+
+        assert outside.read_text() == "keep me"
+        assert json.loads(manifest.read_text())["installed_skills"] == ["parallel-web-extract", "parallel-web-search"]
+
 
 class TestRemoteChannel:
     def test_get_remote_skills_channel(self, monkeypatch):

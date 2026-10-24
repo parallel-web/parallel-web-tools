@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -371,7 +372,11 @@ def _write_manifest(install_dir: Path, ref: str, installed_skills: list[str]) ->
         "managed_by": "parallel-cli",
     }
     install_dir.mkdir(parents=True, exist_ok=True)
-    _manifest_path(install_dir).write_text(json.dumps(data, indent=2))
+    # Replace rather than write in place: a repository can ship the manifest as a link to a file elsewhere.
+    fd, temp_path = tempfile.mkstemp(dir=install_dir, prefix=f"{MANIFEST_FILE_NAME}.")
+    with os.fdopen(fd, "w") as handle:
+        json.dump(data, handle, indent=2)
+    os.replace(temp_path, _manifest_path(install_dir))
 
 
 def _read_manifest(install_dir: Path) -> dict:
