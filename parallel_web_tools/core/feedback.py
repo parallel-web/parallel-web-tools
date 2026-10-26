@@ -14,7 +14,9 @@ from parallel_web_tools.core.auth import create_client
 from parallel_web_tools.core.user_agent import ClientSource
 
 FeedbackCategory = Literal["results_quality", "error", "latency", "missing_capability", "docs", "billing", "other"]
-FeedbackProduct = Literal["search", "extract", "task", "findall", "monitor", "responses", "mcp", "cli", "other"]
+FeedbackProduct = Literal[
+    "search", "extract", "task", "findall", "monitor", "responses", "decisions", "mcp", "cli", "other"
+]
 FeedbackSeverity = Literal["blocking", "degraded", "minor"]
 UserConsent = Literal["not_asked", "this_report", "always"]
 ConsentPreference = Literal["ask", "always"]
@@ -35,6 +37,7 @@ FEEDBACK_PRODUCTS: tuple[FeedbackProduct, ...] = (
     "findall",
     "monitor",
     "responses",
+    "decisions",
     "mcp",
     "cli",
     "other",
