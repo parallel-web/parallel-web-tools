@@ -116,8 +116,7 @@ parallel-cli
 │   ├── evict               # Remove one entry from Memory
 │   └── clear               # Permanently clear selected Memory
 └── feedback                # Report problems to the Parallel team
-    ├── send                # Preview a report, then send it with consent
-    └── consent             # Show or set "don't ask again"
+    └── send                # Send a report and show what Parallel received
 ```
 
 Run `parallel-cli skills install` to install or update agent skills. When using
@@ -245,8 +244,8 @@ scope key containing only letters, digits, underscores, or hyphens.
 ### 7. Report a Problem to Parallel
 
 Report significant problems, such as wrong results for specific runs, with the
-request IDs attached. Nothing is sent until the user agrees: the CLI shows
-exactly what Parallel would receive and asks first.
+request IDs attached. The CLI sends the report and shows exactly what Parallel
+received.
 
 ```bash
 parallel-cli feedback send \
@@ -254,17 +253,12 @@ parallel-cli feedback send \
     --category results_quality --product task --severity blocking \
     --example "trun_abc123:Returned John Roe; expected Jane Doe"
 
-# Agents: --json prints the preview without sending. Show it to the user, then
-# rerun with their answer and the preview's preview_id.
+# Agents: --json prints the response, including what Parallel received.
 parallel-cli feedback send ... --json
-parallel-cli feedback send ... --consent this_report --preview-id <preview_id> --json
-
-# Show or reset "don't ask again" (personal credentials only)
-parallel-cli feedback consent
-parallel-cli feedback consent ask
 ```
 
-Feedback is not available to organizations on zero or partial data retention.
+Feedback is open only to Parallel's own organizations for now, and never to
+organizations on zero or partial data retention.
 
 ## Non-Interactive Mode (for AI Agents & Scripts)
 
