@@ -1099,7 +1099,7 @@ def memory_clear(memory_scope_key: str | None, confirm_clear: bool, output_json:
 
 @main.group()
 def feedback():
-    """Report significant problems with Parallel to the Parallel team."""
+    """Report problems with Parallel to the Parallel team."""
     pass
 
 
@@ -1168,7 +1168,7 @@ def feedback_send(
     actual: str | None,
     output_json: bool,
 ):
-    """Report a significant problem, such as wrong results for specific runs.
+    """Report a problem, such as wrong, stale or missing results for specific runs.
 
     Sends the report and shows exactly what Parallel received.
     """

@@ -243,9 +243,10 @@ scope key containing only letters, digits, underscores, or hyphens.
 
 ### 7. Report a Problem to Parallel
 
-Report significant problems, such as wrong results for specific runs, with the
-request IDs attached. The CLI sends the report and shows exactly what Parallel
-received.
+Report a problem with Parallel, with the request IDs attached: wrong, stale or
+missing results, an answer the user says was wrong, a result you had to work
+around, an error your request didn't cause, or a benchmark where Parallel
+underperformed. The CLI sends the report and shows exactly what Parallel received.
 
 ```bash
 parallel-cli feedback send \
