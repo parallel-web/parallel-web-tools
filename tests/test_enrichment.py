@@ -132,6 +132,23 @@ class TestBuildOutputSchema:
         assert "headquarters" in schema["properties"]
         assert len(schema["required"]) == 3
 
+    def test_columns_with_the_same_base_name_are_all_kept(self):
+        """Descriptions that reduce to the same name must not overwrite each other."""
+        schema = build_output_schema(["Revenue (2024)", "Revenue (2025)", "revenue [USD]"])
+
+        assert list(schema["properties"]) == ["revenue", "revenue_2", "revenue_3"]
+        assert schema["properties"]["revenue"]["description"] == "Revenue (2024)"
+        assert schema["properties"]["revenue_2"]["description"] == "Revenue (2025)"
+        assert schema["properties"]["revenue_3"]["description"] == "revenue [USD]"
+        assert schema["required"] == ["revenue", "revenue_2", "revenue_3"]
+
+    def test_suffix_does_not_overwrite_an_existing_column(self):
+        """A generated suffix skips names another column already uses."""
+        schema = build_output_schema(["Revenue_2", "Revenue (2024)", "Revenue (2025)"])
+
+        assert list(schema["properties"]) == ["revenue_2", "revenue", "revenue_3"]
+        assert schema["properties"]["revenue_2"]["description"] == "Revenue_2"
+
     def test_hyphenated_names(self):
         """Hyphens should be converted to underscores."""
         schema = build_output_schema(["year-over-year growth"])

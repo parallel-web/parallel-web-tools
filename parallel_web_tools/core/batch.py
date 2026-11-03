@@ -31,7 +31,14 @@ def build_output_schema(output_columns: list[str]) -> dict[str, Any]:
             prop_name = "col_" + prop_name
         prop_name = prop_name or "column"
 
-        properties[prop_name] = {"type": "string", "description": col}
+        # Two descriptions can reduce to the same name (e.g. "Revenue (2024)" and
+        # "Revenue (2025)"); suffix the later ones so no requested column is dropped.
+        unique_name, n = prop_name, 2
+        while unique_name in properties:
+            unique_name = f"{prop_name}_{n}"
+            n += 1
+
+        properties[unique_name] = {"type": "string", "description": col}
 
     return {
         "type": "object",
