@@ -111,10 +111,12 @@ parallel-cli
 │   ├── list                # List available Parallel skills
 │   ├── reinstall           # Cleanly reinstall managed Parallel skills
 │   └── uninstall           # Remove only CLI-managed Parallel skills
-└── memory                  # Saved Task, Monitor, and FindAll entries
-    ├── retrieve            # Search Memory or list recent entries
-    ├── evict               # Remove one entry from Memory
-    └── clear               # Permanently clear selected Memory
+├── memory                  # Saved Task, Monitor, and FindAll entries
+│   ├── retrieve            # Search Memory or list recent entries
+│   ├── evict               # Remove one entry from Memory
+│   └── clear               # Permanently clear selected Memory
+└── feedback                # Report problems to the Parallel team
+    └── send                # Send a report and show what Parallel received
 ```
 
 Run `parallel-cli skills install` to install or update agent skills. When using
@@ -238,6 +240,26 @@ parallel-cli memory clear --scope-key workspace_acme --confirm-clear --json
 Omit `--scope-key` / `--memory-scope-key` to use personal Memory when the
 credential and account are eligible. Application credentials require a stable
 scope key containing only letters, digits, underscores, or hyphens.
+
+### 7. Report a Problem to Parallel
+
+Report a problem with Parallel, with the request IDs attached: wrong, stale or
+missing results, an answer the user says was wrong, a result you had to work
+around, an error your request didn't cause, or a benchmark where Parallel
+underperformed. The CLI sends the report and shows exactly what Parallel received.
+
+```bash
+parallel-cli feedback send \
+    -m "Eval runs return the wrong CEO for most companies." \
+    --category results_quality --product task --severity blocking \
+    --example "trun_abc123:Returned John Roe; expected Jane Doe"
+
+# Agents: --json prints the response, including what Parallel received.
+parallel-cli feedback send ... --json
+```
+
+Feedback is open only to Parallel's own organizations for now, and never to
+organizations on zero or partial data retention.
 
 ## Non-Interactive Mode (for AI Agents & Scripts)
 
