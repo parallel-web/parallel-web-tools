@@ -20,6 +20,9 @@ from parallel_web_tools.cli.skills import create_skills_group
 from parallel_web_tools.core import (
     AVAILABLE_PROCESSORS,
     FINDALL_GENERATORS,
+    FINDALL_PREVIEW_DESCRIPTION,
+    FINDALL_PREVIEW_GENERATOR,
+    FINDALL_PREVIEW_MATCH_LIMIT,
     JSON_SCHEMA_TYPE_MAP,
     MEMORY_KINDS,
     MONITOR_PROCESSORS,
@@ -36,6 +39,7 @@ from parallel_web_tools.core import (
     create_research_task,
     enrich_findall,
     entity_search_findall,
+    estimate_findall_cost,
     evict_memory,
     extend_findall,
     get_api_key,
@@ -59,6 +63,7 @@ from parallel_web_tools.core import (
     run_enrichment_from_dict,
     run_findall,
     run_research,
+    summarize_enrichments,
     trigger_monitor,
     update_monitor,
     validate_memory_scope_key,
@@ -2722,6 +2727,41 @@ def _save_and_display_research(
 # =============================================================================
 
 
+# Generators accepted by `findall run`. Preview is only offered here (not in
+# FINDALL_GENERATORS) because enrichment is skipped for preview runs.
+FINDALL_RUN_GENERATORS = {FINDALL_PREVIEW_GENERATOR: FINDALL_PREVIEW_DESCRIPTION, **FINDALL_GENERATORS}
+
+
+def _format_usd(amount: float) -> str:
+    """Format a dollar amount, keeping sub-cent precision (e.g. $0.025)."""
+    if round(amount * 100, 6) % 1:
+        return f"${amount:.4f}".rstrip("0")
+    return f"${amount:,.2f}"
+
+
+def _describe_findall_estimate(estimate: dict[str, Any], match_limit: int) -> str:
+    """One-line summary of an estimate_findall_cost() result."""
+    if estimate.get("max_total_cost") is None:
+        unpriced = ", ".join(estimate.get("unpriced_processors") or []) or "this generator"
+        return f"unknown (no published price for {unpriced})"
+    per_match = estimate["per_match_cost"] + estimate["enrichment_cost_per_match"]
+    return (
+        f"up to {_format_usd(estimate['max_total_cost'])} "
+        f"({_format_usd(estimate['fixed_cost'])} + {match_limit} matches x {_format_usd(per_match)})"
+    )
+
+
+def _print_findall_enrichments(enrichments: list[dict[str, Any]], skipped: bool = False) -> None:
+    """Print the enrichments a FindAll run will add (or skip)."""
+    if not enrichments:
+        return
+    label = "Enrichments skipped:" if skipped else "Enrichments:"
+    console.print(f"  [bold]{label}[/bold] {len(enrichments)}")
+    for item in enrichments:
+        fields = ", ".join(item.get("fields") or []) or "(unnamed)"
+        console.print(f"    [dim]- {fields} (processor: {item.get('processor')}, billed per match)[/dim]")
+
+
 @main.group()
 def findall():
     """FindAll: discover entities from the web using natural language."""
@@ -2733,10 +2773,11 @@ def findall():
 @click.option(
     "--generator",
     "-g",
-    type=click.Choice(list(FINDALL_GENERATORS.keys())),
+    type=click.Choice(list(FINDALL_RUN_GENERATORS.keys())),
     default="core",
     show_default=True,
-    help="Generator tier (higher = more thorough but slower/costlier)",
+    help="Generator tier (higher = more thorough but slower/costlier). "
+    "Use 'preview' to test a query on 5-10 candidates before a full run.",
 )
 @click.option(
     "--match-limit",
@@ -2744,7 +2785,12 @@ def findall():
     type=int,
     default=10,
     show_default=True,
-    help="Maximum number of matched candidates (5-1000)",
+    help="Maximum number of matched candidates (5-1000; 5-10 for preview)",
+)
+@click.option(
+    "--no-enrich",
+    is_flag=True,
+    help="Don't add the enrichments suggested by ingest. Enrichments are billed per match.",
 )
 @click.option("--exclude", "exclude_json", help="Entities to exclude as JSON array of {name, url} objects")
 @click.option("--metadata", "metadata_json", help="Metadata as JSON string")
@@ -2777,6 +2823,7 @@ def findall_run(
     memory_scope_key: str | None,
     output_file: str | None,
     output_json: bool,
+    no_enrich: bool = False,
 ):
     """Run a FindAll query to discover and match entities from the web.
 
@@ -2787,6 +2834,8 @@ def findall_run(
         parallel-cli findall run "Find all AI companies that raised Series A in 2026"
 
         parallel-cli findall run "Find roofing companies in Charlotte NC" -g base -n 25
+
+        parallel-cli findall run "Find roofing companies in Charlotte NC" -g preview --dry-run
 
         parallel-cli findall run "Find YC companies in developer tools" --no-wait --json
 
@@ -2799,6 +2848,14 @@ def findall_run(
         _handle_error(e, output_json=output_json, exit_code=EXIT_BAD_INPUT, prefix="Invalid JSON")
         return
 
+    is_preview = generator == FINDALL_PREVIEW_GENERATOR
+    if is_preview:
+        low, high = FINDALL_PREVIEW_MATCH_LIMIT
+        if not low <= match_limit <= high:
+            raise click.UsageError(f"--match-limit must be between {low} and {high} for the preview generator.")
+    # Preview runs skip enrichment (see FINDALL_PREVIEW_GENERATOR).
+    enrich = not no_enrich and not is_preview
+
     try:
         if dry_run:
             # Ingest schema only — no run created
@@ -2806,15 +2863,19 @@ def findall_run(
                 console.print("[dim]Ingesting objective...[/dim]\n")
 
             schema = ingest_findall(objective, source="cli")
+            suggested_enrichments = schema.get("enrichments") or []
+            estimate = estimate_findall_cost(generator, match_limit, suggested_enrichments if enrich else [])
             dry_run_data = {
                 "dry_run": True,
                 "objective": objective,
                 "generator": generator,
-                "generator_description": FINDALL_GENERATORS[generator],
+                "generator_description": FINDALL_RUN_GENERATORS[generator],
                 "match_limit": match_limit,
                 "entity_type": schema.get("entity_type", "unknown"),
                 "match_conditions": schema.get("match_conditions", []),
-                "enrichments": schema.get("enrichments", []),
+                "enrichments": suggested_enrichments,
+                "apply_enrichments": enrich,
+                "estimated_cost": estimate,
             }
             if memory_scope_key is not None:
                 dry_run_data["memory_scope_key"] = memory_scope_key
@@ -2824,17 +2885,19 @@ def findall_run(
             else:
                 console.print("[bold]Dry run — schema ingested, no run created[/bold]\n")
                 console.print(f"  [bold]Entity type:[/bold]  {dry_run_data['entity_type']}")
-                console.print(f"  [bold]Generator:[/bold]    {generator} ({FINDALL_GENERATORS[generator]})")
+                console.print(f"  [bold]Generator:[/bold]    {generator} ({FINDALL_RUN_GENERATORS[generator]})")
                 console.print(f"  [bold]Match limit:[/bold]  {match_limit}")
                 conditions = dry_run_data["match_conditions"]
                 console.print(f"  [bold]Conditions:[/bold]   {len(conditions)}")
                 for mc in conditions:
                     console.print(f"    [dim]- {mc.get('name', '')}: {mc.get('description', '')}[/dim]")
-                enrichments = dry_run_data["enrichments"]
-                if enrichments:
-                    console.print(f"  [bold]Enrichments:[/bold]  {len(enrichments)}")
-                    for e in enrichments:
-                        console.print(f"    [dim]- {e.get('name', '')}: {e.get('description', '')}[/dim]")
+                _print_findall_enrichments(summarize_enrichments(suggested_enrichments), skipped=not enrich)
+                console.print(f"  [bold]Est. cost:[/bold]    {_describe_findall_estimate(estimate, match_limit)}")
+                if enrich:
+                    console.print(
+                        "\n[dim]Ingest runs again when the run starts, so suggested enrichments can differ. "
+                        "Use --no-enrich to skip them.[/dim]"
+                    )
             return
 
         if no_wait:
@@ -2853,6 +2916,8 @@ def findall_run(
                     name = mc.get("name", "")
                     desc = mc.get("description", "")
                     console.print(f"  [dim]- {name}: {desc}[/dim]")
+                estimate = estimate_findall_cost(generator, match_limit)
+                console.print(f"[green]Est. cost:[/green] {_describe_findall_estimate(estimate, match_limit)}")
                 console.print(f"\n[dim]Creating run with generator={generator}, match_limit={match_limit}...[/dim]")
 
             result = create_findall_run(
@@ -2887,7 +2952,7 @@ def findall_run(
                 console.print(
                     f"[bold cyan]Starting FindAll with generator={generator}, match_limit={match_limit}[/bold cyan]"
                 )
-                console.print(f"[dim]Generator: {FINDALL_GENERATORS[generator]}[/dim]\n")
+                console.print(f"[dim]Generator: {FINDALL_RUN_GENERATORS[generator]}[/dim]\n")
 
             start_time = time.time()
 
@@ -2901,6 +2966,13 @@ def findall_run(
                 if status == "ingested":
                     entity_type = metrics.get("entity_type", "")
                     console.print(f"[green]Schema ready - entity type: {entity_type}[/green]")
+                    _print_findall_enrichments(metrics.get("enrichments") or [])
+                    _print_findall_enrichments(metrics.get("skipped_enrichments") or [], skipped=True)
+                    estimate = metrics.get("estimated_cost")
+                    if estimate:
+                        console.print(f"  [bold]Est. cost:[/bold] {_describe_findall_estimate(estimate, match_limit)}")
+                    if metrics.get("enrichments"):
+                        console.print("  [dim]Use --no-enrich to skip enrichments.[/dim]")
                 elif status == "created":
                     console.print(f"[green]Run created: {findall_id}[/green]\n")
                 else:
@@ -2920,6 +2992,7 @@ def findall_run(
                 poll_interval=poll_interval,
                 on_status=on_status,
                 source="cli",
+                enrich=enrich,
                 memory_scope_key=memory_scope_key,
             )
 

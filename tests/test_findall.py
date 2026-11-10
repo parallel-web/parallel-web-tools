@@ -8,7 +8,9 @@ from click.testing import CliRunner
 
 from parallel_web_tools.cli.commands import main
 from parallel_web_tools.core.findall import (
+    FINDALL_GENERATOR_PRICING,
     FINDALL_GENERATORS,
+    FINDALL_PREVIEW_GENERATOR,
     FINDALL_TERMINAL_STATUSES,
     _extract_status_from_result,
     _extract_status_info,
@@ -16,11 +18,13 @@ from parallel_web_tools.core.findall import (
     cancel_findall_run,
     create_findall_run,
     entity_search_findall,
+    estimate_findall_cost,
     get_findall_result,
     get_findall_status,
     ingest_findall,
     poll_findall,
     run_findall,
+    summarize_enrichments,
 )
 
 
@@ -1252,3 +1256,203 @@ class TestFindallErrorHandling:
             result = runner.invoke(main, ["findall", "cancel", "findall_bad"])
 
             assert result.exit_code != 0
+
+
+# =============================================================================
+# Cost Visibility Tests
+# =============================================================================
+
+# Enrichment shape returned by ingest (taken from a real run's schema).
+FOUNDING_DATE_ENRICHMENT = {
+    "output_schema": {
+        "type": "json",
+        "json_schema": {
+            "type": "object",
+            "properties": {"founding_date": {"type": "string", "description": "Founding date, YYYY-MM-DD"}},
+        },
+    },
+    "mcp_servers": None,
+    "processor": "core",
+}
+
+
+class TestSummarizeEnrichments:
+    def test_lists_fields_and_processor(self):
+        assert summarize_enrichments([FOUNDING_DATE_ENRICHMENT]) == [{"fields": ["founding_date"], "processor": "core"}]
+
+    def test_defaults_processor_to_core(self):
+        enrichment = {"output_schema": {"json_schema": {"properties": {"ceo": {}}}}}
+        assert summarize_enrichments([enrichment]) == [{"fields": ["ceo"], "processor": "core"}]
+
+    def test_skips_enrichments_without_json_schema(self):
+        assert summarize_enrichments([{"output_schema": {}}, {"processor": "core"}]) == []
+
+    def test_handles_non_list_input(self):
+        assert summarize_enrichments(None) == []
+        assert summarize_enrichments({"not": "a list"}) == []
+
+
+class TestEstimateFindallCost:
+    def test_core_default_without_enrichments(self):
+        estimate = estimate_findall_cost("core", 10)
+        assert estimate["fixed_cost"] == 2.00
+        assert estimate["per_match_cost"] == 0.15
+        assert estimate["enrichment_cost_per_match"] == 0
+        assert estimate["max_total_cost"] == pytest.approx(3.50)
+
+    def test_core_default_with_one_core_enrichment(self):
+        # A default run that picked up one suggested enrichment was billed
+        # $3.75: $2.00 fixed + 10 x $0.15 matches + 10 x $0.025 Task core runs.
+        estimate = estimate_findall_cost("core", 10, [FOUNDING_DATE_ENRICHMENT])
+        assert estimate["enrichment_cost_per_match"] == pytest.approx(0.025)
+        assert estimate["max_total_cost"] == pytest.approx(3.75)
+
+    def test_preview_is_flat(self):
+        assert estimate_findall_cost("preview", 10)["max_total_cost"] == pytest.approx(0.10)
+
+    def test_scales_with_match_limit(self):
+        assert estimate_findall_cost("base", 1000)["max_total_cost"] == pytest.approx(30.25)
+
+    def test_unknown_generator(self):
+        estimate = estimate_findall_cost("mystery", 10)
+        assert estimate["max_total_cost"] is None
+
+    def test_unpriced_enrichment_processor(self):
+        enrichment = {**FOUNDING_DATE_ENRICHMENT, "processor": "mystery"}
+        estimate = estimate_findall_cost("core", 10, [enrichment])
+        assert estimate["max_total_cost"] is None
+        assert estimate["unpriced_processors"] == ["mystery"]
+
+    def test_every_generator_is_priced(self):
+        for generator in [*FINDALL_GENERATORS, FINDALL_PREVIEW_GENERATOR]:
+            assert generator in FINDALL_GENERATOR_PRICING
+
+
+class TestRunFindallEnrichmentControl:
+    def _setup(self, client, enrichments):
+        schema = mock.MagicMock()
+        schema.entity_type = "companies"
+        schema.match_conditions = []
+        schema.enrichments = enrichments
+        client.beta.findall.ingest.return_value = schema
+        client.beta.findall.create.return_value = _make_run(status="queued")
+        client.beta.findall.retrieve.return_value = _make_run(status="completed", is_active=False)
+        client.beta.findall.result.return_value = _make_result()
+
+    def _run(self, **kwargs):
+        statuses = []
+        with (
+            mock.patch("parallel_web_tools.core.polling.time.sleep"),
+            mock.patch("parallel_web_tools.core.findall._poll_enrichments_until_complete") as mock_enrich_poll,
+        ):
+            mock_enrich_poll.side_effect = lambda client, findall_id, *a, **k: {"findall_id": findall_id}
+            run_findall("Find AI companies", poll_interval=1, on_status=lambda *a: statuses.append(a), **kwargs)
+        return statuses
+
+    def test_ingested_status_reports_enrichments_and_estimate(self, mock_parallel_client):
+        self._setup(mock_parallel_client, [FOUNDING_DATE_ENRICHMENT])
+        statuses = self._run()
+        ingested = next(m for s, _, m in statuses if s == "ingested")
+        assert ingested["enrichments"] == [{"fields": ["founding_date"], "processor": "core"}]
+        assert ingested["estimated_cost"]["max_total_cost"] == pytest.approx(3.75)
+        mock_parallel_client.beta.findall.enrich.assert_called_once()
+
+    def test_enrich_false_skips_enrichment(self, mock_parallel_client):
+        self._setup(mock_parallel_client, [FOUNDING_DATE_ENRICHMENT])
+        statuses = self._run(enrich=False)
+        ingested = next(m for s, _, m in statuses if s == "ingested")
+        assert ingested["enrichments"] == []
+        assert ingested["skipped_enrichments"] == [{"fields": ["founding_date"], "processor": "core"}]
+        assert ingested["estimated_cost"]["max_total_cost"] == pytest.approx(3.50)
+        mock_parallel_client.beta.findall.enrich.assert_not_called()
+
+    def test_preview_never_enriches(self, mock_parallel_client):
+        self._setup(mock_parallel_client, [FOUNDING_DATE_ENRICHMENT])
+        statuses = self._run(generator="preview")
+        ingested = next(m for s, _, m in statuses if s == "ingested")
+        assert ingested["estimated_cost"]["max_total_cost"] == pytest.approx(0.10)
+        mock_parallel_client.beta.findall.enrich.assert_not_called()
+        assert mock_parallel_client.beta.findall.create.call_args.kwargs["generator"] == "preview"
+
+
+class TestFindallRunCostVisibility:
+    def test_help_lists_preview_and_no_enrich(self, runner):
+        result = runner.invoke(main, ["findall", "run", "--help"])
+        assert result.exit_code == 0
+        assert "preview" in result.output
+        assert "--no-enrich" in result.output
+
+    @pytest.mark.parametrize("limit", ["4", "11", "50"])
+    def test_preview_rejects_match_limit_outside_5_to_10(self, runner, limit):
+        with mock.patch("parallel_web_tools.cli.commands.run_findall") as mock_run:
+            result = runner.invoke(main, ["findall", "run", "q", "-g", "preview", "-n", limit])
+        assert result.exit_code == 2
+        assert "between 5 and 10" in result.output
+        mock_run.assert_not_called()
+
+    def test_dry_run_shows_estimate_and_enrichments(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.ingest_findall") as mock_ingest:
+            mock_ingest.return_value = {
+                "entity_type": "companies",
+                "match_conditions": [{"name": "c", "description": "d"}],
+                "enrichments": [FOUNDING_DATE_ENRICHMENT],
+            }
+            result = runner.invoke(main, ["findall", "run", "Find AI companies", "--dry-run"])
+        assert result.exit_code == 0
+        assert "founding_date" in result.output
+        assert "$3.75" in result.output
+        assert "--no-enrich" in result.output
+
+    def test_dry_run_json_includes_estimate(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.ingest_findall") as mock_ingest:
+            mock_ingest.return_value = {
+                "entity_type": "companies",
+                "match_conditions": [],
+                "enrichments": [FOUNDING_DATE_ENRICHMENT],
+            }
+            result = runner.invoke(main, ["findall", "run", "q", "--dry-run", "--no-enrich", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["apply_enrichments"] is False
+        assert data["estimated_cost"]["max_total_cost"] == pytest.approx(3.50)
+
+    def test_dry_run_preview_estimate(self, runner):
+        with mock.patch("parallel_web_tools.cli.commands.ingest_findall") as mock_ingest:
+            mock_ingest.return_value = {"entity_type": "companies", "match_conditions": []}
+            result = runner.invoke(main, ["findall", "run", "q", "-g", "preview", "--dry-run", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["generator"] == "preview"
+        assert data["estimated_cost"]["max_total_cost"] == pytest.approx(0.10)
+
+    @pytest.mark.parametrize(
+        ("args", "expected_enrich"),
+        [([], True), (["--no-enrich"], False), (["-g", "preview"], False)],
+    )
+    def test_full_run_passes_enrich_flag(self, runner, args, expected_enrich):
+        with mock.patch("parallel_web_tools.cli.commands.run_findall") as mock_run:
+            mock_run.return_value = {"findall_id": "f", "status": "completed", "metrics": {}, "candidates": []}
+            result = runner.invoke(main, ["findall", "run", "q", "--json", *args])
+        assert result.exit_code == 0, result.output
+        assert mock_run.call_args.kwargs["enrich"] is expected_enrich
+
+    def test_full_run_prints_estimate_after_ingest(self, runner):
+        def fake_run(*args, on_status, **kwargs):
+            on_status(
+                "ingested",
+                "",
+                {
+                    "entity_type": "companies",
+                    "enrichments": [{"fields": ["founding_date"], "processor": "core"}],
+                    "skipped_enrichments": [],
+                    "estimated_cost": estimate_findall_cost("core", 10, [FOUNDING_DATE_ENRICHMENT]),
+                },
+            )
+            return {"findall_id": "f", "status": "completed", "metrics": {}, "candidates": []}
+
+        with mock.patch("parallel_web_tools.cli.commands.run_findall", side_effect=fake_run):
+            result = runner.invoke(main, ["findall", "run", "q"])
+        assert result.exit_code == 0, result.output
+        assert "founding_date" in result.output
+        assert "up to $3.75" in result.output
+        assert "--no-enrich" in result.output

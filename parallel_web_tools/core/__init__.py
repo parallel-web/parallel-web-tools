@@ -26,11 +26,17 @@ from parallel_web_tools.core.batch import (
 )
 from parallel_web_tools.core.findall import (
     ENTITY_SEARCH_ENTITY_TYPES,
+    FINDALL_GENERATOR_PRICING,
     FINDALL_GENERATORS,
+    FINDALL_PREVIEW_DESCRIPTION,
+    FINDALL_PREVIEW_GENERATOR,
+    FINDALL_PREVIEW_MATCH_LIMIT,
+    TASK_PROCESSOR_PRICE_PER_RUN,
     cancel_findall_run,
     create_findall_run,
     enrich_findall,
     entity_search_findall,
+    estimate_findall_cost,
     extend_findall,
     get_findall_result,
     get_findall_schema,
@@ -38,6 +44,7 @@ from parallel_web_tools.core.findall import (
     ingest_findall,
     poll_findall,
     run_findall,
+    summarize_enrichments,
 )
 from parallel_web_tools.core.memory import (
     MAX_MEMORY_QUERY_CHARS,
@@ -165,6 +172,13 @@ __all__ = [
     # FindAll
     "ENTITY_SEARCH_ENTITY_TYPES",
     "FINDALL_GENERATORS",
+    "FINDALL_GENERATOR_PRICING",
+    "FINDALL_PREVIEW_DESCRIPTION",
+    "FINDALL_PREVIEW_GENERATOR",
+    "FINDALL_PREVIEW_MATCH_LIMIT",
+    "TASK_PROCESSOR_PRICE_PER_RUN",
+    "estimate_findall_cost",
+    "summarize_enrichments",
     "cancel_findall_run",
     "create_findall_run",
     "enrich_findall",

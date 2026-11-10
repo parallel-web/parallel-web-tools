@@ -28,6 +28,40 @@ FINDALL_GENERATORS = {
     "pro": "largest pool - highly specific, hard-to-find matches",
 }
 
+# The preview generator is for testing a query before a full run. It is kept
+# out of FINDALL_GENERATORS because it doesn't support enrichment reliably
+# (see #58), so it is only offered by `findall run`, which skips enrichment
+# for preview runs.
+FINDALL_PREVIEW_GENERATOR = "preview"
+FINDALL_PREVIEW_DESCRIPTION = "5-10 candidates - test a query cheaply before a full run"
+FINDALL_PREVIEW_MATCH_LIMIT = (5, 10)
+
+# Published FindAll prices in USD: (fixed cost per run, cost per match).
+# Source: https://docs.parallel.ai/getting-started/pricing#findall-api
+FINDALL_GENERATOR_PRICING: dict[str, tuple[float, float]] = {
+    "preview": (0.10, 0.00),
+    "base": (0.25, 0.03),
+    "core": (2.00, 0.15),
+    "pro": (10.00, 1.00),
+}
+
+# Published Task API prices in USD per run. Enrichments are billed per match
+# at the rate of the Task processor they use.
+# Source: https://docs.parallel.ai/getting-started/pricing#task-api
+TASK_PROCESSOR_PRICE_PER_RUN: dict[str, float] = {
+    "lite": 0.005,
+    "base": 0.01,
+    "core": 0.025,
+    "core2x": 0.05,
+    "pro": 0.10,
+    "ultra": 0.30,
+    "ultra2x": 0.60,
+    "ultra4x": 1.20,
+    "ultra8x": 2.40,
+}
+
+DEFAULT_ENRICHMENT_PROCESSOR = "core"
+
 FINDALL_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 # Entity types supported by the sync entity-search endpoint.
@@ -389,6 +423,86 @@ def _add_enrichments(
             )
 
 
+def summarize_enrichments(enrichments: Any) -> list[dict[str, Any]]:
+    """Describe the enrichments a run would add: field names and processor.
+
+    Only enrichments with a json_schema are applied by run_findall, so only
+    those are listed here.
+    """
+    summary: list[dict[str, Any]] = []
+    if not isinstance(enrichments, list):
+        return summary
+    for enrichment in enrichments:
+        if not isinstance(enrichment, dict):
+            continue
+        json_schema = (enrichment.get("output_schema") or {}).get("json_schema")
+        if not isinstance(json_schema, dict):
+            continue
+        fields = list((json_schema.get("properties") or {}).keys())
+        summary.append(
+            {
+                "fields": fields,
+                "processor": enrichment.get("processor") or DEFAULT_ENRICHMENT_PROCESSOR,
+            }
+        )
+    return summary
+
+
+def estimate_findall_cost(
+    generator: str,
+    match_limit: int,
+    enrichments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Estimate the most a FindAll run can cost, from published prices.
+
+    The estimate assumes every slot up to match_limit is filled, so it is an
+    upper bound: fewer matches cost less. Enrichments are billed once per
+    match at their Task processor rate.
+
+    Args:
+        generator: Generator tier (preview, base, core, pro).
+        match_limit: Maximum matched candidates.
+        enrichments: Enrichment definitions from ingest (as returned by
+            ingest_findall or the API), or None for no enrichments.
+
+    Returns:
+        Dict with fixed_cost, per_match_cost, enrichment_cost_per_match,
+        max_total_cost (all USD, or None when a price isn't published), and
+        unpriced_processors listing any enrichment processor without a
+        published price.
+    """
+    pricing = FINDALL_GENERATOR_PRICING.get(generator)
+    summary = summarize_enrichments(enrichments or [])
+
+    enrichment_per_match = 0.0
+    unpriced: list[str] = []
+    for item in summary:
+        price = TASK_PROCESSOR_PRICE_PER_RUN.get(item["processor"])
+        if price is None:
+            unpriced.append(item["processor"])
+        else:
+            enrichment_per_match += price
+
+    if pricing is None:
+        return {
+            "fixed_cost": None,
+            "per_match_cost": None,
+            "enrichment_cost_per_match": round(enrichment_per_match, 4),
+            "max_total_cost": None,
+            "unpriced_processors": unpriced,
+        }
+
+    fixed, per_match = pricing
+    max_total = None if unpriced else fixed + match_limit * (per_match + enrichment_per_match)
+    return {
+        "fixed_cost": fixed,
+        "per_match_cost": per_match,
+        "enrichment_cost_per_match": round(enrichment_per_match, 4),
+        "max_total_cost": None if max_total is None else round(max_total, 4),
+        "unpriced_processors": unpriced,
+    }
+
+
 def _collect_enrichment_schemas(enrichments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extract json_schema dicts from enrichment definitions."""
     schemas = []
@@ -425,16 +539,21 @@ def run_findall(
 
     Args:
         objective: Natural language query.
-        generator: Generator tier (base/core/pro).
-        match_limit: Maximum matched candidates (5-1000).
+        generator: Generator tier (preview/base/core/pro). Preview runs
+            evaluate 5-10 candidates and skip enrichment.
+        match_limit: Maximum matched candidates (5-1000; 5-10 for preview).
         exclude_list: Optional entities to exclude.
         metadata: Optional run metadata.
         api_key: Optional API key override.
         timeout: Maximum wait time in seconds (default: 3600).
         poll_interval: Seconds between status checks (default: 30).
         on_status: Optional callback(status, findall_id, metrics) on each poll.
+            The "ingested" call includes the enrichments that will be added
+            and an estimated_cost (see estimate_findall_cost).
         source: Client source identifier for User-Agent.
         enrich: Whether to apply suggested enrichments from ingest. Default True.
+            Enrichments are billed per match at their Task processor rate.
+            Always False for the preview generator.
         memory_scope_key: Optional key identifying the memory scope to use.
             Omit to use personal memory, if available.
 
@@ -452,10 +571,24 @@ def run_findall(
 
     entity_type = getattr(schema, "entity_type", "entities")
     match_conditions = _serialize(getattr(schema, "match_conditions", []))
-    enrichments = _serialize(getattr(schema, "enrichments", []))
+    enrichments = _serialize(getattr(schema, "enrichments", [])) or []
+
+    # Preview runs don't support enrichment reliably (see #58).
+    if generator == FINDALL_PREVIEW_GENERATOR:
+        enrich = False
+    applied_enrichments = enrichments if enrich else []
 
     if on_status:
-        on_status("ingested", "", {"entity_type": entity_type})
+        on_status(
+            "ingested",
+            "",
+            {
+                "entity_type": entity_type,
+                "enrichments": summarize_enrichments(applied_enrichments),
+                "skipped_enrichments": summarize_enrichments(enrichments) if not enrich else [],
+                "estimated_cost": estimate_findall_cost(generator, match_limit, applied_enrichments),
+            },
+        )
 
     # Step 2: Create the run
     kwargs: dict[str, Any] = {
