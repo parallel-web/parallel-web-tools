@@ -27,9 +27,10 @@ pip install parallel-web-tools[spark] jupyter
    pip install parallel-web-tools[spark] jupyter
    ```
 
-2. Authenticate:
+2. Authenticate. The Spark UDFs send a raw API key, so a `parallel-cli login`
+   session is not enough:
    ```bash
-   parallel-cli login
+   export PARALLEL_API_KEY=your_api_key
    ```
 
 3. Start Jupyter:
