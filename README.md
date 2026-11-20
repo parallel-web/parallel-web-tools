@@ -132,6 +132,13 @@ parallel-cli login
 export PARALLEL_API_KEY=your_api_key
 ```
 
+`parallel-cli login` stores an OAuth credential, not an API key. The CLI,
+`create_client()` / `get_client()` and the Polars integration exchange it for
+short-lived access tokens. The DuckDB, Spark, BigQuery and Snowflake
+integrations send a raw API key, so they need `PARALLEL_API_KEY` or an explicit
+`api_key`. An API key stored by an older release is replaced by an OAuth
+credential on the first API call that still has a valid login.
+
 ### 2. Search the Web
 
 ```bash

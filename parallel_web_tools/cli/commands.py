@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, NoReturn, cast
 
 import click
-import httpx
 from dotenv import load_dotenv
 from rich.console import Console
 
@@ -38,7 +37,6 @@ from parallel_web_tools.core import (
     entity_search_findall,
     evict_memory,
     extend_findall,
-    get_api_key,
     get_auth_status,
     get_control_api_access_token,
     get_findall_result,
@@ -47,10 +45,10 @@ from parallel_web_tools.core import (
     get_monitor,
     get_research_status,
     get_task_group_status,
-    get_user_agent,
     ingest_findall,
     list_monitor_events,
     list_monitors,
+    login_flow,
     logout,
     poll_findall,
     poll_research,
@@ -63,7 +61,6 @@ from parallel_web_tools.core import (
     update_monitor,
     validate_memory_scope_key,
 )
-from parallel_web_tools.core.endpoints import get_api_url
 
 # Standalone CLI (PyInstaller) has limited features to reduce bundle size
 # YAML config and interactive planner require: pip install parallel-web-tools[cli]
@@ -230,6 +227,9 @@ def _handle_error(
             "credentials only authorize the standard Parallel API. Re-run "
             "'parallel-cli login' to authenticate against the Account API."
         )
+        exit_code = EXIT_AUTH_ERROR
+    elif isinstance(error, ReauthenticationRequired):
+        # Agents read exit code 3 as "run 'parallel-cli login' again".
         exit_code = EXIT_AUTH_ERROR
     if output_json:
         error_data = {"error": {"message": message, "type": type(error).__name__}}
@@ -433,13 +433,9 @@ def suggest_from_intent(
     source_columns: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Use Parallel Ingest API to suggest output columns and processor."""
-    api_key = get_api_key()
-    base_url = get_api_url()
-    headers = {
-        "x-api-key": api_key,
-        "Content-Type": "application/json",
-        "User-Agent": get_user_agent("cli"),
-    }
+    from parallel_web_tools.core.auth import get_client
+
+    client = get_client(source="cli")
 
     full_intent = intent
     if source_columns:
@@ -448,10 +444,7 @@ def suggest_from_intent(
 
     suggest_body: dict[str, Any] = {"user_intent": full_intent}
 
-    with httpx.Client(timeout=60) as client:
-        response = client.post(f"{base_url}/v1beta/tasks/suggest", json=suggest_body, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+    data = client.post("/v1beta/tasks/suggest", cast_to=dict[str, Any], body=suggest_body, options={"timeout": 60})
 
     output_schema = data.get("output_schema", {})
     properties = output_schema.get("properties", {})
@@ -467,15 +460,15 @@ def suggest_from_intent(
         input_schema = data.get("input_schema", {"type": "object", "properties": {}})
         task_spec = {"input_schema": input_schema, "output_schema": output_schema}
 
-        with httpx.Client(timeout=60) as client:
-            processor_response = client.post(
-                f"{base_url}/v1beta/tasks/suggest-processor", json={"task_spec": task_spec}, headers=headers
-            )
-            if processor_response.status_code == 200:
-                processor_data = processor_response.json()
-                recommended = processor_data.get("recommended_processors", [])
-                if recommended:
-                    processor = recommended[0]
+        processor_data = client.post(
+            "/v1beta/tasks/suggest-processor",
+            cast_to=dict[str, Any],
+            body={"task_spec": task_spec},
+            options={"timeout": 60},
+        )
+        recommended = processor_data.get("recommended_processors", [])
+        if recommended:
+            processor = recommended[0]
     except Exception as e:
         logger.debug("Processor suggestion failed, using default '%s': %s", processor, e)
 
@@ -561,6 +554,12 @@ def auth(output_json: bool):
     else:
         console.print("[green]Active: stored credentials (OAuth)[/green]")
         console.print(f"  Credentials: {status['token_file']}")
+        if status.get("stored_credential_type") == "api_key":
+            console.print(
+                "  Product API: API key [dim](replaced by an OAuth credential on the next API call after a login)[/dim]"
+            )
+        else:
+            console.print("  Product API: OAuth credential")
         if status.get("selected_org_name"):
             console.print(f"  Organization: {status['selected_org_name']} ({status['selected_org_id']})")
         elif status.get("selected_org_id"):
@@ -637,7 +636,7 @@ def login(output_json: bool, no_browser: bool):
             console.print("[dim]Could not auto-open browser; open the URL above manually.[/dim]")
 
     try:
-        get_api_key(force_login=True, on_device_code=_on_device_code)
+        login_flow(on_device_code=_on_device_code)
         if output_json:
             print(json.dumps({"event": "auth_success"}), flush=True)
         else:
@@ -2027,9 +2026,16 @@ def enrich_deploy(
         if not user:
             raise click.UsageError("--user is required for Snowflake deployment.")
 
-    # Now resolve API key (may trigger OAuth flow if needed)
+    # The deployed function stores the key, so it needs a real API key: a
+    # `parallel-cli login` session holds a short-lived OAuth credential instead.
     if not api_key:
-        api_key = get_api_key()
+        try:
+            api_key = get_api_key()
+        except ValueError:
+            raise click.UsageError(
+                "Deployment needs a Parallel API key. Pass --api-key or set PARALLEL_API_KEY; "
+                "a 'parallel-cli login' session does not provide one."
+            ) from None
 
     if system == "bigquery":
         assert project is not None  # Validated above

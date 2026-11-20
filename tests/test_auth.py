@@ -6,15 +6,20 @@ import os
 import urllib.error
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime, timezone
 from email.message import Message
+from typing import Any
 from unittest import mock
 
+import httpx
 import pytest
 
-from parallel_web_tools.core import credentials
+from parallel_web_tools.core import credentials, service
 from parallel_web_tools.core.auth import (
     ACCESS_TOKEN_SKEW_SECONDS,
+    AsyncOAuthParallel,
     DeviceCodeInfo,
+    OAuthParallel,
     ReauthenticationRequired,
     TokenResponse,
     _do_device_flow,
@@ -23,8 +28,11 @@ from parallel_web_tools.core.auth import (
     create_client,
     ensure_client_id,
     get_api_key,
+    get_async_client,
     get_auth_status,
+    get_client,
     get_control_api_access_token,
+    get_product_api_access_token,
     is_headless,
     login_flow,
     logout,
@@ -35,6 +43,7 @@ from parallel_web_tools.core.auth import (
     resolve_api_key,
     revoke_token,
 )
+from parallel_web_tools.core.service_types import CreateOAuthCredentialResponse
 
 # ---------------------------------------------------------------------------
 # Shared helpers / fixtures
@@ -167,6 +176,60 @@ _TOKEN_RESPONSE_DEFAULT = TokenResponse(
 def _token_response(**overrides) -> TokenResponse:
     """Build a TokenResponse with test defaults."""
     return replace(_TOKEN_RESPONSE_DEFAULT, **overrides)
+
+
+TOKEN_ENDPOINT = "https://platform.parallel.ai/getServiceKeys/token"
+
+
+def _created_credential(
+    refresh_token: str = "rt_product", audience: str = "https://api.parallel.ai"
+) -> CreateOAuthCredentialResponse:
+    """Build the service API's create-credential response with test defaults."""
+    return CreateOAuthCredentialResponse(
+        credential_id="cred_1",
+        client_id="cid_test",
+        app_id="app_cli",
+        app_name="parallel-cli Users",
+        created_by_user_id="user_1",
+        is_service_scoped=False,
+        audience=audience,
+        scopes=["*"],
+        token_endpoint=TOKEN_ENDPOINT,
+        refresh_token=refresh_token,
+        refresh_token_expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 11, 20, tzinfo=timezone.utc),
+    )
+
+
+def _save_oauth_org(
+    org_id: str = "org_a",
+    *,
+    access_token: str | None = None,
+    access_token_expires_at: int | None = None,
+    refresh_token: str = "rt_product",
+    audience: str = "https://api.parallel.ai",
+    control_refresh_token: str | None = None,
+) -> None:
+    """Store a selected org that holds a product API OAuth credential."""
+    credentials.save(
+        credentials.Credentials(
+            selected_org_id=org_id,
+            orgs={
+                org_id: credentials.OrgCredentials(
+                    control_api=credentials.ControlApiTokens(refresh_token=control_refresh_token),
+                    product_api=credentials.ProductApiTokens(
+                        credential_id="cred_1",
+                        audience=audience,
+                        token_endpoint=TOKEN_ENDPOINT,
+                        access_token=access_token,
+                        access_token_expires_at=access_token_expires_at,
+                        refresh_token=refresh_token,
+                        refresh_token_expires_at=4102444800,
+                    ),
+                )
+            },
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -511,29 +574,53 @@ class TestPersistTokenResponse:
 
 
 class TestLoginFlow:
-    def test_provisions_api_key_and_stores(self, creds_file, mock_ensure_client_id):
+    def test_creates_oauth_credential_and_stores(self, creds_file, mock_ensure_client_id):
         token_resp = _token_response(access_token="at_x", refresh_token="rt_x", org_id="org_real")
         with (
             mock.patch("parallel_web_tools.core.auth._do_device_flow", return_value=token_resp) as mock_flow,
             mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "cid_test-2026-04-21-1432"),
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(refresh_token="rt_product"),
             ) as mock_provision,
         ):
-            api_key = login_flow(login_hint="login=email,e=user@example.com")
+            login_flow(login_hint="login=email,e=user@example.com")
 
-        assert api_key == "sk_minted"
         # The registered client_id must be threaded into both the device flow
-        # and the data-API key provisioning call.
+        # and the credential creation call, which asks for the data API origin.
         assert mock_flow.call_args.kwargs.get("client_id") == mock_ensure_client_id
-        mock_provision.assert_called_once_with("at_x", client_id=mock_ensure_client_id)
+        mock_provision.assert_called_once_with(
+            "at_x", client_id=mock_ensure_client_id, audience="https://api.parallel.ai"
+        )
 
         creds = credentials.load()
         assert creds is not None
+        org = creds.orgs["org_real"]
         assert creds.selected_org_id == "org_real"
-        assert creds.orgs["org_real"].api_key == "sk_minted"
-        assert creds.orgs["org_real"].org_name == "Acme Org"
-        assert creds.orgs["org_real"].control_api.access_token == "at_x"
+        assert org.api_key is None
+        assert org.org_name == "Acme Org"
+        assert org.control_api.access_token == "at_x"
+        assert org.product_api.refresh_token == "rt_product"
+        assert org.product_api.token_endpoint == TOKEN_ENDPOINT
+        assert org.product_api.audience == "https://api.parallel.ai"
+        assert org.product_api.credential_id == "cred_1"
+        assert org.product_api.refresh_token_expires_at == 4070908800
+
+    def test_relogin_revokes_replaced_product_credential(self, creds_file, mock_ensure_client_id):
+        _save_oauth_org("org_real", refresh_token="rt_old")
+        with (
+            mock.patch("parallel_web_tools.core.auth._do_device_flow", return_value=_token_response(org_id="org_real")),
+            mock.patch(
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(refresh_token="rt_new"),
+            ),
+            mock.patch("parallel_web_tools.core.auth.revoke_token") as mock_revoke,
+        ):
+            login_flow(on_device_code=lambda info: None)
+
+        mock_revoke.assert_called_once_with("rt_old")
+        creds = credentials.load()
+        assert creds is not None
+        assert creds.orgs["org_real"].product_api.refresh_token == "rt_new"
 
     def test_removes_legacy_org_after_successful_login(self, creds_file, mock_ensure_client_id):
         # Seed credentials with a v0-style legacy entry, as if the user was upgraded
@@ -549,8 +636,8 @@ class TestLoginFlow:
         with (
             mock.patch("parallel_web_tools.core.auth._do_device_flow", return_value=token_resp),
             mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "name"),
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(),
             ),
         ):
             login_flow()
@@ -569,8 +656,8 @@ class TestLoginFlow:
             mock.patch("parallel_web_tools.core.auth.register_client", return_value="cid_fresh") as mock_reg,
             mock.patch("parallel_web_tools.core.auth._do_device_flow", return_value=token_resp) as mock_flow,
             mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "name"),
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(),
             ),
         ):
             login_flow()
@@ -589,8 +676,8 @@ class TestLoginFlow:
             mock.patch("parallel_web_tools.core.auth.register_client") as mock_reg,
             mock.patch("parallel_web_tools.core.auth._do_device_flow", return_value=token_resp) as mock_flow,
             mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "name"),
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(),
             ),
         ):
             login_flow()
@@ -610,101 +697,298 @@ class TestGetApiKey:
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
         assert get_api_key() == "env_key"
 
-    def test_env_var_short_circuits_service_api_mint(self, creds_file, monkeypatch):
-        # When the env var is set, control-API minting must NOT be triggered;
-        # the env var is authoritative and the mint path is unnecessary work.
-        monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
-        credentials.save(
-            credentials.Credentials(
-                selected_org_id="org_a",
-                orgs={"org_a": credentials.OrgCredentials()},
-            )
-        )
-
-        with (
-            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token") as mock_at,
-            mock.patch("parallel_web_tools.core.auth.service.provision_cli_api_key") as mock_provision,
-        ):
-            assert get_api_key() == "env_key"
-
-        mock_at.assert_not_called()
-        mock_provision.assert_not_called()
-
     def test_stored_only_without_env(self, creds_file, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
         credentials.set_api_key_for_org("org_a", "stored_key")
         assert get_api_key() == "stored_key"
 
-    def test_force_login_runs_login_flow(self, creds_file, monkeypatch):
-        monkeypatch.setenv("PARALLEL_API_KEY", "env_key")  # should still be ignored with force_login
-        with mock.patch("parallel_web_tools.core.auth.login_flow", return_value="minted_key") as mock_flow:
-            result = get_api_key(force_login=True, login_hint="login=google")
-        assert result == "minted_key"
-        assert mock_flow.call_args.kwargs.get("login_hint") == "login=google"
-
-    def test_provisions_via_service_api_when_stored_api_key_missing(self, creds_file, monkeypatch):
+    def test_oauth_login_does_not_provide_a_raw_key(self, creds_file, monkeypatch):
+        # Integrations send x-api-key; an OAuth credential can't satisfy them,
+        # and asking for a key must not create one or touch the network.
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
-        credentials.save(
-            credentials.Credentials(
-                selected_org_id="org_a",
-                orgs={"org_a": credentials.OrgCredentials()},
-            )
-        )
-
+        _save_oauth_org()
         with (
-            mock.patch(
-                "parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_existing"
-            ) as mock_at,
-            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_existing") as mock_client_id,
-            mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "cid_existing-2026-04-23-1212"),
-            ) as mock_provision,
+            mock.patch("parallel_web_tools.core.auth.service.provision_cli_oauth_credential") as mock_provision,
             mock.patch("parallel_web_tools.core.auth.login_flow") as mock_login,
         ):
-            assert get_api_key() == "sk_minted"
-
-        mock_at.assert_called_once_with()
-        mock_client_id.assert_called_once_with()
-        mock_provision.assert_called_once_with("at_existing", client_id="cid_existing")
+            with pytest.raises(ValueError, match="does not provide an API key"):
+                get_api_key()
+        mock_provision.assert_not_called()
         mock_login.assert_not_called()
 
-        creds = credentials.load()
-        assert creds is not None
-        assert creds.orgs["org_a"].api_key == "sk_minted"
-
-    def test_falls_back_to_login_when_control_api_requires_reauth(self, creds_file, monkeypatch):
-        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
-        with (
-            mock.patch(
-                "parallel_web_tools.core.auth.get_control_api_access_token",
-                side_effect=ReauthenticationRequired("not logged in; run 'parallel-cli login'"),
-            ),
-            mock.patch("parallel_web_tools.core.auth.login_flow", return_value="sk_from_login") as mock_login,
-        ):
-            assert get_api_key(login_hint="user@example.com") == "sk_from_login"
-
-        assert mock_login.call_args.kwargs.get("login_hint") == "user@example.com"
-
-    def test_env_var_returned_without_touching_control_api(self, creds_file, monkeypatch):
-        # With the new env-first priority, control-API state is irrelevant
-        # when PARALLEL_API_KEY is set: no reauth check, no login flow.
+    def test_login_arguments_are_deprecated_and_do_not_log_in(self, creds_file, monkeypatch):
         monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
-        credentials.save(
-            credentials.Credentials(
-                selected_org_id="org_a",
-                orgs={"org_a": credentials.OrgCredentials()},
-            )
-        )
+        with mock.patch("parallel_web_tools.core.auth.login_flow") as mock_flow:
+            with pytest.warns(DeprecationWarning, match="no longer logs in"):
+                result = get_api_key(force_login=True, login_hint="login=google")
+        assert result == "env_key"
+        mock_flow.assert_not_called()
 
+
+# ---------------------------------------------------------------------------
+# Product API OAuth credential
+# ---------------------------------------------------------------------------
+
+
+class TestClientAuthSelection:
+    def test_env_var_short_circuits_credential_creation(self, creds_file, monkeypatch):
+        monkeypatch.setenv("PARALLEL_API_KEY", "env_key")
+        credentials.save(credentials.Credentials(selected_org_id="org_a", orgs={"org_a": credentials.OrgCredentials()}))
         with (
             mock.patch("parallel_web_tools.core.auth.get_control_api_access_token") as mock_at,
             mock.patch("parallel_web_tools.core.auth.login_flow") as mock_login,
         ):
-            assert get_api_key() == "env_key"
-
+            client = get_client()
+        assert type(client) is not OAuthParallel
+        assert client.api_key == "env_key"
         mock_at.assert_not_called()
         mock_login.assert_not_called()
+
+    def test_stored_credential_builds_oauth_client_on_its_audience(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        monkeypatch.delenv("PARALLEL_API_URL", raising=False)
+        _save_oauth_org(audience="https://api-aws.parallel.ai")
+        client = create_client(source="cli")
+        assert isinstance(client, OAuthParallel)
+        assert str(client.base_url).rstrip("/") == "https://api-aws.parallel.ai"
+        assert "x-api-key" not in client.default_headers
+
+    def test_parallel_api_url_overrides_audience(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        monkeypatch.setenv("PARALLEL_API_URL", "http://localhost:9000")
+        _save_oauth_org(audience="https://api-aws.parallel.ai")
+        client = create_client()
+        assert str(client.base_url).rstrip("/") == "http://localhost:9000"
+
+    def test_async_client_uses_oauth(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        _save_oauth_org()
+        assert isinstance(get_async_client(), AsyncOAuthParallel)
+
+    def test_migrates_stored_api_key_when_control_tokens_are_valid(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        credentials.set_api_key_for_org("org_a", "sk_old")
+        with (
+            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_ctrl"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_x"),
+            mock.patch(
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(refresh_token="rt_migrated"),
+            ) as mock_provision,
+        ):
+            client = create_client()
+
+        assert isinstance(client, OAuthParallel)
+        mock_provision.assert_called_once_with("at_ctrl", client_id="cid_x", audience="https://api.parallel.ai")
+        creds = credentials.load()
+        assert creds is not None
+        assert creds.orgs["org_a"].api_key is None
+        assert creds.orgs["org_a"].product_api.refresh_token == "rt_migrated"
+
+    def test_keeps_stored_api_key_when_migration_fails(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        credentials.set_api_key_for_org("org_a", "sk_old")
+        with mock.patch(
+            "parallel_web_tools.core.auth.get_control_api_access_token",
+            side_effect=ReauthenticationRequired("no control tokens"),
+        ):
+            client = create_client()
+        assert type(client) is not OAuthParallel
+        assert client.api_key == "sk_old"
+
+    def test_creation_failure_falls_back_to_stored_key_with_warning(self, creds_file, monkeypatch, caplog):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        credentials.set_api_key_for_org("org_a", "sk_old")
+        with (
+            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_ctrl"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_x"),
+            mock.patch(
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                side_effect=service.ServiceApiError("POST failed: 422"),
+            ),
+            caplog.at_level("WARNING", logger="parallel_web_tools.core.auth"),
+        ):
+            client = create_client()
+        assert client.api_key == "sk_old"
+        assert "422" in caplog.text
+
+    def test_creation_failure_without_stored_key_raises_instead_of_login(self, creds_file, monkeypatch):
+        # A device flow would hit the same failure after the user approves it.
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        credentials.save(credentials.Credentials(selected_org_id="org_a", orgs={"org_a": credentials.OrgCredentials()}))
+        with (
+            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_ctrl"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_x"),
+            mock.patch(
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                side_effect=service.ServiceApiError("No app named 'parallel-cli Users'"),
+            ),
+            mock.patch("parallel_web_tools.core.auth.login_flow") as mock_login,
+        ):
+            with pytest.raises(service.ServiceApiError, match="No app named"):
+                get_client()
+        mock_login.assert_not_called()
+
+    def test_get_client_falls_back_to_login_when_nothing_stored(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+
+        def fake_login(**kwargs):
+            _save_oauth_org()
+
+        with mock.patch("parallel_web_tools.core.auth.login_flow", side_effect=fake_login) as mock_login:
+            client = get_client()
+        mock_login.assert_called_once()
+        assert isinstance(client, OAuthParallel)
+
+    def test_create_client_never_logs_in(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        with mock.patch("parallel_web_tools.core.auth.login_flow") as mock_login:
+            with pytest.raises(ValueError, match="Parallel credentials required"):
+                create_client()
+        mock_login.assert_not_called()
+
+
+class TestGetProductApiAccessToken:
+    def test_returns_fresh_access_token_without_refresh(self, creds_file):
+        _save_oauth_org(access_token="pat_live", access_token_expires_at=4102444800)
+        with mock.patch("parallel_web_tools.core.auth.urllib.request.urlopen") as mock_urlopen:
+            assert get_product_api_access_token() == "pat_live"
+        mock_urlopen.assert_not_called()
+
+    def test_refreshes_and_persists_rotated_refresh_token(self, creds_file):
+        _save_oauth_org(refresh_token="rt_1")
+        captured: dict = {}
+        refreshed = {
+            "access_token": "pat_new",
+            "token_type": "Bearer",
+            "expires_in": 600,
+            "scope": "*",
+            "org_id": "org_a",
+            "org_name": "Acme",
+            "refresh_token": "rt_2",
+            "refresh_token_expires_in": 2592000,
+        }
+        with _patch_auth_urlopen(refreshed, capture=captured):
+            assert get_product_api_access_token() == "pat_new"
+
+        assert captured["url"] == TOKEN_ENDPOINT
+        assert "grant_type=refresh_token" in captured["body"]
+        assert "refresh_token=rt_1" in captured["body"]
+        creds = credentials.load()
+        assert creds is not None
+        product = creds.orgs["org_a"].product_api
+        assert product.refresh_token == "rt_2"
+        assert product.access_token == "pat_new"
+        assert product.access_token_expires_at is not None
+
+    def test_refreshes_when_access_token_is_within_skew(self, creds_file):
+        import time as _time
+
+        _save_oauth_org(
+            access_token="pat_old", access_token_expires_at=int(_time.time()) + ACCESS_TOKEN_SKEW_SECONDS - 1
+        )
+        refreshed = {"access_token": "pat_new", "expires_in": 600, "org_id": "org_a", "refresh_token": "rt_2"}
+        with _patch_auth_urlopen(refreshed):
+            assert get_product_api_access_token() == "pat_new"
+
+    def test_rejected_refresh_creates_new_credential_from_control_tokens(self, creds_file):
+        _save_oauth_org(refresh_token="rt_revoked")
+        refreshed = {"access_token": "pat_new", "expires_in": 600, "org_id": "org_a", "refresh_token": "rt_3"}
+        with (
+            _patch_auth_urlopen([_http_error(401, {"error": "invalid_grant"}), refreshed]),
+            mock.patch("parallel_web_tools.core.auth.get_control_api_access_token", return_value="at_ctrl"),
+            mock.patch("parallel_web_tools.core.auth.ensure_client_id", return_value="cid_x"),
+            mock.patch(
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(refresh_token="rt_fresh"),
+            ) as mock_provision,
+        ):
+            assert get_product_api_access_token() == "pat_new"
+        mock_provision.assert_called_once()
+        creds = credentials.load()
+        assert creds is not None
+        assert creds.orgs["org_a"].product_api.refresh_token == "rt_3"
+
+    def test_rejected_refresh_without_control_tokens_requires_login(self, creds_file):
+        _save_oauth_org(refresh_token="rt_revoked")
+        with (
+            _patch_auth_urlopen(_http_error(400, {"error": "invalid_grant"})),
+            mock.patch(
+                "parallel_web_tools.core.auth.get_control_api_access_token",
+                side_effect=ReauthenticationRequired("expired"),
+            ),
+        ):
+            with pytest.raises(ReauthenticationRequired, match="no longer valid"):
+                get_product_api_access_token()
+        creds = credentials.load()
+        assert creds is not None
+        assert creds.orgs["org_a"].product_api.refresh_token is None
+
+    def test_non_invalid_grant_4xx_keeps_credential(self, creds_file):
+        # A 403/429 from a firewall or rate limit says nothing about the token.
+        _save_oauth_org(refresh_token="rt_keep")
+        with _patch_auth_urlopen(_http_error(403, {"error": "invalid_request"})):
+            with pytest.raises(Exception, match="Token refresh failed: 403"):
+                get_product_api_access_token()
+        creds = credentials.load()
+        assert creds is not None
+        assert creds.orgs["org_a"].product_api.refresh_token == "rt_keep"
+
+    def test_server_error_keeps_credential(self, creds_file):
+        _save_oauth_org(refresh_token="rt_keep")
+        with _patch_auth_urlopen(_http_error(503, {"error": "unavailable"})):
+            with pytest.raises(Exception, match="Token refresh failed: 503"):
+                get_product_api_access_token()
+        creds = credentials.load()
+        assert creds is not None
+        assert creds.orgs["org_a"].product_api.refresh_token == "rt_keep"
+
+    def test_no_credential_requires_login(self, creds_file):
+        with pytest.raises(ReauthenticationRequired):
+            get_product_api_access_token()
+
+
+class TestOAuthParallelRequests:
+    @pytest.fixture
+    def sent(self, monkeypatch) -> list[httpx.Request]:
+        """Capture requests at httpx's send layer instead of the network."""
+        seen: list[httpx.Request] = []
+
+        def fake_send(self, request, **kwargs):
+            seen.append(request)
+            return httpx.Response(200, json={"ok": True}, request=request)
+
+        async def fake_async_send(self, request, **kwargs):
+            seen.append(request)
+            return httpx.Response(200, json={"ok": True}, request=request)
+
+        monkeypatch.setattr(httpx.Client, "send", fake_send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", fake_async_send)
+        return seen
+
+    def test_sends_bearer_token_and_no_api_key(self, creds_file, sent):
+        _save_oauth_org(access_token="pat_live", access_token_expires_at=4102444800)
+        OAuthParallel(base_url="https://api.parallel.ai").post("/v1beta/tasks/suggest", cast_to=dict[str, Any], body={})
+        assert sent[0].headers["Authorization"] == "Bearer pat_live"
+        assert "x-api-key" not in sent[0].headers
+
+    def test_reauth_error_reaches_caller_unwrapped(self, creds_file, sent):
+        client = OAuthParallel(base_url="https://api.parallel.ai")
+        with pytest.raises(ReauthenticationRequired):
+            client.post("/v1beta/tasks/suggest", cast_to=dict[str, Any], body={})
+        assert sent == []
+
+    def test_async_client_sends_bearer_token(self, creds_file, sent):
+        import asyncio
+
+        _save_oauth_org(access_token="pat_async", access_token_expires_at=4102444800)
+
+        async def run():
+            client = AsyncOAuthParallel(base_url="https://api.parallel.ai")
+            await client.post("/v1beta/tasks/suggest", cast_to=dict[str, Any], body={})
+
+        asyncio.run(run())
+        assert sent[0].headers["Authorization"] == "Bearer pat_async"
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +1035,15 @@ class TestAuthStatus:
         assert status["token_file"] == str(creds_file)
         assert creds_file.exists()
 
+    def test_status_with_oauth_credential(self, creds_file, monkeypatch):
+        monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
+        _save_oauth_org(control_refresh_token="rt_ctrl")
+        status = get_auth_status()
+        assert status["authenticated"] is True
+        assert status["method"] == "oauth"
+        assert status["stored_credential_type"] == "oauth_credential"
+        assert status["has_control_api_tokens"] is True
+
     def test_status_not_authenticated(self, creds_file, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
         status = get_auth_status()
@@ -778,8 +1071,8 @@ class TestLogout:
         with (
             mock.patch("parallel_web_tools.core.auth._do_device_flow", return_value=token_resp),
             mock.patch(
-                "parallel_web_tools.core.auth.service.provision_cli_api_key",
-                return_value=("sk_minted", "cid_test-2026-04-21-1432"),
+                "parallel_web_tools.core.auth.service.provision_cli_oauth_credential",
+                return_value=_created_credential(),
             ),
         ):
             login_flow()
@@ -871,6 +1164,14 @@ class TestLogout:
             assert logout() is True
             assert not creds_file.exists()
 
+    def test_logout_revokes_product_credential(self, creds_file):
+        _save_oauth_org(refresh_token="rt_product", control_refresh_token="rt_ctrl")
+        with mock.patch("parallel_web_tools.core.auth.revoke_token") as mock_revoke:
+            assert logout() is True
+        assert mock_revoke.call_count == 2
+        mock_revoke.assert_any_call("rt_ctrl")
+        mock_revoke.assert_any_call("rt_product")
+
     def test_logout_no_token(self, creds_file):
         assert logout() is False
 
@@ -897,7 +1198,7 @@ class TestCreateClient:
 
     def test_raises_without_key(self, creds_file, monkeypatch):
         monkeypatch.delenv("PARALLEL_API_KEY", raising=False)
-        with pytest.raises(ValueError, match="Parallel API key required"):
+        with pytest.raises(ValueError, match="Parallel credentials required"):
             create_client()
 
     def test_passes_default_base_url(self):
