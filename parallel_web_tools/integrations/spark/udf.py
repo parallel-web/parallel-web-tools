@@ -182,8 +182,8 @@ def register_parallel_udfs(
 
     Args:
         spark: The SparkSession to register UDFs with.
-        api_key: Parallel API key. Uses PARALLEL_API_KEY env var if not provided,
-            or stored OAuth credentials from 'parallel-cli login'.
+        api_key: Parallel API key. Uses PARALLEL_API_KEY env var if not provided.
+            A 'parallel-cli login' session does not provide an API key.
         processor: Parallel processor to use. Default is 'lite-fast'.
             Options: lite, lite-fast, base, base-fast, core, core-fast,
             pro, pro-fast, ultra, ultra-fast, etc.

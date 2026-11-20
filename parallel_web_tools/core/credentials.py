@@ -7,9 +7,13 @@ with older CLI releases.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import sys
 import tempfile
+import threading
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -32,10 +36,28 @@ class ControlApiTokens:
 
 
 @dataclass
+class ProductApiTokens:
+    """OAuth credential for the product (data) API, created by the service API.
+
+    The refresh token is single-use: each exchange at ``token_endpoint``
+    returns a new one, which must replace this one.
+    """
+
+    credential_id: str | None = None
+    audience: str | None = None
+    token_endpoint: str | None = None
+    access_token: str | None = None
+    access_token_expires_at: int | None = None
+    refresh_token: str | None = None
+    refresh_token_expires_at: int | None = None
+
+
+@dataclass
 class OrgCredentials:
     api_key: str | None = None
     org_name: str | None = None
     control_api: ControlApiTokens = field(default_factory=ControlApiTokens)
+    product_api: ProductApiTokens = field(default_factory=ProductApiTokens)
 
 
 @dataclass
@@ -78,6 +100,7 @@ def _credentials_from_dict(data: dict) -> Credentials:
     orgs: dict[str, OrgCredentials] = {}
     for org_id, org_data in orgs_raw.items():
         control_raw = (org_data or {}).get("control_api") or {}
+        product_raw = (org_data or {}).get("product_api") or {}
         orgs[org_id] = OrgCredentials(
             api_key=(org_data or {}).get("api_key"),
             org_name=(org_data or {}).get("org_name"),
@@ -88,6 +111,15 @@ def _credentials_from_dict(data: dict) -> Credentials:
                 refresh_token=control_raw.get("refresh_token"),
                 refresh_token_expires_at=control_raw.get("refresh_token_expires_at"),
                 authorization_expires_at=control_raw.get("authorization_expires_at"),
+            ),
+            product_api=ProductApiTokens(
+                credential_id=product_raw.get("credential_id"),
+                audience=product_raw.get("audience"),
+                token_endpoint=product_raw.get("token_endpoint"),
+                access_token=product_raw.get("access_token"),
+                access_token_expires_at=product_raw.get("access_token_expires_at"),
+                refresh_token=product_raw.get("refresh_token"),
+                refresh_token_expires_at=product_raw.get("refresh_token_expires_at"),
             ),
         )
     return Credentials(
@@ -167,6 +199,58 @@ def save(creds: Credentials) -> None:
     """Write structured auth atomically to ``auth.json``."""
     payload = asdict(creds)
     _write_json_file(CREDENTIALS_FILE, payload, ".auth.")
+
+
+# Lock depth per thread, so a holder can call helpers that take the lock again.
+# ``flock`` itself is not re-entrant across separate ``open()`` calls.
+_lock_state = threading.local()
+
+
+@contextlib.contextmanager
+def lock() -> Iterator[None]:
+    """Hold an exclusive, cross-process lock on the auth file until exit.
+
+    Every load-change-save of a rotating refresh token must hold it, so two
+    CLI processes (or threads) neither spend the same single-use token nor
+    overwrite each other's rotated token. Callers re-``load()`` inside the
+    lock, because another holder may have changed the file while they waited.
+    Re-entrant within one thread.
+    """
+    depth = getattr(_lock_state, "depth", 0)
+    if depth:
+        _lock_state.depth = depth + 1
+        try:
+            yield
+        finally:
+            _lock_state.depth = depth
+        return
+
+    lock_file = CREDENTIALS_FILE.with_name(".auth.lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_file, "a+") as f:
+        if sys.platform == "win32":
+            import msvcrt
+
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _lock_state.depth = 1
+        try:
+            yield
+        finally:
+            _lock_state.depth = 0
+            if sys.platform == "win32":
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def delete() -> bool:

@@ -617,23 +617,17 @@ class TestEnrichSuggestCommand:
             "warnings": [],
         }
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch("httpx.Client") as mock_client_class:
-                mock_client = mock.MagicMock()
-                mock_response_obj = mock.MagicMock()
-                mock_response_obj.json.return_value = mock_response
-                mock_response_obj.raise_for_status = mock.MagicMock()
-                mock_client.post.return_value = mock_response_obj
-                mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
-                mock_client.__exit__ = mock.MagicMock(return_value=False)
-                mock_client_class.return_value = mock_client
+        client = mock.MagicMock()
+        client.post.side_effect = lambda path, **kwargs: (
+            mock_response if path == "/v1beta/tasks/suggest" else {"recommended_processors": ["core"]}
+        )
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=client):
+            result = runner.invoke(main, ["enrich", "suggest", "Find CEO and revenue", "--json"])
 
-                result = runner.invoke(main, ["enrich", "suggest", "Find CEO and revenue", "--json"])
-
-                assert result.exit_code == 0
-                output = json.loads(result.output)
-                assert "enriched_columns" in output
-                assert "processor" in output
+        assert result.exit_code == 0
+        output = json.loads(result.output)
+        assert "enriched_columns" in output
+        assert output["processor"] == "core"
 
 
 class TestEnrichDeployCommand:
@@ -653,66 +647,72 @@ class TestEnrichDeployCommand:
         assert result.exit_code != 0
         assert "project" in result.output.lower()
 
+    def test_enrich_deploy_without_api_key_is_a_usage_error(self, runner):
+        """An OAuth login has no API key to store in the deployed function."""
+        with mock.patch(
+            "parallel_web_tools.core.auth.get_api_key", side_effect=ValueError("Parallel API key required.")
+        ):
+            result = runner.invoke(main, ["enrich", "deploy", "--system", "bigquery", "--project", "p"])
+        assert result.exit_code == 2
+        assert "--api-key" in result.output
+
 
 class TestSuggestFromIntent:
     """Tests for suggest_from_intent helper function."""
 
+    @staticmethod
+    def _client(suggest: dict, processor: dict | Exception) -> mock.MagicMock:
+        """A Parallel client stub that answers both suggest endpoints."""
+
+        def post(path, **kwargs):
+            if path == "/v1beta/tasks/suggest":
+                return suggest
+            if isinstance(processor, Exception):
+                raise processor
+            return processor
+
+        client = mock.MagicMock()
+        client.post.side_effect = post
+        return client
+
     def test_suggest_from_intent_basic(self):
-        """Should call Parallel API and parse response."""
-        mock_response = {
-            "output_schema": {
-                "properties": {
-                    "ceo": {"type": "string", "description": "CEO name"},
-                }
-            },
+        """Should call Parallel API through the SDK client and parse the response."""
+        suggest = {
+            "output_schema": {"properties": {"ceo": {"type": "string", "description": "CEO name"}}},
             "title": "Find CEO",
             "warnings": [],
         }
+        client = self._client(suggest, {"recommended_processors": ["pro"]})
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch("httpx.Client") as mock_client_class:
-                mock_client = mock.MagicMock()
-                mock_response_obj = mock.MagicMock()
-                mock_response_obj.json.return_value = mock_response
-                mock_response_obj.raise_for_status = mock.MagicMock()
-                mock_client.post.return_value = mock_response_obj
-                mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
-                mock_client.__exit__ = mock.MagicMock(return_value=False)
-                mock_client_class.return_value = mock_client
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=client) as mock_get_client:
+            result = suggest_from_intent("Find the CEO")
 
-                result = suggest_from_intent("Find the CEO")
-
-                assert "enriched_columns" in result
-                assert len(result["enriched_columns"]) == 1
-                assert result["enriched_columns"][0]["name"] == "ceo"
+        mock_get_client.assert_called_once_with(source="cli")
+        assert result["enriched_columns"] == [{"name": "ceo", "description": "CEO name", "type": "str"}]
+        assert result["processor"] == "pro"
+        assert result["title"] == "Find CEO"
 
     def test_suggest_from_intent_with_source_columns(self):
         """Should include source columns context in intent."""
-        mock_response = {
-            "output_schema": {"properties": {"ceo": {"type": "string", "description": "CEO"}}},
-            "title": "",
-            "warnings": [],
-        }
+        suggest = {"output_schema": {"properties": {"ceo": {"type": "string", "description": "CEO"}}}}
+        client = self._client(suggest, {"recommended_processors": []})
 
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="test-key"):
-            with mock.patch("parallel_web_tools.cli.commands.httpx.Client") as mock_client_class:
-                mock_client = mock.MagicMock()
-                mock_response_obj = mock.MagicMock()
-                mock_response_obj.json.return_value = mock_response
-                mock_response_obj.raise_for_status = mock.MagicMock()
-                mock_client.post.return_value = mock_response_obj
-                mock_client.__enter__ = mock.MagicMock(return_value=mock_client)
-                mock_client.__exit__ = mock.MagicMock(return_value=False)
-                mock_client_class.return_value = mock_client
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=client):
+            source_cols = [{"name": "company", "description": "Company name"}]
+            result = suggest_from_intent("Find CEO", source_cols)
 
-                source_cols = [{"name": "company", "description": "Company name"}]
-                result = suggest_from_intent("Find CEO", source_cols)
+        assert "enriched_columns" in result
+        first_call = client.post.call_args_list[0]
+        assert "- company: Company name" in first_call.kwargs["body"]["user_intent"]
 
-                # Verify that the function returned valid results
-                assert "enriched_columns" in result
+    def test_processor_suggestion_failure_uses_default(self):
+        suggest = {"output_schema": {"properties": {}}}
+        client = self._client(suggest, RuntimeError("boom"))
 
-                # Verify the call was made
-                assert mock_client.post.called
+        with mock.patch("parallel_web_tools.core.auth.get_client", return_value=client):
+            result = suggest_from_intent("Find CEO")
+
+        assert result["processor"] == "core-fast"
 
 
 class TestCLIExtrasAndStandaloneMode:
@@ -1943,8 +1943,8 @@ class TestExitCodes:
 
     def test_login_failure_exit_code(self, runner):
         """Login failure should exit with EXIT_AUTH_ERROR."""
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key") as mock_key:
-            mock_key.side_effect = Exception("auth failed")
+        with mock.patch("parallel_web_tools.cli.commands.login_flow") as mock_login:
+            mock_login.side_effect = Exception("auth failed")
             result = runner.invoke(main, ["login"])
 
         assert result.exit_code == EXIT_AUTH_ERROR
@@ -2713,13 +2713,12 @@ class TestCompletion:
 
 class TestLoginCommand:
     def test_runs_device_oauth_login(self, runner):
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", return_value="sk_fake") as mock_key:
+        with mock.patch("parallel_web_tools.cli.commands.login_flow") as mock_login:
             result = runner.invoke(main, ["login"])
 
         assert result.exit_code == 0
-        assert mock_key.call_count == 1
-        assert mock_key.call_args.kwargs["force_login"] is True
-        assert callable(mock_key.call_args.kwargs["on_device_code"])
+        assert mock_login.call_count == 1
+        assert callable(mock_login.call_args.kwargs["on_device_code"])
 
     def test_login_json_emits_device_events(self, runner):
         from parallel_web_tools.core.auth import DeviceCodeInfo
@@ -2733,13 +2732,11 @@ class TestLoginCommand:
             interval=5,
         )
 
-        def fake_get_api_key(*_, **kwargs):
-            cb = kwargs["on_device_code"]
-            cb(info)
-            return "sk_fake"
+        def fake_login_flow(*_, **kwargs):
+            kwargs["on_device_code"](info)
 
         with (
-            mock.patch("parallel_web_tools.cli.commands.get_api_key", side_effect=fake_get_api_key),
+            mock.patch("parallel_web_tools.cli.commands.login_flow", side_effect=fake_login_flow),
             mock.patch("parallel_web_tools.core.auth.is_headless", return_value=True),
         ):
             result = runner.invoke(main, ["login", "--json"])
@@ -2754,7 +2751,7 @@ class TestLoginCommand:
         assert events[3]["event"] == "auth_success"
 
     def test_login_json_errors_are_machine_readable(self, runner):
-        with mock.patch("parallel_web_tools.cli.commands.get_api_key", side_effect=Exception("auth failed")):
+        with mock.patch("parallel_web_tools.cli.commands.login_flow", side_effect=Exception("auth failed")):
             result = runner.invoke(main, ["login", "--json"])
 
         assert result.exit_code == EXIT_AUTH_ERROR
@@ -2763,6 +2760,15 @@ class TestLoginCommand:
         assert events[0]["event"] == "auth_start"
         assert events[1]["event"] == "auth_error"
         assert "auth failed" in events[1]["error"]["message"]
+
+    def test_reauthentication_from_a_data_command_exits_with_auth_code(self, runner):
+        from parallel_web_tools.core.auth import ReauthenticationRequired
+
+        with mock.patch(
+            "parallel_web_tools.core.auth.get_client", side_effect=ReauthenticationRequired("run 'parallel-cli login'")
+        ):
+            result = runner.invoke(main, ["search", "anything", "--json"])
+        assert result.exit_code == EXIT_AUTH_ERROR
 
     def test_subcommands_are_removed(self, runner):
         result = runner.invoke(main, ["login", "google"])
