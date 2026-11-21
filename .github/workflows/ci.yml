@@ -90,22 +90,10 @@ jobs:
       - name: Install package with CLI
         run: uv sync --all-extras
 
-      - name: Test CLI help commands
-        run: |
-          uv run parallel-cli --help
-          uv run parallel-cli auth --help
-          uv run parallel-cli search --help
-          uv run parallel-cli extract --help
-          uv run parallel-cli enrich --help
-          uv run parallel-cli enrich run --help
-          uv run parallel-cli enrich plan --help
-          uv run parallel-cli enrich suggest --help
-          uv run parallel-cli enrich deploy --help
-
       - name: Test CLI version
         run: uv run parallel-cli --version
 
-      - name: Smoke-test CLI extract over loopback HTTP
+      - name: Smoke-test CLI help, Search and Extract
         run: uv run --locked python scripts/cli_smoke.py
 
       - name: Test Python imports
