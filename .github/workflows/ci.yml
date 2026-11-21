@@ -105,6 +105,9 @@ jobs:
       - name: Test CLI version
         run: uv run parallel-cli --version
 
+      - name: Smoke-test CLI extract over loopback HTTP
+        run: uv run --locked python scripts/cli_smoke.py
+
       - name: Test Python imports
         run: |
           uv run python -c "from parallel_web_tools import run_enrichment, get_api_key, enrich_batch"

@@ -534,6 +534,28 @@ uv sync --all-extras
 uv run pytest tests/ -v
 ```
 
+### CLI smoke test
+
+Run the installed CLI from your checkout against a local HTTP fixture:
+
+```bash
+uv run --locked python scripts/cli_smoke.py
+```
+
+This is the same credential-free smoke test run in CI. It verifies that
+`parallel-cli extract` sends an authenticated request and returns valid JSON.
+
+To check the hosted API, inject a dedicated test account's `PARALLEL_API_KEY`
+into the environment, then run:
+
+```bash
+uv run --locked python scripts/cli_smoke.py --live
+```
+
+The live test extracts one public page and may bill API usage. It uses
+`https://api.parallel.ai` by default; set `PARALLEL_API_URL` if your test key
+belongs to another environment. Neither mode uses saved CLI credentials.
+
 ## License
 
 MIT
