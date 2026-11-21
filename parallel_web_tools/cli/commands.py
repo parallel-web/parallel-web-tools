@@ -63,6 +63,7 @@ from parallel_web_tools.core import (
     update_monitor,
     validate_memory_scope_key,
 )
+from parallel_web_tools.core.endpoints import get_api_url
 
 # Standalone CLI (PyInstaller) has limited features to reduce bundle size
 # YAML config and interactive planner require: pip install parallel-web-tools[cli]
@@ -433,7 +434,7 @@ def suggest_from_intent(
 ) -> dict[str, Any]:
     """Use Parallel Ingest API to suggest output columns and processor."""
     api_key = get_api_key()
-    base_url = "https://api.parallel.ai"
+    base_url = get_api_url()
     headers = {
         "x-api-key": api_key,
         "Content-Type": "application/json",
