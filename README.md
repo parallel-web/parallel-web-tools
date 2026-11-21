@@ -534,6 +534,42 @@ uv sync --all-extras
 uv run pytest tests/ -v
 ```
 
+### CLI smoke test
+
+After installing the development dependencies above, run the installed CLI from
+your checkout:
+
+```bash
+uv run --locked python scripts/cli_smoke.py
+```
+
+CI runs this without credentials. The installed CLI sends requests to a fake
+loopback API, which checks the routes, authentication, and request data. The
+runner checks command output and covers API-backed commands, including login,
+balance, and Research. Commands that do not use the API in the installed
+Python CLI get help checks. Delete and deploy commands are not exercised,
+including memory eviction and clearing, and irreversible monitor cancellation
+(the replacement for monitor delete).
+
+Use `--case 'research poll'` to rerun one offline behavior check.
+
+To check the hosted API, inject a dedicated test account's `PARALLEL_API_KEY`
+into the environment, then run:
+
+```bash
+uv run --locked python scripts/cli_smoke.py --live
+```
+
+The live test runs one Search, one Extract of a public page, and one Research
+task on the lowest-cost `lite` processor. It checks Research status and waits
+up to two minutes for a result. These calls can incur usage charges. The live
+test does not top up balances, delete data, or deploy resources.
+
+The default endpoint is `https://api.parallel.ai`; set `PARALLEL_API_URL` if
+your key belongs to another test environment. Neither mode uses your saved CLI
+credentials. For other live checks, verify the affected command separately
+with disposable resources in an isolated test environment.
+
 ## License
 
 MIT
