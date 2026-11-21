@@ -61,10 +61,10 @@ jobs:
         run: uv sync --all-extras
 
       - name: Lint with ruff
-        run: uv run ruff check parallel_web_tools/ tests/
+        run: uv run ruff check parallel_web_tools/ tests/ scripts/cli_smoke*.py
 
       - name: Check formatting with ruff
-        run: uv run ruff format --check parallel_web_tools/ tests/
+        run: uv run ruff format --check parallel_web_tools/ tests/ scripts/cli_smoke*.py
 
       - name: Architecture check with tach
         run: uv run tach check
@@ -93,7 +93,7 @@ jobs:
       - name: Test CLI version
         run: uv run parallel-cli --version
 
-      - name: Smoke-test CLI help, Search and Extract
+      - name: Test CLI command behavior against a loopback API
         run: uv run --locked python scripts/cli_smoke.py
 
       - name: Test Python imports
