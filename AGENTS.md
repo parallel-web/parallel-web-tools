@@ -2,6 +2,8 @@
 
 Guidance for coding agents working in this repository.
 
+For end-to-end verification of parallel-cli changes, use [.agents/skills/cli-e2e-smoke/SKILL.md](.agents/skills/cli-e2e-smoke/SKILL.md).
+
 ## Recommended iteration cycle after code changes
 
 Run commands from the repository root.
