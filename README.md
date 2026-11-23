@@ -560,15 +560,34 @@ into the environment, then run:
 uv run --locked python scripts/cli_smoke.py --live
 ```
 
-The live test runs one Search, one Extract of a public page, and one Research
-task on the lowest-cost `lite` processor. It checks Research status and waits
-up to two minutes for a result. These calls can incur usage charges. The live
-test does not top up balances, delete data, or deploy resources.
+The live dev-loop suite covers web search/extract/fetch, Research processors and
+run/status/poll, Enrich suggest/plan and a one-row lite run/status/poll, FindAll
+ingest/entity-search and a base-generator five-match run/status/poll/result/schema,
+read-only Monitor and Memory queries, Skills list/install, auth status, and shell
+completion. HOME, config, and skill installation paths are isolated in a temporary
+directory. Config view/get is standalone-only; balance get requires an OAuth grant
+and is skipped with API-key-only authentication. No login, top-ups, destructive
+commands, deployment, or persistent monitor mutations are performed.
+
+Use `--live --case enrich` (repeatable) to select live cases: `web`, `research`,
+`enrich`, `findall`, `monitor`, `memory`, `skills`, `local`. Dependent commands share
+a newly created run within each case. Polls wait at most two minutes per run;
+calls can incur usage charges. Unavailable endpoints (403/404) and absent monitors
+are explicitly reported as skips, not successful checks. Live coverage and exclusion
+reasons are classified in `scripts/cli_smoke_live.py` and checked against registered
+commands. This suite is manual only, not a CI/nightly/release check.
+
+Each live case declares its cost tier and exercised source paths. Default `--live`
+runs cheap cases (lite processors/read-only calls); the costly FindAll case runs
+only if its sources changed relative to the merge-base with `origin/main`, including
+uncommitted/untracked changes. Use `--live --expensive` to force all cases, or
+`--live --case findall` to force that case alone. Skipped costly cases print their
+source paths and override flags. A FindAll poll exceeding its budget is reported
+as an incomplete check; partial result and schema checks still run.
 
 The default endpoint is `https://api.parallel.ai`; set `PARALLEL_API_URL` if
 your key belongs to another test environment. Neither mode uses your saved CLI
-credentials. For other live checks, verify the affected command separately
-with disposable resources in an isolated test environment.
+credentials.
 
 ## License
 

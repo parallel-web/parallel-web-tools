@@ -139,7 +139,9 @@ def invoke_cli(cli: Path, args: tuple[str, ...], env: dict[str, str], cwd: Path,
     except subprocess.TimeoutExpired:
         raise SystemExit(f"{label} timed out after {timeout}s.") from None
     if result.returncode:
-        detail = f"\n{result.stdout}{result.stderr}".rstrip() if env.get("PARALLEL_API_KEY") == FIXTURE_KEY else ""
+        detail = f"\n{result.stdout}{result.stderr}".rstrip()
+        if key := env.get("PARALLEL_API_KEY"):
+            detail = detail.replace(key, "[REDACTED]")
         raise SystemExit(f"{label} exited with status {result.returncode}.{detail}")
     return result.stdout
 
@@ -204,14 +206,14 @@ def check_help(cli: Path, env: dict[str, str], cwd: Path, scenarios: tuple[Case,
 
 
 def live_web(cli: Path, env: dict[str, str], cwd: Path) -> None:
-    for command in ("search", "extract"):
+    for command in ("search", "extract", "fetch"):
         args = (command, *WEB_ARGS[command], "--json")
         result = json_result(invoke_cli(cli, args, env, cwd), args)
         if not isinstance(result, dict):
             raise SystemExit(f"parallel-cli {command} did not return a JSON object.")
         try:
             [page] = result["results"]
-            request_id = result[f"{command}_id"]
+            request_id = result[f"{'extract' if command == 'fetch' else command}_id"]
             valid = result["status"] == "ok" and isinstance(request_id, str) and bool(request_id)
             if command == "search":
                 url = urlsplit(page["url"])
@@ -262,22 +264,26 @@ def live_research(cli: Path, env: dict[str, str], cwd: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--live", action="store_true", help="Run Search, Extract and one Research task (may bill usage)."
+        "--live", action="store_true", help="Run isolated non-destructive live cases (may bill usage; dev-loop only)."
     )
-    parser.add_argument("--case", action="append", help="Run a named offline case (repeatable).")
+    parser.add_argument("--case", action="append", help="Run a named case in the selected mode (repeatable).")
+    parser.add_argument(
+        "--expensive", action="store_true", help="With --live, force costly cases even without relevant source changes."
+    )
     args = parser.parse_args()
+    if args.expensive and not args.live:
+        parser.error("--expensive requires --live")
     env = os.environ.copy()
     cli = Path(sysconfig.get_path("scripts")) / ("parallel-cli.exe" if os.name == "nt" else "parallel-cli")
     if not cli.is_file():
         raise SystemExit("parallel-cli is not installed in this Python environment. Run with uv.")
     if args.live:
-        if args.case:
-            parser.error("--case is only supported offline")
         if not env.get("PARALLEL_API_KEY", "").strip():
             parser.error("--live requires PARALLEL_API_KEY from a test account")
         with TemporaryDirectory(prefix="parallel-cli-live-") as tmp:
-            live_web(cli, env, Path(tmp))
-            live_research(cli, env, Path(tmp))
+            from cli_smoke_live import run_live
+
+            run_live(cli, env, Path(tmp), args.case, expensive=args.expensive)
     else:
         with local_api() as server, TemporaryDirectory(prefix="parallel-cli-offline-") as tmp:
             endpoint = f"http://127.0.0.1:{server.server_port}"
