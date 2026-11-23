@@ -534,61 +534,6 @@ uv sync --all-extras
 uv run pytest tests/ -v
 ```
 
-### CLI smoke test
-
-After installing the development dependencies above, run the installed CLI from
-your checkout:
-
-```bash
-uv run --locked python scripts/cli_smoke.py
-```
-
-CI runs this without credentials. The installed CLI sends requests to a fake
-loopback API, which checks the routes, authentication, and request data. The
-runner checks command output and covers API-backed commands, including login,
-balance, and Research. Commands that do not use the API in the installed
-Python CLI get help checks. Delete and deploy commands are not exercised,
-including memory eviction and clearing, and irreversible monitor cancellation
-(the replacement for monitor delete).
-
-Use `--case 'research poll'` to rerun one offline behavior check.
-
-To check the hosted API, inject a dedicated test account's `PARALLEL_API_KEY`
-into the environment, then run:
-
-```bash
-uv run --locked python scripts/cli_smoke.py --live
-```
-
-The live dev-loop suite covers web search/extract/fetch, Research processors and
-run/status/poll, Enrich suggest/plan and a one-row lite run/status/poll, FindAll
-ingest/entity-search and a base-generator five-match run/status/poll/result/schema,
-read-only Monitor and Memory queries, Skills list/install, auth status, and shell
-completion. HOME, config, and skill installation paths are isolated in a temporary
-directory. Config view/get is standalone-only; balance get requires an OAuth grant
-and is skipped with API-key-only authentication. No login, top-ups, destructive
-commands, deployment, or persistent monitor mutations are performed.
-
-Use `--live --case enrich` (repeatable) to select live cases: `web`, `research`,
-`enrich`, `findall`, `monitor`, `memory`, `skills`, `local`. Dependent commands share
-a newly created run within each case. Polls wait at most two minutes per run;
-calls can incur usage charges. Unavailable endpoints (403/404) and absent monitors
-are explicitly reported as skips, not successful checks. Live coverage and exclusion
-reasons are classified in `scripts/cli_smoke_live.py` and checked against registered
-commands. This suite is manual only, not a CI/nightly/release check.
-
-Each live case declares its cost tier and exercised source paths. Default `--live`
-runs cheap cases (lite processors/read-only calls); the costly FindAll case runs
-only if its sources changed relative to the merge-base with `origin/main`, including
-uncommitted/untracked changes. Use `--live --expensive` to force all cases, or
-`--live --case findall` to force that case alone. Skipped costly cases print their
-source paths and override flags. A FindAll poll exceeding its budget is reported
-as an incomplete check; partial result and schema checks still run.
-
-The default endpoint is `https://api.parallel.ai`; set `PARALLEL_API_URL` if
-your key belongs to another test environment. Neither mode uses your saved CLI
-credentials.
-
 ## License
 
 MIT
