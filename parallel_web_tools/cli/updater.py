@@ -13,6 +13,9 @@ CONFIG_DIR = Path.home() / ".parallel-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 UPDATE_STATE_FILE = CONFIG_DIR / "update-state.json"
 
+# Set once this process installed an update, so it is not installed twice.
+_updated_this_process = False
+
 
 def _load_json_file(path: Path) -> dict:
     """Load JSON from file, returning empty dict on any error."""
@@ -112,6 +115,11 @@ def check_for_update_notification(current_version: str, save_state: bool = True)
         return None
 
     return f"Update available: v{current_version} → v{latest_version}"
+
+
+def _mark_updated() -> None:
+    global _updated_this_process
+    _updated_this_process = True
 
 
 def get_platform() -> str | None:
@@ -242,6 +250,7 @@ def download_and_install_update(current_version: str, console, force: bool = Fal
                 shutil.copytree(str(new_cli_dir), str(install_dir))
                 console.print(f"[green]Updated to v{latest_version}[/green]")
                 console.print("[dim]Please restart the CLI to use the new version[/dim]")
+                _mark_updated()
             else:
                 # On Unix, we can replace files while running
                 for item in new_cli_dir.iterdir():
@@ -263,9 +272,129 @@ def download_and_install_update(current_version: str, console, force: bool = Fal
                     main_exe.chmod(main_exe.stat().st_mode | 0o111)
 
                 console.print(f"[green]Updated to v{latest_version}[/green]")
+                _mark_updated()
 
             return True
 
     except Exception as e:
         console.print(f"[red]Update failed: {e}[/red]")
         return False
+
+
+# Deprecation-triggered updates bypass the daily interval but are still
+# rate-limited, so repeated commands don't hit the GitHub API every time.
+DEPRECATION_CHECK_INTERVAL = 3600
+
+
+def detect_install_method(executable: str | None = None, frozen: bool | None = None) -> str:
+    """Return how this CLI was installed: standalone, homebrew, npm, uv-tool, or pip."""
+    exe = (executable or sys.executable).replace("\\", "/")
+    try:
+        exe = str(Path(exe).resolve()).replace("\\", "/")
+    except Exception:
+        pass
+    is_frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    if "/Caskroom/" in exe or "/Cellar/" in exe:
+        return "homebrew"
+    if "/node_modules/" in exe:
+        return "npm"
+    if is_frozen:
+        return "standalone"
+    if "/uv/tools/" in exe:
+        return "uv-tool"
+    return "pip"
+
+
+UPDATE_COMMANDS = {
+    "standalone": "parallel-cli update",
+    "homebrew": "brew upgrade --cask parallel-cli",
+    "npm": "npm install -g parallel-web-cli@latest",
+    "uv-tool": "uv tool upgrade parallel-web-tools",
+    "pip": "pip install --upgrade parallel-web-tools",
+}
+
+
+def _deprecation_check_due() -> bool:
+    last = _load_json_file(UPDATE_STATE_FILE).get("last_deprecation_check", 0)
+    return (time.time() - last) > DEPRECATION_CHECK_INTERVAL
+
+
+def _save_deprecation_check(latest_version: str | None) -> None:
+    state = _load_json_file(UPDATE_STATE_FILE)
+    state["last_deprecation_check"] = time.time()
+    if latest_version:
+        state["latest_version"] = latest_version
+    _save_json_file(UPDATE_STATE_FILE, state)
+
+
+def _latest_version_for_deprecation() -> str | None:
+    """Latest release version, from GitHub at most once per interval, else from saved state."""
+    if not _deprecation_check_due():
+        return _load_json_file(UPDATE_STATE_FILE).get("latest_version")
+    release = _fetch_latest_release(timeout=5)
+    latest = release["tag_name"].lstrip("v") if release and release.get("tag_name") else None
+    _save_deprecation_check(latest)
+    return latest
+
+
+def _describe_notice(notice) -> str:
+    parts = [notice.message or f"{notice.endpoint or 'An API endpoint'} is deprecated."]
+    if notice.successor:
+        parts.append(f"Replacement: {notice.successor}")
+    if notice.link:
+        parts.append(f"Docs: {notice.link}")
+    if notice.sunset:
+        parts.append(f"Sunset: {notice.sunset}")
+    return " ".join(parts)
+
+
+def handle_deprecation_notices(current_version: str, notices: list, console) -> str | None:
+    """React to deprecated API calls made by this CLI run.
+
+    Standalone installs with auto-update enabled update themselves when a newer
+    release exists. In every other case, print a notice on ``console`` (stderr)
+    that tells the user or the invoking agent how to update.
+
+    Returns "updated", "notified", or None when there was nothing to do.
+    """
+    global _updated_this_process
+    if not notices:
+        return None
+
+    for notice in notices:
+        console.print(f"[yellow][deprecated] {_describe_notice(notice)}[/yellow]", highlight=False)
+
+    method = detect_install_method()
+    try:
+        latest = _latest_version_for_deprecation()
+    except Exception:
+        latest = None
+    newer_available = bool(latest) and _is_newer_version(latest, current_version)
+
+    if _updated_this_process:
+        return "updated"
+
+    if newer_available and method == "standalone" and is_auto_update_check_enabled():
+        console.print("[dim]This parallel-cli version calls deprecated Parallel APIs. Updating...[/dim]")
+        try:
+            if download_and_install_update(current_version, console):
+                _updated_this_process = True
+                console.print("[dim]Run the command again to use the new version.[/dim]")
+                return "updated"
+        except Exception:
+            pass
+
+    command = UPDATE_COMMANDS[method]
+    if newer_available:
+        console.print(
+            f"[yellow][parallel-cli] UPDATE REQUIRED: parallel-cli v{current_version} calls deprecated "
+            f"Parallel APIs. v{latest} is available. Update with: {command}[/yellow]",
+            highlight=False,
+        )
+    else:
+        console.print(
+            f"[yellow][parallel-cli] parallel-cli v{current_version} calls deprecated Parallel APIs. "
+            f"Update when a newer release is available: {command}[/yellow]",
+            highlight=False,
+        )
+    return "notified"
