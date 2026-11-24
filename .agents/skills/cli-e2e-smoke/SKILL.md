@@ -54,7 +54,7 @@ monitor/memory access, skills installation, and local CLI utilities. Destructive
 operations, top-ups, login, deployment, persistent monitor mutations, and updates
 are excluded. Balance get needs an OAuth grant unavailable to the isolated API-key
 session; config view/get is standalone-only.
-Use the [`platform-login` skill in `shapleyai/code`](https://github.com/shapleyai/code/blob/main/.agents/skills/platform-login/SKILL.md) to test `parallel-cli login` end to end with the dedicated test mailbox.
+Use the `platform-login` skill in the `shapleyai/code` repo to test `parallel-cli login` end to end with the dedicated test mailbox.
 
 HOME, user config/cache, and skill installation paths are redirected to temporary
 directories; neither mode uses saved CLI credentials. Live task runs still create
