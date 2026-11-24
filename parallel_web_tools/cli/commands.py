@@ -61,6 +61,7 @@ from parallel_web_tools.core import (
     update_monitor,
     validate_memory_scope_key,
 )
+from parallel_web_tools.core.deprecation import record_body_warnings
 
 # Standalone CLI (PyInstaller) has limited features to reduce bundle size
 # YAML config and interactive planner require: pip install parallel-web-tools[cli]
@@ -123,6 +124,12 @@ class ParallelCLI(click.Group):
     def format_help(self, ctx, formatter):
         _print_banner()
         super().format_help(ctx, formatter)
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        finally:
+            _handle_deprecations()
 
 
 load_dotenv(".env.local")
@@ -508,6 +515,21 @@ def _auto_update():
             download_and_install_update(__version__, console)
     except Exception:
         # Silently ignore errors - don't disrupt user's workflow
+        pass
+
+
+def _handle_deprecations():
+    """Update or tell the caller to update when this run called deprecated APIs."""
+    from parallel_web_tools.cli.updater import handle_deprecation_notices
+    from parallel_web_tools.core.deprecation import clear_notices, get_notices
+
+    notices = get_notices()
+    if not notices:
+        return
+    clear_notices()
+    try:
+        handle_deprecation_notices(__version__, notices, Console(stderr=True))
+    except Exception:
         pass
 
 
@@ -1280,6 +1302,7 @@ def search(
             if hasattr(result, "warnings") and result.warnings
             else [],
         }
+        record_body_warnings(getattr(result, "warnings", None), endpoint="search")
 
         write_json_output(output_data, output_file, output_json)
 
@@ -1463,6 +1486,7 @@ def extract(
             if hasattr(result, "warnings") and result.warnings
             else [],
         }
+        record_body_warnings(getattr(result, "warnings", None), endpoint="extract")
 
         write_json_output(output_data, output_file, output_json)
 

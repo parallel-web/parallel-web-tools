@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from parallel import AsyncParallel, Parallel
+from parallel import AsyncParallel, DefaultAsyncHttpxClient, DefaultHttpxClient, Parallel
 
-from parallel_web_tools.core import credentials, service
+from parallel_web_tools.core import credentials, deprecation, service
 from parallel_web_tools.core.endpoints import (
     CLIENT_ID,
     DEFAULT_API_URL,
@@ -844,8 +844,28 @@ class AsyncOAuthParallel(AsyncParallel):
 
 def _build_client(api_key: str | None, base_url: str, source: ClientSource) -> Parallel:
     if api_key is None:
-        return OAuthParallel(base_url=base_url, default_headers=get_default_headers(source))
-    return Parallel(base_url=base_url, api_key=api_key, default_headers=get_default_headers(source))
+        return OAuthParallel(
+            base_url=base_url, default_headers=get_default_headers(source), http_client=_http_client(source)
+        )
+    return Parallel(
+        base_url=base_url,
+        api_key=api_key,
+        default_headers=get_default_headers(source),
+        http_client=_http_client(source),
+    )
+
+
+def _http_client(source: ClientSource) -> DefaultHttpxClient | None:
+    """CLI clients record API deprecation headers so the CLI can react after the command."""
+    if source != "cli":
+        return None
+    return DefaultHttpxClient(event_hooks={"response": [deprecation.record_response]})
+
+
+def _async_http_client(source: ClientSource) -> DefaultAsyncHttpxClient | None:
+    if source != "cli":
+        return None
+    return DefaultAsyncHttpxClient(event_hooks={"response": [deprecation.record_response_async]})
 
 
 def create_client(api_key: str | None = None, source: ClientSource = "python") -> Parallel:
@@ -868,8 +888,15 @@ def get_async_client(force_login: bool = False, source: ClientSource = "python")
     """Get a configured async Parallel client."""
     key, base_url = _resolve_client_auth(None, interactive=True, force_login=force_login)
     if key is None:
-        return AsyncOAuthParallel(base_url=base_url, default_headers=get_default_headers(source))
-    return AsyncParallel(base_url=base_url, api_key=key, default_headers=get_default_headers(source))
+        return AsyncOAuthParallel(
+            base_url=base_url, default_headers=get_default_headers(source), http_client=_async_http_client(source)
+        )
+    return AsyncParallel(
+        base_url=base_url,
+        api_key=key,
+        default_headers=get_default_headers(source),
+        http_client=_async_http_client(source),
+    )
 
 
 def logout() -> bool:
