@@ -55,12 +55,12 @@ class TestHeaderDetection:
         deprecation.record_response(_response({"Deprecation": "@1", "Sunset": "Wed, 01 Jul 2026 00:00:00 GMT"}))
         assert deprecation.get_notices()[0].sunset == "Wed, 01 Jul 2026 00:00:00 GMT"
 
-    def test_cli_clients_install_response_hooks(self):
+    @pytest.mark.parametrize("api_key", ["test-key", None], ids=["api-key", "oauth"])
+    def test_cli_clients_install_response_hooks(self, api_key):
         from parallel_web_tools.core import auth
 
-        with mock.patch.object(auth, "resolve_api_key", return_value="test-key"):
+        with mock.patch.object(auth, "_resolve_client_auth", return_value=(api_key, "https://api.parallel.ai")):
             client = auth.create_client(source="cli")
-        with mock.patch.object(auth, "get_api_key", return_value="test-key"):
             async_client = auth.get_async_client(source="cli")
 
         assert deprecation.record_response in client._client.event_hooks["response"]

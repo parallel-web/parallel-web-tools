@@ -1,4 +1,4 @@
-"""Tests for the service API client (apps + keys + balance)."""
+"""Tests for the service API client (apps + OAuth credentials + balance)."""
 
 import io
 import json
@@ -12,12 +12,11 @@ import pytest
 from parallel_web_tools.core import service
 from parallel_web_tools.core.service import (
     ServiceApiError,
-    _build_key_name,
     add_balance,
-    create_api_key,
+    create_oauth_credential,
     get_balance,
     list_apps,
-    provision_cli_api_key,
+    provision_cli_oauth_credential,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,18 +70,21 @@ def _app_item(app_name: str, app_id: str = "app_x", org_id: str = "org_x") -> di
     return {"app_name": app_name, "org_name": None, "app_id": app_id, "org_id": org_id}
 
 
-def _api_key_response(raw_api_key: str | None = "sk_minted", name: str = "parallel-cli-2026-04-21-1432") -> dict:
-    """Build a full CreateKeyResponse payload (flat — no ``api_key`` wrapper)."""
+def _oauth_credential_response(refresh_token: str = "rt_minted", audience: str = "https://api.parallel.ai") -> dict:
+    """Build a full CreateOAuthCredentialResponse payload."""
     return {
-        "api_key_id": "key_1",
-        "api_key_name": name,
+        "credential_id": "8f1c1f4e-0000-4000-8000-000000000001",
+        "client_id": "cid_test",
         "app_id": "app_cli",
         "app_name": service.PARALLEL_CLI_APP_NAME,
         "created_by_user_id": "user_1",
-        "created_by_user_email": "user@example.com",
-        "display_value": "sk_***1234",
-        "raw_api_key": raw_api_key,
-        "created_at": 1776800731,
+        "is_service_scoped": False,
+        "audience": audience,
+        "scopes": ["*"],
+        "token_endpoint": "https://platform.parallel.ai/getServiceKeys/token",
+        "refresh_token": refresh_token,
+        "refresh_token_expires_at": "2026-12-20T00:00:00Z",
+        "created_at": "2026-11-20T00:00:00Z",
     }
 
 
@@ -154,105 +156,73 @@ class TestListApps:
 
 
 # ---------------------------------------------------------------------------
-# create_api_key
+# create_oauth_credential
 # ---------------------------------------------------------------------------
 
 
-class TestCreateApiKey:
-    def test_returns_typed_api_key_model(self):
-        with _patch_urlopen(_api_key_response()):
-            result = create_api_key("at_xyz", "app_1", "parallel-cli-2026-04-21-1432")
-        assert result.raw_api_key == "sk_minted"
-        assert result.api_key_name == "parallel-cli-2026-04-21-1432"
-        assert result.display_value == "sk_***1234"
+class TestCreateOAuthCredential:
+    def test_returns_typed_credential_model(self):
+        with _patch_urlopen(_oauth_credential_response()):
+            result = create_oauth_credential("at_xyz", "app_1", "cid_test", "https://api.parallel.ai", ["*"])
+        assert result.refresh_token == "rt_minted"
+        assert result.token_endpoint == "https://platform.parallel.ai/getServiceKeys/token"
+        assert result.audience == "https://api.parallel.ai"
 
-    def test_request_body_has_only_api_key_name(self):
+    def test_posts_to_oauth_credentials_route_with_bearer(self):
         captured: dict = {}
-        with _patch_urlopen(_api_key_response(), capture=captured):
-            create_api_key("at_xyz", "app_42", "parallel-cli-2026-04-21-1432")
+        with _patch_urlopen(_oauth_credential_response(), capture=captured):
+            create_oauth_credential("at_xyz", "app_42", "cid_test", "https://api.parallel.ai", ["*"])
 
         assert captured["method"] == "POST"
-        assert captured["url"].endswith("/service/v1/apps/app_42/keys")
-        assert json.loads(captured["body"]) == {"api_key_name": "parallel-cli-2026-04-21-1432"}
+        assert captured["url"].endswith("/service/v1/apps/app_42/oauth-credentials")
+        assert captured["headers"]["Authorization"] == "Bearer at_xyz"
+        assert json.loads(captured["body"]) == {
+            "client_id": "cid_test",
+            "audience": "https://api.parallel.ai",
+            "scopes": ["*"],
+            "is_service_scoped": False,
+        }
 
     def test_raises_on_malformed_response(self):
-        # Missing required fields (e.g. api_key_id) — pydantic validation fails.
-        with _patch_urlopen({"display_value": "sk_***"}):
-            with pytest.raises(ServiceApiError, match="Unexpected create_api_key response"):
-                create_api_key("at_xyz", "app_1", "name_1")
+        with _patch_urlopen({"credential_id": "c1"}):
+            with pytest.raises(ServiceApiError, match="Unexpected create_oauth_credential response"):
+                create_oauth_credential("at_xyz", "app_1", "cid_test", "https://api.parallel.ai", ["*"])
+
+    def test_raises_on_http_error(self):
+        with _patch_urlopen(_http_error(400, {"detail": "bad audience"})):
+            with pytest.raises(ServiceApiError, match="400"):
+                create_oauth_credential("at_xyz", "app_1", "cid_test", "https://nope.example", ["*"])
 
 
 # ---------------------------------------------------------------------------
-# provision_cli_api_key
+# provision_cli_oauth_credential
 # ---------------------------------------------------------------------------
 
 
-class TestProvisionCliApiKey:
-    def test_happy_path(self):
+class TestProvisionCliOAuthCredential:
+    def test_targets_cli_app_with_wildcard_scope(self):
         apps_payload = _apps(("Some Other App", "app_other"), (service.PARALLEL_CLI_APP_NAME, "app_cli"))
-        captured_paths: list[str] = []
+        posted: dict = {}
 
         def dispatch(req):
-            captured_paths.append(req.full_url)
             if req.get_method() == "GET":
                 return apps_payload
-            return _api_key_response(raw_api_key="sk_provisioned")
+            posted["url"] = req.full_url
+            posted["body"] = json.loads(req.data.decode())
+            return _oauth_credential_response(refresh_token="rt_provisioned")
 
         with _patch_urlopen([dispatch, dispatch]):
-            key, name = provision_cli_api_key("at_xyz")
+            created = provision_cli_oauth_credential("at_xyz", client_id="cid_abc", audience="https://api.parallel.ai")
 
-        assert key == "sk_provisioned"
-        assert name.startswith("parallel-cli-")
-        # The created key must target the CLI app, not the other one.
-        assert any("/apps/app_cli/keys" in p for p in captured_paths)
+        assert created.refresh_token == "rt_provisioned"
+        assert posted["url"].endswith("/apps/app_cli/oauth-credentials")
+        assert posted["body"]["client_id"] == "cid_abc"
+        assert posted["body"]["scopes"] == ["*"]
 
     def test_raises_when_app_not_found(self):
         with _patch_urlopen(_apps(("Some Other App", "app_other"))):
             with pytest.raises(ServiceApiError, match="No app named"):
-                provision_cli_api_key("at_xyz")
-
-    def test_raises_when_raw_api_key_missing(self):
-        apps_payload = _apps((service.PARALLEL_CLI_APP_NAME, "app_cli"))
-        with _patch_urlopen([apps_payload, _api_key_response(raw_api_key=None)]):
-            with pytest.raises(ServiceApiError, match="no raw_api_key"):
-                provision_cli_api_key("at_xyz")
-
-    def test_client_id_is_used_in_created_key_name(self):
-        apps_payload = _apps((service.PARALLEL_CLI_APP_NAME, "app_cli"))
-        sent_body: dict = {}
-
-        def dispatch(req):
-            if req.get_method() == "GET":
-                return apps_payload
-            sent_body.update(json.loads(req.data.decode()))
-            return _api_key_response(raw_api_key="sk_ok")
-
-        with _patch_urlopen([dispatch, dispatch]):
-            _, name = provision_cli_api_key("at_xyz", client_id="cid_abc")
-
-        assert name.startswith("cid_abc-")
-        assert sent_body["api_key_name"] == name
-
-
-# ---------------------------------------------------------------------------
-# _build_key_name
-# ---------------------------------------------------------------------------
-
-
-class TestBuildKeyName:
-    def test_falls_back_to_parallel_cli_prefix_without_client_id(self):
-        import re
-
-        name = _build_key_name()
-        # parallel-cli-YYYY-MM-DD-HHMM (HHMM is 4 digits, no colon)
-        assert re.match(r"^parallel-cli-\d{4}-\d{2}-\d{2}-\d{4}$", name), name
-
-    def test_uses_client_id_as_prefix_when_provided(self):
-        import re
-
-        name = _build_key_name(client_id="cid_abc123")
-        # Same date suffix, but the client_id now carries the entropy.
-        assert re.match(r"^cid_abc123-\d{4}-\d{2}-\d{2}-\d{4}$", name), name
+                provision_cli_oauth_credential("at_xyz", client_id="cid", audience="https://api.parallel.ai")
 
 
 # ---------------------------------------------------------------------------

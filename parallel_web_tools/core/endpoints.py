@@ -8,12 +8,13 @@ local dev stack:
   ``https://platform.parallel.ai``; for local dev set to ``http://localhost:3000``.
 
 - ``PARALLEL_SERVICE_API_URL`` — the service/account API that serves
-  ``/service/v1/*`` (apps, API-key management). Default
+  ``/service/v1/*`` (apps, product API credentials, balance). Default
   ``https://api.parallel.ai/account``; for local dev set to
   ``http://localhost:8090``.
 
 - ``PARALLEL_API_URL`` — the data API (search, extract, research, enrich,
-  findall, monitor). Default ``https://api.parallel.ai``.
+  findall, monitor). Default ``https://api.parallel.ai``. When it is set, it
+  also overrides the origin a stored OAuth credential was issued for.
 """
 
 from __future__ import annotations
@@ -28,6 +29,10 @@ CLIENT_ID = "parallel-cli"
 DEFAULT_SCOPE = "keys:read keys:create keys:delete apps:read apps:create apps:delete balance:read balance:add"
 
 PARALLEL_CLI_APP_NAME = "parallel-cli Users"
+
+# Scopes requested for the product API OAuth credential. The account service
+# accepts only the wildcard.
+PRODUCT_API_SCOPES = ("*",)
 
 
 def get_platform_url() -> str:
