@@ -2,9 +2,13 @@
 
 Authentication happens exclusively via the OAuth 2.0 Device Authorization Grant
 (RFC 8628) against the platform's ``/getServiceKeys/*`` endpoints. After a
-successful device flow the CLI additionally provisions a data-API key against
-the service API so that subsequent commands (search, extract, etc.) have a key
-to use.
+successful device flow the CLI creates a product API OAuth credential through
+the service API (``POST /service/v1/apps/{app_id}/oauth-credentials``). The
+SDK clients exchange its rotating refresh token for short-lived Bearer access
+tokens, so subsequent commands (search, extract, etc.) never hold an API key.
+
+An API key stored by an older release is replaced with an OAuth credential on
+the first run that still has valid control-API tokens.
 
 All endpoints are built from :mod:`parallel_web_tools.core.endpoints`, so a
 local dev stack can be reached via ``PARALLEL_PLATFORM_URL`` /
@@ -13,7 +17,9 @@ local dev stack can be reached via ``PARALLEL_PLATFORM_URL`` /
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import platform as _platform
 import sys
@@ -21,23 +27,30 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
+import httpx
 from parallel import AsyncParallel, Parallel
 
 from parallel_web_tools.core import credentials, service
 from parallel_web_tools.core.endpoints import (
     CLIENT_ID,
+    DEFAULT_API_URL,
     DEFAULT_SCOPE,
     get_api_url,
     get_platform_url,
 )
+from parallel_web_tools.core.service_types import CreateOAuthCredentialResponse
 from parallel_web_tools.core.user_agent import ClientSource, get_default_headers
 
 DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 REFRESH_TOKEN_GRANT_TYPE = "refresh_token"
+
+logger = logging.getLogger(__name__)
 
 # Proactively refresh when the access token is within this many seconds of its
 # absolute expiry, so callers don't get a token that dies mid-request under clock
@@ -45,12 +58,24 @@ REFRESH_TOKEN_GRANT_TYPE = "refresh_token"
 ACCESS_TOKEN_SKEW_SECONDS = 30
 
 
-class ReauthenticationRequired(Exception):
-    """Raised when the control-API grant can no longer be refreshed silently.
+# The SDK clients require a non-empty ``api_key``. OAuth clients send a Bearer
+# token instead and never send this value.
+_OAUTH_API_KEY_PLACEHOLDER = "oauth"
 
-    The caller must run ``parallel-cli login`` before any control-API call
-    will succeed — the authorization grant, the refresh token, or both have
-    expired (or never existed), so no silent refresh is possible.
+_NO_API_KEY_MESSAGE = (
+    "Parallel API key required. Set the PARALLEL_API_KEY environment variable "
+    "or pass api_key explicitly. A 'parallel-cli login' session authenticates "
+    "with an OAuth credential and does not provide an API key; use "
+    "create_client() or get_client() to call the API with it."
+)
+
+
+class ReauthenticationRequired(Exception):
+    """Raised when stored OAuth credentials can no longer be refreshed silently.
+
+    The caller must run ``parallel-cli login``. The control-API grant, the
+    product API credential, or their refresh tokens have expired, were revoked,
+    or never existed, so no silent refresh is possible.
     """
 
 
@@ -325,9 +350,21 @@ def poll_device_token(info: DeviceCodeInfo, client_id: str | None = None) -> Tok
     raise Exception("Device code expired (timeout). Please try again.")
 
 
-def refresh_access_token(refresh_token: str, client_id: str | None = None) -> TokenResponse:
-    """Exchange a refresh token for a new access+refresh token pair."""
-    url = _platform_path("/getServiceKeys/token")
+def refresh_access_token(
+    refresh_token: str,
+    client_id: str | None = None,
+    token_endpoint: str | None = None,
+) -> TokenResponse:
+    """Exchange a refresh token for a new access+refresh token pair.
+
+    ``token_endpoint`` defaults to the platform's ``/getServiceKeys/token``.
+
+    Raises:
+        ReauthenticationRequired: The server answered ``invalid_grant``: the
+            refresh token was revoked, expired or already spent.
+        Exception: Any other failure, which may be transient.
+    """
+    url = token_endpoint or _platform_path("/getServiceKeys/token")
     try:
         data = _post_form(
             url,
@@ -339,6 +376,14 @@ def refresh_access_token(refresh_token: str, client_id: str | None = None) -> To
         )
     except urllib.error.HTTPError as e:
         body = e.read().decode()
+        try:
+            error_code = json.loads(body).get("error")
+        except (ValueError, AttributeError):
+            error_code = None
+        if error_code == "invalid_grant":
+            raise ReauthenticationRequired(
+                f"refresh token is no longer valid ({e.code} - {body}); run 'parallel-cli login'"
+            ) from e
         raise Exception(f"Token refresh failed: {e.code} - {body}") from e
     return _parse_token_response(data)
 
@@ -412,20 +457,21 @@ def _do_device_flow(
 def _persist_token_response(resp: TokenResponse) -> None:
     """Write a TokenResponse into credentials under its org_id, selecting it."""
     now = int(time.time())
-    creds = credentials.load() or credentials.Credentials()
-    org = creds.orgs.get(resp.org_id) or credentials.OrgCredentials()
-    org.org_name = resp.org_name
-    org.control_api = credentials.ControlApiTokens(
-        access_token=resp.access_token,
-        access_token_expires_at=now + resp.expires_in,
-        access_token_scopes=resp.scopes,
-        refresh_token=resp.refresh_token,
-        refresh_token_expires_at=now + resp.refresh_token_expires_in,
-        authorization_expires_at=now + resp.authorization_expires_in,
-    )
-    creds.orgs[resp.org_id] = org
-    creds.selected_org_id = resp.org_id
-    credentials.save(creds)
+    with credentials.lock():
+        creds = credentials.load() or credentials.Credentials()
+        org = creds.orgs.get(resp.org_id) or credentials.OrgCredentials()
+        org.org_name = resp.org_name
+        org.control_api = credentials.ControlApiTokens(
+            access_token=resp.access_token,
+            access_token_expires_at=now + resp.expires_in,
+            access_token_scopes=resp.scopes,
+            refresh_token=resp.refresh_token,
+            refresh_token_expires_at=now + resp.refresh_token_expires_in,
+            authorization_expires_at=now + resp.authorization_expires_in,
+        )
+        creds.orgs[resp.org_id] = org
+        creds.selected_org_id = resp.org_id
+        credentials.save(creds)
 
 
 def get_control_api_access_token() -> str:
@@ -441,75 +487,246 @@ def get_control_api_access_token() -> str:
             selected org, ``authorization_expires_at`` in the past, or
             ``refresh_token_expires_at`` in the past.
     """
+    access_token = _fresh_control_access_token()
+    if access_token is not None:
+        return access_token
+    client_id = ensure_client_id()
+    # The refresh token is single-use: hold the lock, and check again inside
+    # it, because another process may have refreshed while this one waited.
+    with credentials.lock():
+        access_token = _fresh_control_access_token()
+        if access_token is not None:
+            return access_token
+        creds = credentials.load()
+        org = creds.selected_org() if creds else None
+        assert org is not None
+        tokens = org.control_api
+        refresh_token_value = tokens.refresh_token
+        if not refresh_token_value:
+            raise ReauthenticationRequired("no refresh token available; run 'parallel-cli login'")
+        if tokens.refresh_token_expires_at is not None and int(time.time()) >= tokens.refresh_token_expires_at:
+            raise ReauthenticationRequired("refresh token has expired; run 'parallel-cli login'")
+        new_tokens = refresh_access_token(refresh_token_value, client_id=client_id)
+        _persist_token_response(new_tokens)
+        return new_tokens.access_token
+
+
+def _fresh_control_access_token() -> str | None:
+    """Return the stored control-API access token if still valid, else None.
+
+    Raises ``ReauthenticationRequired`` when there is nothing to refresh.
+    """
     creds = credentials.load()
     org = creds.selected_org() if creds else None
-    if org is None:
+    if org is None or not org.control_api.access_token:
         raise ReauthenticationRequired("not logged in; run 'parallel-cli login'")
-
     tokens = org.control_api
-    access_token = tokens.access_token
-    if not access_token:
-        raise ReauthenticationRequired("not logged in; run 'parallel-cli login'")
-
     now = int(time.time())
-
     if tokens.authorization_expires_at is not None and now >= tokens.authorization_expires_at:
         raise ReauthenticationRequired("authorization grant has expired; run 'parallel-cli login'")
-
-    # Fast path: current access token still valid beyond the skew buffer.
     if tokens.access_token_expires_at is None or now < tokens.access_token_expires_at - ACCESS_TOKEN_SKEW_SECONDS:
-        return access_token
+        return tokens.access_token
+    return None
 
-    # Access token is (about to be) expired. Can we refresh?
-    refresh_token_value = tokens.refresh_token
-    if not refresh_token_value:
-        raise ReauthenticationRequired("no refresh token available; run 'parallel-cli login'")
-    if tokens.refresh_token_expires_at is not None and now >= tokens.refresh_token_expires_at:
-        raise ReauthenticationRequired("refresh token has expired; run 'parallel-cli login'")
 
-    new_tokens = refresh_access_token(refresh_token_value, client_id=ensure_client_id())
-    _persist_token_response(new_tokens)
-    return new_tokens.access_token
+def _persist_product_credential(org_id: str, created: CreateOAuthCredentialResponse) -> None:
+    """Store a new product API credential for ``org_id`` and drop its API key.
+
+    A credential this one replaces is revoked on a best-effort basis, so a
+    repeat login does not leave a live refresh token behind.
+    """
+    with credentials.lock():
+        creds = credentials.load() or credentials.Credentials()
+        org = creds.orgs.get(org_id) or credentials.OrgCredentials()
+        previous_refresh_token = org.product_api.refresh_token
+        org.product_api = credentials.ProductApiTokens(
+            credential_id=created.credential_id,
+            audience=created.audience,
+            token_endpoint=created.token_endpoint,
+            refresh_token=created.refresh_token,
+            refresh_token_expires_at=int(created.refresh_token_expires_at.timestamp()),
+        )
+        org.api_key = None
+        creds.orgs[org_id] = org
+        credentials.save(creds)
+    if previous_refresh_token and previous_refresh_token != created.refresh_token:
+        try:
+            revoke_token(previous_refresh_token)
+        except Exception:
+            pass
+
+
+def _provision_product_credential(control_access_token: str, org_id: str, client_id: str) -> None:
+    """Create a product API OAuth credential for ``org_id`` and persist it."""
+    created = service.provision_cli_oauth_credential(control_access_token, client_id=client_id, audience=get_api_url())
+    _persist_product_credential(org_id, created)
+
+
+def _usable_product_tokens(org: credentials.OrgCredentials) -> credentials.ProductApiTokens | None:
+    """Return the org's product API credential when its refresh token is usable."""
+    tokens = org.product_api
+    if not tokens.refresh_token or not tokens.token_endpoint:
+        return None
+    if tokens.refresh_token_expires_at is not None and int(time.time()) >= tokens.refresh_token_expires_at:
+        return None
+    return tokens
+
+
+def _has_usable_product_credential() -> bool:
+    creds = credentials.load()
+    org = creds.selected_org() if creds is not None else None
+    return org is not None and _usable_product_tokens(org) is not None
+
+
+def _ensure_product_credential() -> None:
+    """Make sure the selected org has a usable product API credential.
+
+    When it has none, one is created from the stored control-API tokens. This
+    also migrates a stored API key: the new credential replaces it. Runs under
+    the auth-file lock, so parallel processes create one credential, not one
+    each.
+
+    Raises:
+        ReauthenticationRequired: No usable control-API tokens; a login is needed.
+        Exception: Creating the credential failed for another reason.
+    """
+    if _has_usable_product_credential():
+        return
+    with credentials.lock():
+        if _has_usable_product_credential():
+            return
+        creds = credentials.load()
+        if creds is None or creds.selected_org_id is None or creds.selected_org() is None:
+            raise ReauthenticationRequired("not logged in; run 'parallel-cli login'")
+        access_token = get_control_api_access_token()
+        _provision_product_credential(access_token, creds.selected_org_id, ensure_client_id())
+
+
+def _access_token_is_fresh(tokens: credentials.ProductApiTokens, now: int) -> bool:
+    return (
+        bool(tokens.access_token)
+        and tokens.access_token_expires_at is not None
+        and now < tokens.access_token_expires_at - ACCESS_TOKEN_SKEW_SECONDS
+    )
+
+
+def _refresh_product_access_token() -> str:
+    """Exchange the stored product refresh token under the auth-file lock.
+
+    Returns the new access token. When the token endpoint answers
+    ``invalid_grant`` (revoked, expired or already spent), the credential is
+    removed and ``ReauthenticationRequired`` is raised. Other failures keep it.
+    """
+    with credentials.lock():
+        creds = credentials.load()
+        org = creds.selected_org() if creds is not None else None
+        tokens = _usable_product_tokens(org) if org is not None else None
+        if creds is None or org is None or tokens is None:
+            raise ReauthenticationRequired("no product API credential; run 'parallel-cli login'")
+        now = int(time.time())
+        # Another process may have refreshed while this one waited for the lock.
+        if _access_token_is_fresh(tokens, now):
+            assert tokens.access_token is not None
+            return tokens.access_token
+
+        assert tokens.token_endpoint is not None and tokens.refresh_token is not None
+        try:
+            resp = refresh_access_token(tokens.refresh_token, token_endpoint=tokens.token_endpoint)
+        except ReauthenticationRequired:
+            org.product_api = credentials.ProductApiTokens()
+            credentials.save(creds)
+            raise
+
+        tokens.access_token = resp.access_token
+        tokens.access_token_expires_at = now + resp.expires_in
+        tokens.refresh_token = resp.refresh_token
+        if resp.refresh_token_expires_in:
+            tokens.refresh_token_expires_at = now + resp.refresh_token_expires_in
+        credentials.save(creds)
+        return resp.access_token
+
+
+def get_product_api_access_token() -> str:
+    """Return a currently valid product API access token for the selected org.
+
+    Refreshes the access token when it has expired, or expires within
+    ``ACCESS_TOKEN_SKEW_SECONDS``, and persists the rotated refresh token. When
+    the credential is no longer valid, one new credential is created from the
+    stored control-API tokens before giving up.
+
+    Raises:
+        ReauthenticationRequired: The caller must run ``parallel-cli login``.
+        Exception: A refresh or credential creation failed for another reason.
+    """
+    creds = credentials.load()
+    org = creds.selected_org() if creds is not None else None
+    tokens = _usable_product_tokens(org) if org is not None else None
+    if tokens is not None and _access_token_is_fresh(tokens, int(time.time())):
+        assert tokens.access_token is not None
+        return tokens.access_token
+    try:
+        return _refresh_product_access_token()
+    except ReauthenticationRequired as e:
+        try:
+            _ensure_product_credential()
+        except ReauthenticationRequired:
+            raise e from None
+    return _refresh_product_access_token()
+
+
+def get_product_api_url() -> str:
+    """Return the base URL for OAuth calls to the product API.
+
+    ``PARALLEL_API_URL`` wins when set. Otherwise this is the origin the stored
+    credential was issued for, which for an AWS Marketplace org is the
+    listing's origin rather than the default.
+    """
+    if os.environ.get("PARALLEL_API_URL"):
+        return get_api_url()
+    creds = credentials.load()
+    org = creds.selected_org() if creds is not None else None
+    audience = org.product_api.audience if org is not None else None
+    return (audience or DEFAULT_API_URL).rstrip("/")
 
 
 def login_flow(
     login_hint: str | None = None,
     on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
-) -> str:
-    """Run the full CLI login: register client → device flow → persist tokens → auto-mint data API key.
+) -> None:
+    """Run the full CLI login: register client → device flow → persist tokens → create product API credential.
 
     ``login_hint`` is forwarded to the device flow's URL enrichment (see
-    :func:`build_verification_uri`). Returns the newly-minted data API key.
+    :func:`build_verification_uri`).
     """
     client_id = ensure_client_id()
     token_resp = _do_device_flow(login_hint=login_hint, on_device_code=on_device_code, client_id=client_id)
     _persist_token_response(token_resp)
+    _provision_product_credential(token_resp.access_token, token_resp.org_id, client_id)
 
-    api_key, key_name = service.provision_cli_api_key(token_resp.access_token, client_id=client_id)
-
-    creds = credentials.load()
-    assert creds is not None and creds.selected_org_id == token_resp.org_id
-    creds.orgs[token_resp.org_id].api_key = api_key
     # Drop the v0→v1 legacy placeholder org now that the user is properly
     # authenticated against a real org. It only existed for backwards compat
     # during migration; keeping it around after login would be dead state.
     if credentials.LEGACY_ORG_ID != token_resp.org_id:
-        creds.orgs.pop(credentials.LEGACY_ORG_ID, None)
-    credentials.save(creds)
+        creds = credentials.load()
+        if creds is not None and creds.orgs.pop(credentials.LEGACY_ORG_ID, None) is not None:
+            credentials.save(creds)
 
     if not on_device_code:
-        print(f"Authentication successful! Provisioned data API key: {key_name}", file=sys.stderr)
-
-    return api_key
+        print("Authentication successful! Created a product API OAuth credential.", file=sys.stderr)
 
 
 def resolve_api_key(api_key: str | None = None) -> str:
-    """Resolve API key from parameter, environment, or stored credentials.
+    """Resolve an API key from parameter, environment, or stored credentials.
 
     Priority: explicit ``api_key`` argument → ``PARALLEL_API_KEY`` env var →
-    stored credentials. Env beats stored creds so operators can override a
-    developer's local ``parallel-cli login`` session by exporting the env var
-    (matches the convention used by AWS, GCP, Anthropic, Stripe SDKs).
+    an API key stored by an older release. Env beats stored creds so operators
+    can override a local login by exporting the env var (matches the
+    convention used by AWS, GCP, Anthropic, Stripe SDKs).
+
+    A ``parallel-cli login`` session holds an OAuth credential, not an API key,
+    so it does not satisfy this function. Integrations that send a raw
+    ``x-api-key`` need ``PARALLEL_API_KEY`` or an explicit key.
+
     Raises ``ValueError`` if no key is available.
     """
     if api_key:
@@ -520,10 +737,7 @@ def resolve_api_key(api_key: str | None = None) -> str:
     stored = credentials.get_selected_api_key()
     if stored:
         return stored
-    raise ValueError(
-        "Parallel API key required. Set the PARALLEL_API_KEY environment "
-        "variable, run 'parallel-cli login', or pass api_key explicitly."
-    )
+    raise ValueError(_NO_API_KEY_MESSAGE)
 
 
 def get_api_key(
@@ -531,92 +745,150 @@ def get_api_key(
     on_device_code: Callable[[DeviceCodeInfo], None] | None = None,
     login_hint: str | None = None,
 ) -> str:
-    """Get API key, triggering device-flow login + auto-mint as a fallback.
+    """Return a raw API key, for integrations that send ``x-api-key``.
 
-    Priority (when not ``force_login``): ``PARALLEL_API_KEY`` env var → stored
-    credentials → service-API key provisioning from stored control-API tokens
-    → interactive device flow.
+    Same as :func:`resolve_api_key`. A login creates an OAuth credential, not
+    an API key, so the login arguments are ignored and deprecated; call
+    :func:`login_flow` to log in.
+    """
+    if force_login or on_device_code is not None or login_hint is not None:
+        warnings.warn(
+            "get_api_key() no longer logs in; its arguments are ignored. Call login_flow() "
+            "to log in and create_client() or get_client() to use the OAuth credential.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return resolve_api_key()
 
-    ``login_hint`` is forwarded to :func:`login_flow` — see
-    :func:`build_verification_uri` for the supported hint format.
+
+def _resolve_client_auth(
+    api_key: str | None,
+    *,
+    interactive: bool,
+    force_login: bool = False,
+) -> tuple[str | None, str]:
+    """Pick the credential and base URL for an SDK client.
+
+    Returns ``(api_key, base_url)``. ``api_key`` is None when the client must
+    use the stored OAuth credential. Priority (when not ``force_login``):
+    explicit key → ``PARALLEL_API_KEY`` → stored OAuth credential (created
+    from control-API tokens if missing) → API key stored by an older release →
+    interactive device flow when ``interactive``, else ``ValueError``.
     """
     if not force_login:
+        if api_key:
+            return api_key, get_api_url()
         env_key = os.environ.get("PARALLEL_API_KEY")
         if env_key:
-            return env_key
-
+            return env_key, get_api_url()
         stored = credentials.get_selected_api_key()
-        if stored:
-            return stored
-
-        # If we still have valid control-API auth but no data API key saved,
-        # mint a new data key via service API before forcing an interactive
-        # device-authorization flow.
         try:
-            access_token = get_control_api_access_token()
-            client_id = ensure_client_id()
-            minted_api_key, _ = service.provision_cli_api_key(access_token, client_id=client_id)
-            creds = credentials.load()
-            if creds is not None:
-                org = creds.selected_org()
-                if org is not None:
-                    org.api_key = minted_api_key
-                    credentials.save(creds)
-            return minted_api_key
+            _ensure_product_credential()
+            return None, get_product_api_url()
         except ReauthenticationRequired:
             pass
-        except service.ServiceApiError:
-            pass
-
-    if not on_device_code:
+        except Exception as e:
+            if not stored:
+                raise
+            logger.warning("Could not replace the stored API key with an OAuth credential; using the key: %s", e)
+        if stored:
+            return stored, get_api_url()
+        if not interactive:
+            raise ValueError(
+                "Parallel credentials required. Set the PARALLEL_API_KEY environment "
+                "variable, run 'parallel-cli login', or pass api_key explicitly."
+            )
         print("Starting device authorization...", file=sys.stderr)
-    return login_flow(login_hint=login_hint, on_device_code=on_device_code)
+    login_flow()
+    return None, get_product_api_url()
+
+
+class OAuthParallel(Parallel):
+    """``Parallel`` client that authenticates with the stored OAuth credential.
+
+    Each request gets a current access token, so long-running work (polling a
+    research task, for example) outlives the access token's lifetime. The token
+    is set in ``_prepare_request`` rather than an ``httpx.Auth``, because the
+    SDK retries and then masks exceptions raised while sending as connection
+    errors; a ``ReauthenticationRequired`` must reach the caller unchanged.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("api_key", _OAUTH_API_KEY_PLACEHOLDER)
+        super().__init__(**kwargs)
+
+    @property
+    def auth_headers(self) -> dict[str, str]:
+        return {}
+
+    def _prepare_request(self, request: httpx.Request) -> None:
+        request.headers["Authorization"] = f"Bearer {get_product_api_access_token()}"
+
+
+class AsyncOAuthParallel(AsyncParallel):
+    """``AsyncParallel`` client that authenticates with the stored OAuth credential."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("api_key", _OAUTH_API_KEY_PLACEHOLDER)
+        super().__init__(**kwargs)
+
+    @property
+    def auth_headers(self) -> dict[str, str]:
+        return {}
+
+    async def _prepare_request(self, request: httpx.Request) -> None:
+        # The token lookup reads the auth file and may refresh over the network.
+        token = await asyncio.to_thread(get_product_api_access_token)
+        request.headers["Authorization"] = f"Bearer {token}"
+
+
+def _build_client(api_key: str | None, base_url: str, source: ClientSource) -> Parallel:
+    if api_key is None:
+        return OAuthParallel(base_url=base_url, default_headers=get_default_headers(source))
+    return Parallel(base_url=base_url, api_key=api_key, default_headers=get_default_headers(source))
 
 
 def create_client(api_key: str | None = None, source: ClientSource = "python") -> Parallel:
-    """Create a configured Parallel client, resolving the API key if not provided."""
-    return Parallel(
-        base_url=get_api_url(),
-        api_key=resolve_api_key(api_key),
-        default_headers=get_default_headers(source),
-    )
+    """Create a configured Parallel client without any interactive login.
+
+    Uses the explicit key, ``PARALLEL_API_KEY``, the stored OAuth credential,
+    or an API key stored by an older release, in that order.
+    """
+    key, base_url = _resolve_client_auth(api_key, interactive=False)
+    return _build_client(key, base_url, source)
 
 
 def get_client(force_login: bool = False, source: ClientSource = "python") -> Parallel:
     """Get a configured Parallel client with interactive device-flow fallback."""
-    return Parallel(
-        base_url=get_api_url(),
-        api_key=get_api_key(force_login=force_login),
-        default_headers=get_default_headers(source),
-    )
+    key, base_url = _resolve_client_auth(None, interactive=True, force_login=force_login)
+    return _build_client(key, base_url, source)
 
 
 def get_async_client(force_login: bool = False, source: ClientSource = "python") -> AsyncParallel:
     """Get a configured async Parallel client."""
-    return AsyncParallel(
-        base_url=get_api_url(),
-        api_key=get_api_key(force_login=force_login),
-        default_headers=get_default_headers(source),
-    )
+    key, base_url = _resolve_client_auth(None, interactive=True, force_login=force_login)
+    if key is None:
+        return AsyncOAuthParallel(base_url=base_url, default_headers=get_default_headers(source))
+    return AsyncParallel(base_url=base_url, api_key=key, default_headers=get_default_headers(source))
 
 
 def logout() -> bool:
-    """Revoke all stored refresh tokens (best-effort) and remove auth files."""
+    """Revoke all stored control-API and product API refresh tokens (best-effort) and remove auth files."""
     creds = credentials.load()
     if creds is not None:
         seen_refresh_tokens: set[str] = set()
         for org in creds.orgs.values():
-            refresh_token = org.control_api.refresh_token
-            if not refresh_token or refresh_token in seen_refresh_tokens:
-                continue
-            seen_refresh_tokens.add(refresh_token)
-            try:
-                revoke_token(refresh_token)
-            except Exception as e:
-                print(
-                    f"Warning: refresh token revocation failed ({e}); removing local credentials anyway.",
-                    file=sys.stderr,
-                )
+            for refresh_token in (org.control_api.refresh_token, org.product_api.refresh_token):
+                if not refresh_token or refresh_token in seen_refresh_tokens:
+                    continue
+                seen_refresh_tokens.add(refresh_token)
+                try:
+                    revoke_token(refresh_token)
+                except Exception as e:
+                    print(
+                        f"Warning: refresh token revocation failed ({e}); removing local credentials anyway.",
+                        file=sys.stderr,
+                    )
     return credentials.delete()
 
 
@@ -632,7 +904,9 @@ def get_auth_status() -> dict:
     - ``authenticated``: at least one source has a key.
     - ``method``: ``"environment"`` | ``"oauth"`` | ``None`` — which source wins.
     - ``env_var_set``: whether ``PARALLEL_API_KEY`` is set (regardless of winner).
-    - ``has_stored_credentials``: whether ``auth.json`` has a usable key.
+    - ``has_stored_credentials``: whether ``auth.json`` has a product API OAuth
+      credential or an API key from an older release.
+    - ``stored_credential_type``: ``"oauth_credential"`` | ``"api_key"`` | ``None``.
     - ``stored_overridden_by_env``: True when the env var is set AND stored creds
       exist; the stored creds will not be used until the env var is unset.
     - ``token_file`` / ``version`` / ``selected_org_id`` / ``selected_org_name``
@@ -643,19 +917,26 @@ def get_auth_status() -> dict:
 
     creds = credentials.load()
     stored_org = creds.selected_org() if creds is not None else None
-    has_stored_credentials = bool(stored_org and stored_org.api_key)
+    stored_credential_type: str | None = None
+    if stored_org is not None and stored_org.product_api.refresh_token:
+        stored_credential_type = "oauth_credential"
+    elif stored_org is not None and stored_org.api_key:
+        stored_credential_type = "api_key"
+    has_stored_credentials = stored_credential_type is not None
 
     status: dict = {
         "authenticated": env_var_set or has_stored_credentials,
         "method": None,
         "env_var_set": env_var_set,
         "has_stored_credentials": has_stored_credentials,
+        "stored_credential_type": stored_credential_type,
         "stored_overridden_by_env": env_var_set and has_stored_credentials,
         "token_file": None,
         "version": None,
         "selected_org_id": None,
         "selected_org_name": None,
         "has_control_api_tokens": False,
+        "oauth_credential_id": None,
     }
 
     if has_stored_credentials and creds is not None and stored_org is not None:
@@ -667,6 +948,7 @@ def get_auth_status() -> dict:
                 "selected_org_id": creds.selected_org_id,
                 "selected_org_name": stored_org.org_name,
                 "has_control_api_tokens": bool(stored_org.control_api.refresh_token),
+                "oauth_credential_id": stored_org.product_api.credential_id,
             }
         )
 

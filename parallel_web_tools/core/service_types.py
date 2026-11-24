@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, Field
@@ -98,3 +99,67 @@ class GetAppsForOrgResponseModel(BaseModel):
 
 class HTTPValidationError(BaseModel):
     detail: Annotated[list[ValidationError] | None, Field(title="Detail")] = None
+
+
+# The two models below were written by hand from the account service's
+# ``service_endpoint_models.py``, because the prod OpenAPI spec is not public
+# yet. A regenerate from a spec that has the oauth-credentials routes replaces
+# them with equivalent generated models.
+
+
+class CreateOAuthCredentialRequest(BaseModel):
+    client_id: Annotated[
+        str,
+        Field(
+            description="Name of the client that will hold the credential, for example `parallel-cli`. Shown wherever the credential is listed",
+            max_length=128,
+            min_length=1,
+            title="Client Id",
+        ),
+    ]
+    audience: Annotated[
+        str,
+        Field(
+            description="Product API origin the credential is for. Only the GCP and AWS origins of this deployment are accepted. An org on an AWS Marketplace listing always gets the listing's origin",
+            title="Audience",
+        ),
+    ]
+    scopes: Annotated[
+        list[str], Field(description="Product API scopes. Only `*` is valid", min_length=1, title="Scopes")
+    ]
+    is_service_scoped: Annotated[
+        bool | None,
+        Field(
+            description="Service credential, owned by the org and survives its creator leaving. Admins only",
+            title="Is Service Scoped",
+        ),
+    ] = False
+
+
+class CreateOAuthCredentialResponse(BaseModel):
+    credential_id: Annotated[
+        str,
+        Field(
+            description="Credential ID, stable across refresh-token rotation. Use it to revoke the credential",
+            title="Credential Id",
+        ),
+    ]
+    client_id: Annotated[str, Field(description="Client ID", title="Client Id")]
+    app_id: Annotated[str, Field(description="App ID", title="App Id")]
+    app_name: Annotated[str, Field(description="App Name", title="App Name")]
+    created_by_user_id: Annotated[str, Field(description="Created by User ID", title="Created By User Id")]
+    is_service_scoped: Annotated[bool, Field(title="Is Service Scoped")]
+    audience: Annotated[str, Field(description="Product API origin to send the access tokens to", title="Audience")]
+    scopes: Annotated[list[str], Field(description="Granted scopes", title="Scopes")]
+    token_endpoint: Annotated[
+        str,
+        Field(
+            description="OAuth token endpoint. Exchange the refresh token there with `grant_type=refresh_token`; each exchange returns a new one",
+            title="Token Endpoint",
+        ),
+    ]
+    refresh_token: Annotated[str, Field(description="Refresh token", title="Refresh Token")]
+    refresh_token_expires_at: Annotated[
+        datetime, Field(description="Refresh token expiry. Each refresh extends it", title="Refresh Token Expires At")
+    ]
+    created_at: Annotated[datetime, Field(description="Created At", title="Created At")]

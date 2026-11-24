@@ -138,18 +138,19 @@ def account_cases(endpoint: str) -> tuple[Case, ...]:
         "authorization_expires_in": 3600,
     }
     app_name = "parallel-cli Users"
-    key = {
-        "api_key_id": "key_smoke",
-        "api_key_name": "E2E key",
-        "raw_api_key": FIXTURE_KEY,
-        "display_value": "smoke",
+    credential = {
+        "credential_id": "credential_smoke",
+        "client_id": client,
         "app_id": app,
         "app_name": app_name,
         "created_by_user_id": "user_smoke",
-        "created_by_user_email": "fixture@example.com",
-        "created_at": 1,
-        "last_used_at": 1,
-        "updated_at": 1,
+        "is_service_scoped": False,
+        "audience": endpoint,
+        "scopes": ["*"],
+        "token_endpoint": f"{endpoint}/getServiceKeys/token",
+        "refresh_token": "product_refresh_smoke",
+        "refresh_token_expires_at": "2100-01-01T00:00:00Z",
+        "created_at": "2025-01-01T00:00:00Z",
     }
     login = Case(
         "login",
@@ -172,7 +173,13 @@ def account_cases(endpoint: str) -> tuple[Case, ...]:
                 {"apps": [{"org_id": org, "app_id": app, "app_name": app_name, "org_name": "Fixture"}]},
                 auth=BEARER,
             ),
-            Exchange("POST", f"/service/v1/apps/{app}/keys", key, auth=BEARER),
+            Exchange(
+                "POST",
+                f"/service/v1/apps/{app}/oauth-credentials",
+                credential,
+                {"client_id": client, "audience": endpoint, "scopes": ["*"], "is_service_scoped": False},
+                BEARER,
+            ),
         ),
         [
             {"event": "auth_start"},

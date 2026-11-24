@@ -2,10 +2,10 @@
 
 Wraps the subset of ``/service/v1/*`` endpoints the CLI consumes:
 
-- ``GET  /service/v1/apps``               — list apps for the caller's org
-- ``POST /service/v1/apps/{app_id}/keys`` — create an API key on an app
-- ``GET  /service/v1/balance``            — read the org's prepaid balance
-- ``POST /service/v1/balance/add``        — charge Stripe and top up balance
+- ``GET  /service/v1/apps``                            — list apps for the caller's org
+- ``POST /service/v1/apps/{app_id}/oauth-credentials`` — create a product API OAuth credential
+- ``GET  /service/v1/balance``                         — read the org's prepaid balance
+- ``POST /service/v1/balance/add``                     — charge Stripe and top up balance
 
 Request and response shapes are parsed with the Pydantic models in
 :mod:`parallel_web_tools.core.service_types` (auto-generated from the OpenAPI
@@ -15,20 +15,19 @@ spec; regenerate with ``scripts/generate_service_types.py``).
 from __future__ import annotations
 
 import json
-import time
 import urllib.error
 import urllib.request
 from typing import Any
 
 from pydantic import ValidationError
 
-from parallel_web_tools.core.endpoints import PARALLEL_CLI_APP_NAME, get_service_api_url
+from parallel_web_tools.core.endpoints import PARALLEL_CLI_APP_NAME, PRODUCT_API_SCOPES, get_service_api_url
 from parallel_web_tools.core.service_types import (
     AddBalanceRequest,
     AppItem,
     BalanceResponse,
-    CreateApiKeyRequestModel,
-    CreateKeyResponse,
+    CreateOAuthCredentialRequest,
+    CreateOAuthCredentialResponse,
     GetAppsForOrgResponseModel,
 )
 
@@ -72,26 +71,24 @@ def list_apps(access_token: str) -> list[AppItem]:
     return resp.apps or []
 
 
-def create_api_key(access_token: str, app_id: str, api_key_name: str) -> CreateKeyResponse:
-    """Create an API key on the given app and return the typed result."""
-    body = CreateApiKeyRequestModel(api_key_name=api_key_name).model_dump()
-    data = _request("POST", f"/service/v1/apps/{app_id}/keys", access_token, body=body)
-    try:
-        return CreateKeyResponse.model_validate(data)
-    except ValidationError as e:
-        raise ServiceApiError(f"Unexpected create_api_key response: {e}") from e
+def create_oauth_credential(
+    access_token: str,
+    app_id: str,
+    client_id: str,
+    audience: str,
+    scopes: list[str],
+) -> CreateOAuthCredentialResponse:
+    """Create a product API OAuth credential on the given app.
 
-
-def _build_key_name(client_id: str | None = None, now: float | None = None) -> str:
-    """Return a CLI-minted key name.
-
-    Uses the registered OAuth ``client_id`` as the high-entropy prefix, with a
-    ``YYYY-MM-DD-HHMM`` suffix so the same client can mint multiple keys and
-    still distinguish them. Falls back to the plain ``parallel-cli`` prefix
-    when no ``client_id`` is available (e.g. registration failed earlier).
+    The response holds a rotating refresh token, returned only once, and the
+    ``token_endpoint`` to exchange it at.
     """
-    prefix = client_id or "parallel-cli"
-    return f"{prefix}-{time.strftime('%Y-%m-%d-%H%M', time.localtime(now))}"
+    body = CreateOAuthCredentialRequest(client_id=client_id, audience=audience, scopes=scopes).model_dump()
+    data = _request("POST", f"/service/v1/apps/{app_id}/oauth-credentials", access_token, body=body)
+    try:
+        return CreateOAuthCredentialResponse.model_validate(data)
+    except ValidationError as e:
+        raise ServiceApiError(f"Unexpected create_oauth_credential response: {e}") from e
 
 
 def get_balance(access_token: str) -> BalanceResponse:
@@ -118,11 +115,11 @@ def add_balance(access_token: str, amount_cents: int, idempotency_key: str) -> B
         raise ServiceApiError(f"Unexpected /service/v1/balance/add response: {e}") from e
 
 
-def provision_cli_api_key(access_token: str, client_id: str | None = None) -> tuple[str, str]:
-    """Find the ``parallel-cli Users`` app and mint a fresh API key on it.
+def provision_cli_oauth_credential(access_token: str, client_id: str, audience: str) -> CreateOAuthCredentialResponse:
+    """Find the ``parallel-cli Users`` app and create a product API OAuth credential on it.
 
-    Returns ``(raw_api_key, key_name)``. The raw key is only returned once by
-    the server — at creation time — so the caller must persist it immediately.
+    The refresh token in the result is only returned once, so the caller must
+    persist it immediately.
     """
     apps = list_apps(access_token)
     match = next((a for a in apps if a.app_name == PARALLEL_CLI_APP_NAME), None)
@@ -131,8 +128,4 @@ def provision_cli_api_key(access_token: str, client_id: str | None = None) -> tu
             f"No app named {PARALLEL_CLI_APP_NAME!r} found for this org. "
             "It should be auto-created during device authorization; contact support if missing."
         )
-    key_name = _build_key_name(client_id)
-    created = create_api_key(access_token, match.app_id, key_name)
-    if not created.raw_api_key:
-        raise ServiceApiError("Server returned no raw_api_key on key creation; cannot persist a usable key without it.")
-    return created.raw_api_key, key_name
+    return create_oauth_credential(access_token, match.app_id, client_id, audience, list(PRODUCT_API_SCOPES))
