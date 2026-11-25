@@ -2159,6 +2159,45 @@ class TestEnrichPollCommand:
 class TestEnrichRunJsonSourceType:
     """Tests for enrich run with --source-type json."""
 
+    @pytest.mark.parametrize("output_json", [True, False])
+    @pytest.mark.parametrize(
+        ("source_type", "content", "expected_rows"),
+        [
+            ("json", '[{"company":"A"},{"company":"B"}]', 2),
+            ("json", json.dumps([{"company": "A"}, {"company": "B"}], indent=2), 2),
+            ("json", "[]", 0),
+            ("csv", "company\nA\nB\n", 2),
+        ],
+    )
+    def test_enrich_dry_run_counts_records(self, runner, tmp_path, source_type, content, expected_rows, output_json):
+        source = tmp_path / f"input.{source_type}"
+        source.write_text(content)
+        args = [
+            "enrich",
+            "run",
+            "--source-type",
+            source_type,
+            "--source",
+            str(source),
+            "--target",
+            "output.json",
+            "--source-columns",
+            '[{"name": "company", "description": "Company name"}]',
+            "--enriched-columns",
+            '[{"name": "ceo", "description": "CEO name"}]',
+            "--dry-run",
+        ]
+        if output_json:
+            args.append("--json")
+        with mock.patch("parallel_web_tools.cli.commands.run_enrichment_from_dict") as mock_run:
+            result = runner.invoke(main, args)
+        assert result.exit_code == 0, result.output
+        mock_run.assert_not_called()
+        if output_json:
+            assert json.loads(result.output)["row_count"] == expected_rows
+        else:
+            assert f"Rows:        {expected_rows}" in result.output
+
     def test_enrich_run_accepts_json_source_type(self, runner):
         """CLI should accept --source-type json."""
         result = runner.invoke(main, ["enrich", "run", "--help"])
