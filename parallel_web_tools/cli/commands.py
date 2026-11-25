@@ -1673,7 +1673,10 @@ def enrich_run(
                     source_display = "<inline data>"
                 if source and os.path.exists(source):
                     with open(source) as f:
-                        row_count = sum(1 for _ in f) - 1  # subtract header
+                        if source_type == "json":
+                            row_count = len(json.load(f))
+                        else:
+                            row_count = sum(1 for _ in f) - 1  # subtract header
 
                 dry_run_data: dict[str, Any] = {
                     "dry_run": True,
