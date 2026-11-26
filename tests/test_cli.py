@@ -2,6 +2,8 @@
 
 import json
 import os
+import runpy
+import sys
 from unittest import mock
 
 import pytest
@@ -738,6 +740,15 @@ class TestCLIExtrasAndStandaloneMode:
         result = runner.invoke(main, ["enrich", "--help"])
         assert result.exit_code == 0
         assert "plan" in result.output
+
+    def test_enrich_planner_loads_without_duckdb(self):
+        """The CLI extra can load the planner without DuckDB installed."""
+        from parallel_web_tools.cli import planner
+
+        with mock.patch.dict(sys.modules, {"duckdb": None}):
+            namespace = runpy.run_path(planner.__file__)
+
+        assert callable(namespace["create_config_interactive"])
 
     def test_enrich_run_yaml_config_works_when_extras_available(self, runner, tmp_path):
         """YAML config should work when CLI extras are installed."""

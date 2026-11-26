@@ -2,10 +2,10 @@
 
 import csv
 import os
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import questionary
 import yaml
 from questionary import Style
@@ -105,7 +105,11 @@ def get_source_type() -> str:
         "What type of data source are you using?",
         choices=[
             questionary.Choice("CSV File", value="csv"),
-            questionary.Choice("DuckDB Database", value="duckdb"),
+            questionary.Choice(
+                "DuckDB Database",
+                value="duckdb",
+                disabled=None if find_spec("duckdb") else "Install parallel-web-tools[duckdb] to use DuckDB",
+            ),
             questionary.Choice("Google BigQuery", value="bigquery"),
         ],
         style=custom_style,
@@ -126,6 +130,8 @@ def get_csv_columns(file_path: str) -> list[str]:
 def get_duckdb_columns(db_path: str, table_name: str) -> list[str]:
     """Get column names from DuckDB table."""
     try:
+        import duckdb
+
         with duckdb.connect(db_path) as con:
             result = con.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
