@@ -118,7 +118,7 @@ def enrich_table(
         empty_cols = ", ".join(f"NULL::VARCHAR AS {name}" for name in prop_names)
         if include_basis:
             empty_cols += ", NULL::VARCHAR AS _basis"
-        empty_query = f"SELECT {select_cols}, {empty_cols} FROM {quote_identifier(source_table)} WHERE 1=0"
+        empty_query = f"SELECT {select_cols}, {empty_cols} FROM ({query.strip().rstrip(';')}) AS _source WHERE 1=0"
         rel = conn.sql(empty_query)
 
         return EnrichmentResult(

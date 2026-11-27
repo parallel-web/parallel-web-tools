@@ -292,6 +292,30 @@ class TestEnrichTable:
         # Should only process one row (Google)
         assert result.success_count == 1
 
+    def test_empty_sql_query_as_source(self, conn):
+        """Should handle a SQL query source_table that returns zero rows."""
+        conn.execute("""
+            CREATE TABLE companies AS SELECT * FROM (VALUES
+                ('Google', false),
+                ('Microsoft', false)
+            ) AS t(name, active)
+        """)
+
+        with mock.patch("parallel_web_tools.integrations.duckdb.batch.enrich_batch") as mock_batch:
+            result = enrich_table(
+                conn,
+                source_table="SELECT name FROM companies WHERE active = true",
+                input_columns={"company_name": "name"},
+                output_columns=["CEO name"],
+            )
+
+        mock_batch.assert_not_called()
+        assert result.success_count == 0
+        assert result.error_count == 0
+        df = result.result.fetchdf()
+        assert list(df.columns) == ["name", "ceo_name"]
+        assert len(df) == 0
+
     def test_handles_null_values(self, conn):
         """Should handle NULL values in input columns."""
         conn.execute("""
